@@ -332,6 +332,57 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .hero-amount{font-size:23px}
   .tbl{font-size:12px}
 }
+/* Fúnel vertical */
+.funnel{display:flex;flex-direction:column;gap:4px}
+.f-group{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:8px 0 2px;text-align:center}
+.f-group:first-child{margin-top:0}
+.f-row{display:grid;grid-template-columns:minmax(120px,180px) 1fr minmax(140px,190px);gap:10px;align-items:center}
+.f-lbl{font-size:13px;font-weight:600;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f-lbl small{color:var(--muted);font-weight:400}
+.f-track{display:flex;justify-content:center}
+.f-bar{height:32px;min-width:6px;clip-path:polygon(0 0,100% 0,calc(100% - 7px) 100%,7px 100%);transition:width .25s}
+.f-val{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.f-val small{color:var(--muted)}
+@media (max-width: 640px){
+  .f-row{grid-template-columns:1fr auto;grid-template-areas:"lbl val" "bar bar";gap:2px 8px}
+  .f-lbl{grid-area:lbl;text-align:left} .f-val{grid-area:val;text-align:right} .f-track{grid-area:bar}
+  .f-bar{height:24px}
+}
+/* Vista PDF de cotización (plantilla) */
+#print-root:empty{display:none}
+.pdf-back{position:fixed;inset:0;z-index:110;background:#5b6573;overflow:auto;padding:0 12px 24px}
+.pdf-toolbar{position:sticky;top:0;z-index:2;display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:10px;background:#3d4652;margin:0 -12px 16px}
+.pdf-toolbar .sim-label{margin-right:auto}
+.hoja{background:#fff;color:#111;width:min(210mm,100%);margin:0 auto;padding:14mm 12mm;box-shadow:0 6px 24px rgba(0,0,0,.35);font-family:var(--font);font-size:11px;line-height:1.35}
+.hoja .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.hoja .h-logo{font-size:22px;font-weight:800;color:var(--brand);letter-spacing:.02em}
+.hoja .h-logo small{display:block;font-size:10px;color:#555;font-weight:400;letter-spacing:0}
+.hoja .h-ruc{text-align:right;font-weight:700;font-size:11px}
+.hoja h2.h-title{text-align:center;font-size:15px;margin:14px 0 12px;color:var(--brand)}
+.hoja table{width:100%;border-collapse:collapse}
+.hoja .h-datos td{padding:2px 6px;vertical-align:top}
+.hoja .h-datos td.k{font-weight:700;width:16%;white-space:nowrap}
+.hoja .h-items{margin-top:10px}
+.hoja .h-items th{background:var(--brand);color:#fff;padding:5px 6px;text-align:left;font-size:10px}
+.hoja .h-items td{padding:5px 6px;border-bottom:1px solid #dfe3e8;vertical-align:top}
+.hoja .r{text-align:right;white-space:nowrap}
+.hoja .h-tot{width:auto;margin:8px 0 0 auto}
+.hoja .h-tot td{padding:2px 8px}
+.hoja .h-tot tr.g td{font-weight:800;border-top:1px solid #111}
+.hoja .h-notas{color:#444;margin-top:6px}
+.hoja .h-cond td{padding:3px 6px;vertical-align:top}
+.hoja .h-cond td.k{font-weight:700;width:24%}
+.hoja .h-foot{margin-top:18px;border-top:2px solid var(--brand);padding-top:6px;color:#555;font-size:9.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.hoja .h-wm{color:#b42318;font-weight:700;font-size:9.5px;text-align:center;margin-bottom:6px;letter-spacing:.05em}
+@media (max-width: 640px){ .hoja{padding:16px 12px;font-size:10px} .hoja .h-datos td.k{width:auto} }
+@media print{
+  @page{size:A4;margin:10mm}
+  body{background:#fff}
+  body > *:not(#print-root){display:none!important}
+  #print-root .pdf-back{position:static;background:#fff;padding:0;overflow:visible}
+  #print-root .pdf-toolbar{display:none}
+  #print-root .hoja{box-shadow:none;width:auto;padding:0;margin:0}
+}
 @media print{ .topbar,.sidenav,.bottomnav{display:none} }
 </style>
 </head>
@@ -351,6 +402,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 <div id="popover-root"></div>
 <div id="modal-root"></div>
 <div id="toast-root" aria-live="polite"></div>
+<div id="print-root"></div>
 <noscript><p style="padding:20px">Este prototipo necesita JavaScript habilitado.</p></noscript>
 
 <script>
@@ -1082,6 +1134,7 @@ const DemoData = (() => {
     }
 
     db.opps.forEach(o => { delete o._ultimoNumero; });
+    db.catalogo = CATALOGO; // lista de precios ficticia para cotizar en la plataforma
     return db;
   }
 
@@ -1545,6 +1598,8 @@ const Repo = (() => {
       return o;
     },
     /** PATCH /cotizaciones/:id/vigente */
+    /** GET /catalogo — lista de precios para cotizar en la plataforma */
+    async catalogo() { return db.catalogo || []; },
     async marcarVigente(quoteId) {
       const q = db.quotes.find(x => x.id === quoteId) || fail('Cotización no encontrada.');
       db.quotes.filter(x => x.oppId === q.oppId).forEach(x => { x.vigente = x.id === quoteId; });
@@ -1629,7 +1684,7 @@ const Repo = (() => {
         if (db.contadores) db.contadores[p.vendedorId] = (db.contadores[p.vendedorId] || 0) + 1; // solo para sugerir el siguiente número en la demo
         q.oppId = o.id;
         db.quotes.push(q);
-        db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: p.fechaEmision, canal: 'Correo', nota: `Cotización enviada (N° ${q.numero}) — registrada ${p.origen === 'pdf' ? 'desde el PDF' : 'manualmente'}.`, proxContacto: o.proxContacto, usuarioId: 'sistema', auto: true });
+        db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: p.fechaEmision, canal: 'Correo', nota: `Cotización enviada (N° ${q.numero}) — ${p.origen === 'plataforma' ? 'cotizada en la plataforma (PDF generado)' : p.origen === 'pdf' ? 'registrada desde el PDF' : 'registrada manualmente'}.`, proxContacto: o.proxContacto, usuarioId: 'sistema', auto: true });
       }
       guardar(o);
       return { oppId: o.id, quoteId: q.id };
@@ -1731,7 +1786,7 @@ const UI = (() => {
     filtros: null, orden: { col: 'prox', dir: 1 },
     proy: { tipo: 'facturacion', vendedor: '', condicion: '' },
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
-    nueva: null, popover: null, charts: {},
+    nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -1766,6 +1821,7 @@ const UI = (() => {
     cal: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     back: '<path d="M15 18l-6-6 6-6"/>',
     alert: '<path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+    file: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
     receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     play: '<path d="M6 4l14 8-14 8z"/>',
     swap: '<path d="M17 3l4 4-4 4M21 7H9M7 21l-4-4 4-4M3 17h12"/>',
@@ -1834,6 +1890,7 @@ const UI = (() => {
     }
     const cambio = S.ruta !== ruta + '/' + param;
     S.ruta = ruta + '/' + param;
+    if (cambio) { $('#print-root').innerHTML = ''; S.pdf = null; }
     renderChrome(ruta);
     S.charts = {};
     try { await PAGES[ruta](param); }
@@ -1870,7 +1927,7 @@ const UI = (() => {
   document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (el && !el.closest('#modal-root') && CHANGES[el.dataset.change]) CHANGES[el.dataset.change](el, e); });
   document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (el && !el.closest('#modal-root') && INPUTS[el.dataset.input]) INPUTS[el.dataset.input](el, e); });
   document.addEventListener('submit', e => { const f = e.target; if (f.dataset.submit && SUBMITS[f.dataset.submit]) { e.preventDefault(); SUBMITS[f.dataset.submit](f); } });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#modal-root').firstChild) closeModal(); else closePopover(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#print-root').firstChild) { $('#print-root').innerHTML = ''; S.pdf = null; } else if ($('#modal-root').firstChild) closeModal(); else closePopover(); } });
 
   /* ---------- Popovers (campana y usuario) ---------- */
   function closePopover() { $('#popover-root').innerHTML = ''; S.popover = null; }
@@ -2211,6 +2268,83 @@ const UI = (() => {
       `<optgroup label="Proyectos estatales / con varios integradores">${est.map(opt).join('')}</optgroup>`;
   }
 
+  /* ---------- Cotización en PDF con la plantilla (generada por la plataforma) ---------- */
+  function pdfHTML({ q, cliente, contacto, proyecto, vendedor }) {
+    const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
+    const k = (cliente.contactos || []).find(x => x.nombre === contacto);
+    const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '';
+    const n2 = v => Util.nf2.format(v || 0);
+    return `<div class="hoja">
+      <div class="h-wm">PROTOTIPO · DATOS FICTICIOS</div>
+      <div class="h-top"><div class="h-logo">TECHVALUE<small>Redes y conectividad industrial</small></div><div class="h-ruc">TECHVALUE S.A.<br>R.U.C. 20000000000 <span style="font-weight:400">(dato de ejemplo)</span></div></div>
+      <h2 class="h-title">COTIZACIÓN Nº ${E(q.numero)}</h2>
+      <table class="h-datos"><tbody>
+        <tr><td class="k">Dirigido a</td><td>${E(cliente.razonSocial)}</td><td class="k">Emitido por</td><td>${E(vendedor.nombre)}</td></tr>
+        <tr><td class="k">RUC</td><td>${E(cliente.ruc)}</td><td class="k">Cargo</td><td>Ejecutivo(a) de cuentas</td></tr>
+        <tr><td class="k">Ciudad/País</td><td>${E(cliente.ciudad || 'Lima')}, Perú</td><td class="k">Área</td><td>Depto. de Ventas (PE)</td></tr>
+        <tr><td class="k">Contacto</td><td>${E(contacto || '—')}</td><td class="k">Correo</td><td>${E(vendedor.correo)}</td></tr>
+        <tr><td class="k">Email</td><td>${E(k ? k.correo : '—')}</td><td class="k">Fecha de emisión</td><td>${Util.fmtDate(q.fechaEmision)}</td></tr>
+        <tr><td class="k">Teléfono</td><td>${E(k ? k.telefono : '—')}</td><td class="k">Referencia</td><td>${E(ref || '—')}</td></tr>
+      </tbody></table>
+      <p style="margin:12px 0 4px">Tenemos el agrado de cotizar lo siguiente:</p>
+      <table class="h-items"><thead><tr><th>Item</th><th class="r">Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead><tbody>
+        ${q.items.map((it, i) => `<tr><td>${i + 1}</td><td class="r">${E(it.cant)}</td><td>${E(it.unidad)}</td><td><strong>${E(it.codigo)}</strong></td><td>${E(it.marca)}</td><td>${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2((+it.cant || 0) * (+it.valorUnit || 0))}</td></tr>`).join('') || '<tr><td colspan="8" style="color:#888">Sin ítems</td></tr>'}
+      </tbody></table>
+      <table class="h-tot"><tbody>
+        <tr><td>Suma</td><td class="r">${n2(t.suma)}</td></tr>
+        ${t.descuento ? `<tr><td>Descuento**</td><td class="r">− ${n2(t.descuento)}</td></tr><tr><td>Sub Total Descontado</td><td class="r">${n2(t.neto)}</td></tr>` : ''}
+        <tr><td>IGV 18%</td><td class="r">${n2(t.igv)}</td></tr>
+        <tr class="g"><td>Total de la Cotización</td><td class="r">${cur} ${n2(t.total)}</td></tr>
+      </tbody></table>
+      <div class="h-notas">* Precio de lista actual${t.descuento ? '<br>** Descuento especial válido solo para esta oferta' : ''}<br>Los precios están expresados en ${cur === 'PEN' ? 'Soles (PEN)' : 'Dólares Americanos (USD)'}.</div>
+      <h3 style="margin:14px 0 4px;color:var(--brand)">Condiciones comerciales</h3>
+      <table class="h-cond"><tbody>
+        <tr><td class="k">Condición de pago</td><td>${E(cp ? cp.nombre : '—')}</td></tr>
+        <tr><td class="k">Forma de pago</td><td>Abono en cuenta a nombre de TECHVALUE S.A. (datos bancarios de ejemplo)</td></tr>
+        <tr><td class="k">Validez cotización</td><td>${E(q.validezDias)} días</td></tr>
+        <tr><td class="k">Plazo de entrega</td><td>${E(pl ? pl.nombre : '—')}</td></tr>
+        <tr><td class="k">Entrega y despacho</td><td>Según el procedimiento de atención vigente (texto de ejemplo).</td></tr>
+      </tbody></table>
+      <div class="h-foot"><span>TECHVALUE S.A. · dirección y central de ejemplo</span><span>Generado por la plataforma de seguimiento · ${Util.fmtDate(hoy())}</span></div>
+    </div>`;
+  }
+  function mostrarPDF(ctx, borrador) {
+    S.pdf = ctx;
+    $('#print-root').innerHTML = `<div class="pdf-back" role="dialog" aria-modal="true" aria-label="Cotización en PDF">
+      <div class="pdf-toolbar"><span class="sim-label">${borrador ? 'Vista previa · aún no registrada' : 'PDF generado por la plataforma'}</span>
+        <button class="btn primary" data-action="pdf-print">${I('download')} Descargar PDF</button>
+        ${borrador ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo (simulado)</button>`}
+        <button class="btn" data-action="pdf-close">${I('x')} Cerrar</button></div>
+      ${pdfHTML(ctx)}</div>`;
+  }
+  const mostrarPDFCotizacion = q => { const o = oppById(q.oppId); mostrarPDF({ q, cliente: cli(o.clienteId), contacto: q.contacto, proyecto: proj(o.proyectoId), vendedor: usr(o.vendedorId) }, false); };
+  ACTIONS['ver-pdf'] = el => mostrarPDFCotizacion(S.db.quotes.find(x => x.id === el.dataset.q));
+  ACTIONS['pdf-print'] = () => { toast('En el diálogo de impresión elige “Guardar como PDF”.'); setTimeout(() => window.print(), 60); };
+  ACTIONS['pdf-close'] = () => { $('#print-root').innerHTML = ''; S.pdf = null; };
+  ACTIONS['pdf-enviar'] = () => toast(`Simulación: se enviaría a ${S.pdf && S.pdf.contacto ? S.pdf.contacto : 'el contacto'} desde tu Outlook, con copia al buzón común de ventas.`);
+
+  /* ---------- Fúnel vertical: leads arriba, por cerrar y cerradas abajo ---------- */
+  function funnelHTML({ vendedorId = null } = {}) {
+    const db = S.db, h = hoy(), desde = Util.addDays(h, -30);
+    const delV = o => !vendedorId || o.vendedorId === vendedorId;
+    const grupos = [['Leads y propuestas', ['grande', 'e1', 'e2', 'e3']], ['Por cerrar', ['e4', 'e5', 'e6']], ['Cerradas · ganadas en los últimos 30 días', ['ganada']]];
+    const fila = id => {
+      const os = db.opps.filter(o => delV(o) && o.etapa === id && (id !== 'ganada' || (o.fechaCierre >= desde && o.fechaCierre <= h)));
+      return { id, e: Rules.etapa(id), n: os.length, monto: Util.sum(os, o => Rules.montoUSD(db, o)), pond: Util.sum(os, o => Rules.ponderado(db, o)) };
+    };
+    const filas = grupos.map(([t, ids]) => [t, ids.map(fila)]);
+    const val = f => S.funnelMedida === 'monto' ? f.monto : f.n;
+    const max = Math.max(1, ...filas.flatMap(([, fs]) => fs.map(val)));
+    return `<div class="funnel" role="img" aria-label="Fúnel vertical de oportunidades por etapa, de leads a cerradas">${filas.map(([t, fs]) => `<div class="f-group">${E(t)}</div>` + fs.map(f => `
+      <div class="f-row" title="${E(f.e.nombre)}: ${f.n} oportunidades · ${Util.money(f.monto)}">
+        <div class="f-lbl">${E(f.e.nombre)} <small>${f.id === 'ganada' ? '100%' : Util.pct(f.e.prob)}</small></div>
+        <div class="f-track"><div class="f-bar" style="width:${16 + 84 * val(f) / max}%;background:${STAGE_COLOR[f.id]}${val(f) ? '' : ';opacity:.22'}"></div></div>
+        <div class="f-val"><strong>${f.n}</strong> · ${Util.money0(f.monto)}${f.id !== 'ganada' ? ` <small>pond. ${Util.money0(f.pond)}</small>` : ''}</div>
+      </div>`).join('')).join('')}</div>`;
+  }
+  const funnelToggle = () => `<div class="seg-toggle" role="group" aria-label="Ancho del fúnel según"><button class="${S.funnelMedida !== 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="cantidad">Cantidad</button><button class="${S.funnelMedida === 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="monto">Monto</button></div>`;
+  ACTIONS['funnel-medida'] = el => { S.funnelMedida = el.dataset.v; render(true); };
+
   /* ---------- Componentes de lista ---------- */
   function quickInline(o) {
     if (o.pendiente || (Rules.esAbierta(o) && !o.proxContacto)) return `<div class="op-actions"><button class="btn sm primary" data-action="completar" data-id="${o.id}">Completar</button></div>`;
@@ -2498,7 +2632,7 @@ const UI = (() => {
           <div>
             <h1>${E(c.razonSocial)} <span class="seg ${seg.seg}" title="Facturado 12 meses: ${money(seg.total)}">${seg.seg}</span></h1>
             <div class="muted">${E(projName(p))} · Usuario final: ${E(usuarioFinal(o))}</div>
-            <div class="small muted" style="margin-top:2px">${o.id} · ${E(v.nombre)} (${E(v.iniciales)}) · Inicio ${Util.fmtDate(o.fechaInicio)} · ${o.origen === 'correo' ? 'Leída del correo' : o.origen === 'pdf' ? 'Registrada desde PDF' : 'Registro manual'}</div>
+            <div class="small muted" style="margin-top:2px">${o.id} · ${E(v.nombre)} (${E(v.iniciales)}) · Inicio ${Util.fmtDate(o.fechaInicio)} · ${o.origen === 'correo' ? 'Leída del correo' : o.origen === 'pdf' ? 'Registrada desde PDF' : o.origen === 'plataforma' ? 'Cotizada en la plataforma' : 'Registro manual'}</div>
           </div>
           <div class="btn-row">${alertas.map(alertChip).join('')}</div>
         </div>
@@ -2519,7 +2653,8 @@ const UI = (() => {
       <div class="grid" style="grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);margin-top:14px;align-items:start" id="ficha-grid">
         <div class="stack">
           ${o.etapa === 'ganada' ? postventaHTML(o, ed) : ''}
-          <section class="card"><div class="card-head"><h2>Cotizaciones y revisiones</h2><span class="sub">${Rules.quotesOf(db, o).length} documento(s) · solo una vigente</span></div>
+          <section class="card"><div class="card-head"><h2>Cotizaciones y revisiones</h2><span class="sub">${Rules.quotesOf(db, o).length} documento(s) · solo una vigente</span>
+            ${ed && (abierta || o.etapa === 'pausa') ? `<button class="btn sm primary" data-action="crear-rev" data-id="${o.id}">${I('plus')} Crear revisión desde la vigente</button>` : ''}</div>
             ${Rules.quotesOf(db, o).slice().reverse().map(x => quoteHTML(x, ed)).join('')}</section>
         </div>
         <div class="stack">
@@ -2541,6 +2676,7 @@ const UI = (() => {
           </section>
         </div>
       </div>`;
+    if (S.pdfPendiente) { const qp = db.quotes.find(x => x.id === S.pdfPendiente); S.pdfPendiente = null; if (qp && qp.oppId === o.id) mostrarPDFCotizacion(qp); }
     const grid = $('#ficha-grid');
     if (grid && window.matchMedia('(max-width: 860px)').matches) grid.style.gridTemplateColumns = 'minmax(0,1fr)';
   };
@@ -2552,6 +2688,7 @@ const UI = (() => {
     return `<article class="quote${q.vigente ? ' vigente' : ''}">
       <header><strong>N° ${E(q.numero)}</strong><span class="chip ${q.tipo === 'alternativa' ? 'warn' : 'info'}">${q.tipo === 'alternativa' ? 'Alternativa (otra marca)' : q.revision}</span>
         ${q.vigente ? '<span class="chip dark">Vigente</span>' : ed ? `<button class="btn sm" data-action="vigente" data-q="${q.id}">Marcar como vigente</button>` : ''}
+        <button class="btn sm" data-action="ver-pdf" data-q="${q.id}" title="Ver o descargar el PDF con la plantilla">${I('file')} PDF</button>
         ${dup.length ? `<span class="chip bad" title="Mismo número en ${dup.map(d => d.oppId).join(', ')}">${I('alert').replace('<svg', '<svg width="13" height="13"')} N° duplicado (${dup.map(d => d.oppId).join(', ')})</span>` : ''}
         <span class="small muted" style="margin-left:auto">${Util.fmtDate(q.fechaEmision)}</span></header>
       <div class="q-body">
@@ -2624,7 +2761,7 @@ const UI = (() => {
   };
 
   /* =====================================================================
-     8.5 NUEVA COTIZACIÓN — PDF (lectura simulada) o formulario manual
+     8.5 NUEVA COTIZACIÓN — cotizar en la plataforma (genera el PDF) o leer un PDF ya enviado (simulado)
      ===================================================================== */
   const itemVacio = () => ({ cant: 1, unidad: 'Und', codigo: '', marca: 'Moxa', descripcion: '', valorUnit: '' });
   function tcDelDia(f) {
@@ -2635,7 +2772,7 @@ const UI = (() => {
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
       condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' },
-      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '' };
+      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
     const f = hoy(), n = (S.db.contadores && S.db.contadores[u.id] || 0) + 1;
@@ -2671,6 +2808,14 @@ const UI = (() => {
     if (!cands.length) { d.modo = 'nueva'; d.oppDestinoId = ''; }
     else if (!d.modoTocado) { d.modo = 'revision'; d.oppDestinoId = cands[0].id; }
     else if (!cands.some(o => o.id === d.oppDestinoId)) d.oppDestinoId = cands[0].id;
+    if (d.numAuto) { // numeración automática de la plataforma: correlativo nuevo o sufijo de revisión
+      const o = d.modo !== 'nueva' && d.oppDestinoId ? oppById(d.oppDestinoId) : null;
+      if (!o) d.numero = numeroSugerido(S.user);
+      else {
+        const base = Rules.vigente(S.db, o).numero.replace(/(\s*Rev\.\s*\d+|-rev\d+|-R\d+|-ALT)$/i, '');
+        d.numero = d.modo === 'revision' ? `${base}-${Rules.siguienteRevision(S.db, o)}` : `${base}-ALT`;
+      }
+    }
     return cands;
   }
   function totalesDraft(d) {
@@ -2678,9 +2823,9 @@ const UI = (() => {
     return { t: Rules.totales(q), usd: Rules.quoteNetoUSD(q) };
   }
   PAGES['nueva'] = async () => {
-    if (!S.nueva) S.nueva = { tab: 'pdf', fase: 'subir', d: null, archivo: '' };
+    if (!S.nueva) S.nueva = { tab: 'plataforma', fase: 'form', d: null, archivo: '' };
     const N = S.nueva;
-    if (N.tab === 'manual' && !N.d) { N.d = draftVacio(); N.fase = 'form'; }
+    if (N.tab === 'plataforma' && !N.d) { N.d = draftVacio(); N.d.numAuto = true; N.d.numero = numeroSugerido(S.user); N.fase = 'form'; }
     let cuerpo = '';
     if (N.tab === 'pdf' && N.fase === 'subir') {
       cuerpo = `<div class="card">
@@ -2697,9 +2842,9 @@ const UI = (() => {
     } else {
       cuerpo = formNueva(N);
     }
-    view().innerHTML = `<div class="page-head"><div><h1>Nueva cotización</h1><p class="muted">Registra lo que enviaste al cliente. Toma menos de un minuto.</p></div></div>
-      <div class="tabs" role="tablist"><button role="tab" class="${N.tab === 'pdf' ? 'active' : ''}" data-action="nq-tab" data-tab="pdf">${I('upload').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Subir PDF (simulado)</button>
-        <button role="tab" class="${N.tab === 'manual' ? 'active' : ''}" data-action="nq-tab" data-tab="manual">Formulario manual</button></div>${cuerpo}`;
+    view().innerHTML = `<div class="page-head"><div><h1>Nueva cotización</h1><p class="muted">Cotiza aquí y el PDF se genera solo, o registra un PDF que ya enviaste.</p></div></div>
+      <div class="tabs" role="tablist"><button role="tab" class="${N.tab === 'plataforma' ? 'active' : ''}" data-action="nq-tab" data-tab="plataforma">${I('file').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Cotizar en la plataforma</button>
+        <button role="tab" class="${N.tab === 'pdf' ? 'active' : ''}" data-action="nq-tab" data-tab="pdf">${I('upload').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Leer PDF ya enviado (simulado)</button></div>${cuerpo}`;
     const dz = $('#dropzone');
     if (dz) {
       dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
@@ -2734,7 +2879,9 @@ const UI = (() => {
     const priv = c ? db.projects.filter(p => p.tipo === 'privado' && db.opps.some(o => o.clienteId === c.id && o.proyectoId === p.id)) : [];
     const popt = p => `<option value="${p.id}"${d.proyectoSel === p.id ? ' selected' : ''}>${E(p.nombre)} — ${E(p.usuarioFinal)}</option>`;
     const sec = (n, titulo, html) => `<section class="card"><div class="card-head"><h2>${n}. ${titulo}</h2></div>${html}</section>`;
+    const plat = N.tab === 'plataforma';
     return `<form id="nq-form" data-submit="nq" novalidate class="stack">
+      ${plat ? `<div class="alert info"><div><strong>Cotizar en la plataforma.</strong> El número es correlativo, el código completa marca, descripción y precio de lista, y al registrar se genera el PDF con la plantilla de Techvalue. Queda en tu seguimiento sin doble registro y se puede enviar con copia al buzón común.</div></div>` : ''}
       ${N.tab === 'pdf' ? `<div class="alert info"><div><span class="sim-label">Simulación</span> Datos “extraídos” de <strong>${E(N.archivo)}</strong>. Revisa y corrige antes de confirmar.
         ${d.referencia ? `<br>Referencia leída en el PDF: <strong>${E(d.referencia)}</strong> → se propuso como proyecto.` : ''}</div></div>` : ''}
       ${sec(1, 'Cliente', `<div class="form-grid">
@@ -2745,7 +2892,7 @@ const UI = (() => {
         <label class="field">Contacto<input type="text" list="nq-contactos" data-nq="contacto" value="${E(d.contacto)}"><datalist id="nq-contactos">${c ? c.contactos.map(k => `<option value="${E(k.nombre)}">`).join('') : ''}</datalist></label>
       </div>`)}
       ${sec(2, 'Datos de la cotización', `<div class="form-grid">
-        <label class="field"><span>N° de cotización (como figura en el PDF) <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Formato libre">
+        <label class="field"><span>N° de cotización (como figura en el PDF) <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Formato libre">${plat ? `<span class="field-hint">${d.numAuto ? 'Correlativo automático (puedes editarlo)' : 'Número editado a mano'}</span>` : ''}
           <span id="nq-dup">${dupHTML(dup)}</span></label>
         <label class="field"><span>Fecha de emisión <span class="req">*</span></span><input type="date" name="fechaEmision" data-nq="fechaEmision" data-nq-render="1" max="${hoy()}" value="${d.fechaEmision}"></label>
         <label class="field">Moneda<select data-nq="moneda" data-nq-render="1">${options([['USD', 'USD – Dólares'], ['PEN', 'PEN – Soles']], d.moneda)}</select></label>
@@ -2758,13 +2905,14 @@ const UI = (() => {
         ${d.items.map((it, i) => `<tr>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td><input type="text" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="EDS-408A" aria-label="Código"></td>
+          <td><input type="text" list="nq-cat" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="EDS-408A" aria-label="Código"></td>
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options(Config.MARCAS.map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción"></td>
           <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"></td>
           <td class="r num" id="nq-tot-${i}">${Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0))}</td>
           <td><button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`).join('')}
         </tbody></table></div>
+        <datalist id="nq-cat">${(db.catalogo || []).map(p => `<option value="${E(p.codigo)}">${E(p.marca)} · ${E(p.descripcion)}</option>`).join('')}</datalist>
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
           <button type="button" class="btn sm" data-action="nq-add-item">${I('plus')} Agregar ítem</button>
           <div class="totals" id="nq-totales">${totalesHTML(d, t, usd)}</div>
@@ -2794,7 +2942,9 @@ const UI = (() => {
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" data-nq="proxContacto" min="${hoy()}" value="${d.proxContacto}"><span class="field-hint">Sugerido: 3 días hábiles (${Util.fmtDate(Util.addBizDays(hoy(), 3))}).</span></label>
         <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" data-nq="fechaOC" min="${hoy()}" value="${d.fechaOC}"><span class="field-hint">La eliges tú; no tiene valor por defecto.</span></label>
       </div>`)}
-      <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-action="nq-cancelar">Cancelar</button><button type="submit" class="btn primary">${I('check')} Registrar cotización</button></div>
+      <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-action="nq-cancelar">Cancelar</button>
+        ${plat ? `<button type="button" class="btn" data-action="nq-preview">${I('file')} Vista previa PDF</button>` : ''}
+        <button type="submit" class="btn primary">${I('check')} ${plat ? 'Registrar y generar PDF' : 'Registrar cotización'}</button></div>
     </form>`;
   }
   function dupHTML(dup) {
@@ -2831,6 +2981,7 @@ const UI = (() => {
     if (ks.length === 2) d[ks[0]][ks[1]] = value; else d[ks[0]] = value;
     if (path === 'clienteId') { const c = value && value !== '__nuevo' ? cli(value) : null; d.contacto = c && c.contactos[0] ? c.contactos[0].nombre : ''; d.modoTocado = false; }
     if (path === 'proyectoSel' || path === 'clienteNuevo.ruc') d.modoTocado = false;
+    if (path === 'numero') d.numAuto = false;
     if (path === 'fechaEmision' || path === 'moneda') d.tc = tcDelDia(d.fechaEmision);
   }
   document.addEventListener('input', e => {
@@ -2843,12 +2994,41 @@ const UI = (() => {
     const el = e.target;
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
     if (el.dataset.nq) { setDraft(el.dataset.nq, el.value); if (el.dataset.nqRender || el.tagName === 'SELECT') render(true); }
-    else if (el.dataset.nqi != null) { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); }
-    else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; }
+    else if (el.dataset.nqi != null) {
+      const d = S.nueva.d, it = d.items[+el.dataset.nqi];
+      it[el.dataset.k] = el.value;
+      const p = el.dataset.k === 'codigo' && (S.db.catalogo || []).find(x => x.codigo.toLowerCase() === el.value.trim().toLowerCase());
+      if (p) { // completa desde la lista de precios
+        it.codigo = p.codigo; it.marca = p.marca;
+        if (!String(it.descripcion || '').trim()) it.descripcion = p.descripcion;
+        if (!(+it.valorUnit > 0)) it.valorUnit = d.moneda === 'PEN' ? Util.round2(p.precio * (+d.tc || Config.TC_REFERENCIA)) : p.precio;
+        render(true);
+      } else actualizarCalculos();
+    }
+    else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; render(true); }
   });
   ACTIONS['nq-add-item'] = () => { S.nueva.d.items.push(itemVacio()); render(true); };
   ACTIONS['nq-del-item'] = el => { const d = S.nueva.d; if (d.items.length > 1) { d.items.splice(+el.dataset.i, 1); render(true); } };
   ACTIONS['nq-cancelar'] = () => { S.nueva = null; go('mi-dia'); };
+  ACTIONS['nq-preview'] = () => {
+    const d = S.nueva.d;
+    const c = d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : { razonSocial: d.clienteNuevo.razonSocial || '(cliente nuevo)', ruc: d.clienteNuevo.ruc || '—', ciudad: 'Lima', contactos: [] };
+    const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
+    const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
+      descuento: +d.descuento || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
+    mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
+  };
+  /** Ficha → "Crear revisión desde la vigente": copia la cotización vigente a la plataforma para ajustarla */
+  ACTIONS['crear-rev'] = el => {
+    const o = oppEditable(el.dataset.id); if (!o) return;
+    const q = Rules.vigente(S.db, o), d = draftVacio();
+    Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
+      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({}, it)), descuento: q.descuento || 0, proyectoSel: o.proyectoId,
+      modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
+      fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
+    S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
+    go('nueva');
+  };
   SUBMITS['nq'] = async form => {
     const N = S.nueva, d = N.d;
     const p = {
@@ -2858,13 +3038,14 @@ const UI = (() => {
       validezDias: d.validezDias, plazo: d.plazo, items: d.items, descuento: d.descuento,
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
-      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'manual' };
+      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {
       const r = await Repo.registrarCotizacion(p, S.user.id);
       S.nueva = null;
-      toast(p.modo === 'revision' ? 'Revisión registrada y marcada como vigente.' : p.modo === 'alternativa' ? 'Alternativa registrada en la oportunidad.' : 'Cotización registrada. Ya está en tu seguimiento.');
+      if (p.origen === 'plataforma') S.pdfPendiente = r.quoteId;
+      toast(p.origen === 'plataforma' ? 'Cotización registrada y PDF generado.' : p.modo === 'revision' ? 'Revisión registrada y marcada como vigente.' : p.modo === 'alternativa' ? 'Alternativa registrada en la oportunidad.' : 'Cotización registrada. Ya está en tu seguimiento.');
       go('op/' + r.oppId);
     } catch (e) {
       showFormError(form, e);
@@ -2912,7 +3093,6 @@ const UI = (() => {
     const salud = Rules.saludSeguimiento(db, { vendedorId: vid, hoy: h });
     const ciclo = Rules.cicloVenta(db, { vendedorId: vid, desde: desde6, hasta: h });
     // Funnel
-    const funnel = Config.ETAPAS.filter(e => e.abierta).map(e => { const os = abiertas.filter(o => o.etapa === e.id); return { e, n: os.length, monto: Util.sum(os, o => Rules.montoUSD(db, o)), pond: Util.sum(os, o => Rules.ponderado(db, o)) }; });
     const pausas = db.opps.filter(o => o.etapa === 'pausa' && delV(o));
     // Motivos de pérdida (6 meses)
     const perd = db.opps.filter(o => o.etapa === 'perdida' && o.fechaCierre >= desde6 && delV(o));
@@ -2946,8 +3126,8 @@ const UI = (() => {
           <details style="margin-top:8px"><summary class="small">Ver tabla</summary><div class="table-wrap" style="margin-top:6px"><table class="tbl"><thead><tr><th>Vendedor</th>${sm.cats.map(c => `<th class="r">${c}</th>`).join('')}</tr></thead><tbody>
             ${sm.series.map(s => `<tr><td>${E(s.name)}</td>${s.values.map(v => `<td class="r num">${Util.money0(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>
         </section>
-        <section class="card"><div class="card-head"><h2>Funnel por etapa</h2><span class="sub">Abiertas · monto sin IGV</span></div>
-          ${hbars(funnel.map(f => ({ label: `${f.e.nombre} (${Util.pct(f.e.prob)})`, value: f.monto, f })), { fmtVal: r => `<strong>${r.f.n}</strong> · ${Util.money0(r.f.monto)} <small>pond. ${Util.money0(r.f.pond)}</small>` })}
+        <section class="card"><div class="card-head"><h2>Fúnel de oportunidades</h2>${funnelToggle()}</div>
+          ${funnelHTML({ vendedorId: vid })}
           <p class="small muted" style="margin-bottom:0">En pausa (fuera del funnel): ${pausas.length} · ${Util.money0(Util.sum(pausas, o => Rules.montoUSD(db, o)))}</p>
           ${vid ? '' : `<div class="table-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Vend.</th>${Rules.ETAPAS_ABIERTAS.map(e => `<th class="r" title="${E(Rules.etapa(e).nombre)}">${Util.pct(Rules.prob(e))}</th>`).join('')}<th class="r">Ponderado</th></tr></thead><tbody>
             ${vendedores().map(v => { const os = abiertas.filter(o => o.vendedorId === v.id); return `<tr><td>${vendTag(v)}</td>${Rules.ETAPAS_ABIERTAS.map(e => `<td class="r num">${os.filter(o => o.etapa === e).length || '<span class="muted">·</span>'}</td>`).join('')}<td class="r num">${Util.money0(Util.sum(os, o => Rules.ponderado(db, o)))}</td></tr>`; }).join('')}
@@ -3018,6 +3198,7 @@ const UI = (() => {
         ${kpi('Seguro (ganadas, 100%)', money(T.ganada.total), fact ? 'ganadas por facturar' : `incluye ${Util.money0(porCobrarFacturado)} ya facturado`)}
         ${kpi('Ponderado (abiertas)', money(T.abierta.total), 'monto × probabilidad')}
       </div>
+      ${u.rol === 'vendedor' ? `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Mi fúnel de oportunidades</h2>${funnelToggle()}</div>${funnelHTML({ vendedorId: u.id })}</section>` : ''}
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>${fact ? 'Facturación proyectada' : 'Cobranza proyectada'} por horizonte</h2><span class="sub">USD ${fact ? 'sin IGV' : 'con IGV'}</span></div>
         <div class="stack" id="proy-grid">
           <div>${chartSlot('ch-proy', { categories: cols.map(colName), shortCategories: cols.map(k => ({ mes: 'Mes', d30: '30 d', d60: '60 d', d90: '90 d', d120: '120 d', sin: 'S/f' })[k]), series: [{ name: 'Ganadas (seguro)', color: '#015088', values: cols.map(k => T.ganada[k]) }, { name: 'Abiertas (ponderado)', color: '#86b6ef', values: cols.map(k => T.abierta[k]) }], height: 240, totalLabels: true, aria: 'Proyección por horizonte' })}</div>

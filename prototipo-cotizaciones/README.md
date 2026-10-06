@@ -24,7 +24,7 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 
 | Rol | Pantallas | Puede editar |
 |---|---|---|
-| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mi proyección, Ranking, Notificaciones | Solo lo suyo |
+| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo |
 | Jefatura | Dashboard, Oportunidades (todas), Ficha, Proyección, Facturado, Notificaciones | Reasignar oportunidad o cliente |
 | Finanzas | Proyección de facturación y cobranza, Facturado | Nada |
 
@@ -43,6 +43,28 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 | 6 | `UI` | Enrutador por hash, pantallas, modales y gráficos SVG | Se mantiene o se migra al framework elegido |
 
 La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe con los métodos de `Repo` (`registrarContacto`, `cambiarEtapa`, `registrarCotizacion`, `actualizarPostventa`, `reasignarOpp`, `reasignarCliente`, etc.). El `Repo` vuelve a validar las reglas antes de guardar, como lo haría un backend.
+
+## Dos caminos para registrar una cotización
+
+1. **Cotizar en la plataforma** (opción principal). El vendedor arma la cotización en la pantalla "Nueva cotización" y, al registrarla, la plataforma genera el PDF con la plantilla de Techvalue. Se elimina el doble registro.
+   - **Número correlativo automático** en el formato de cada vendedor. En una revisión, toma el número base más el sufijo `-R1`, `-R2`…, y en una alternativa, `-ALT`. Se puede editar a mano.
+   - **El código del producto completa** la marca, la descripción y el precio de lista, desde un catálogo ficticio (`db.catalogo`, `Repo.catalogo()`).
+   - **"Vista previa PDF"** antes de registrar. Al registrar se abre el PDF generado, con los botones "Descargar PDF" (diálogo de impresión → "Guardar como PDF") y "Enviar por correo" (simulado).
+   - **Cada cotización de la ficha tiene su botón "PDF"**, y la ficha permite **"Crear revisión desde la vigente"**: copia ítems y condiciones para ajustarlos y emitir la R siguiente.
+   - **Datos de ejemplo en la plantilla:** el RUC, los datos bancarios, la dirección y la central de Techvalue son marcadores, no copias del archivo real.
+2. **Leer un PDF ya enviado** (respaldo para quien siga usando el Excel): lectura simulada en el prototipo; con IA desde el correo en la versión final.
+
+## Fúnel vertical
+
+En el Dashboard (toda la empresa o por vendedor) y en "Mi proyección" de cada vendedor. El ancho de cada franja se puede ver por **cantidad** o por **monto**. Se agrupa así, de arriba abajo:
+
+| Grupo | Etapas |
+|---|---|
+| Leads y propuestas | Oferta grande sin feedback, 1. Enviada, 2. En evaluación, 3. Bien recibida |
+| Por cerrar | 4. En competencia, 5. Negociación, 6. OC comprometida |
+| Cerradas | Ganadas en los últimos 30 días |
+
+Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fúnel.
 
 ## Modelo de datos
 
@@ -130,6 +152,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 
 ## Qué está simulado en el prototipo
 
+- **PDF de la plataforma:** se genera en el navegador como vista imprimible; en producción, en el servidor (HTML → PDF), guardado en SharePoint y adjuntado al correo.
 - **Lectura del PDF con IA:** la pantalla "Subir PDF" no lee el archivo. Muestra "Leyendo cotización…" durante 1.5 s y luego datos ficticios coherentes con la cartera del vendedor (incluye un caso que dispara la detección de revisión).
 - **Cotizaciones leídas del correo:** aparecen en la data como oportunidades `pendiente` ("Completar").
 - **Correo de resumen diario** (vendedor), **resumen semanal** (jefatura) y **eventos de Outlook:** solo vista previa en **Notificaciones**. No se envía nada.
@@ -146,9 +169,10 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 5. **Login corporativo** (Microsoft 365 / Entra ID) y permisos en el servidor.
 6. **Persistencia** de toda la información.
 7. **Importación de los FUP actuales**, con mapeo de columnas que varían entre vendedores. Hay que normalizar las probabilidades intermedias a la etapa más cercana y convertir el motivo de pérdida de texto libre a la lista cerrada.
-8. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
-9. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
-10. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
+8. **Generación del PDF en el servidor**, envío desde el Outlook del vendedor con copia al buzón común, catálogo y lista de precios reales, y aprobación de descuentos especiales o de registro con la marca.
+9. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
+10. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
+11. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
 
 ## Decisiones tomadas con el negocio para el prototipo
 
