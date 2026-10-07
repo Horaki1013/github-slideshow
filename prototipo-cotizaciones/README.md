@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia:** los cambios viven en memoria durante la sesión. No se usa `localStorage` ni otro almacenamiento. El botón **Restablecer datos de demo** (menú de usuario) regenera todo.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 9/9 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 10/10 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -20,13 +20,15 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 | `dh` | `demo` | Vendedor | Por debajo de la meta |
 | `vc` | `demo` | Vendedor | Nuevo, con poco historial |
 | `jefatura` | `demo` | Jefatura | Ve todo, filtra por vendedor y reasigna |
-| `finanzas` | `demo` | Finanzas | Proyección y facturado, solo lectura |
+| `finanzas` | `demo` | Finanzas | Proyección y facturado (solo lectura); mantiene la lista de precios |
+| `admin` | `demo` | Administración | Mantiene la lista de precios |
 
 | Rol | Pantallas | Puede editar |
 |---|---|---|
-| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mis cuentas, Agenda de contactos, Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo; puede registrar cuentas nuevas (quedan asignadas a él) y contactos de sus cuentas |
-| Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Proyección, Facturado, Notificaciones | Crear cuentas, asignar o reasignar cuentas y oportunidades, editar contactos |
-| Finanzas | Proyección de facturación y cobranza, Facturado, Agenda de contactos | Nada |
+| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mis cuentas, Agenda de contactos, Lista de precios (consulta), Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo; puede registrar cuentas nuevas (quedan asignadas a él) y contactos de sus cuentas |
+| Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Lista de precios, Proyección, Facturado, Notificaciones | Crear cuentas, asignar o reasignar cuentas y oportunidades, editar contactos, mantener la lista de precios |
+| Finanzas | Proyección de facturación y cobranza, Facturado, Lista de precios, Agenda de contactos | Solo la lista de precios |
+| Administración | Lista de precios, Agenda de contactos | La lista de precios |
 
 Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario entra por URL a una ruta o a una oportunidad que no le corresponde, el sistema lo redirige o le muestra "Sin acceso".
 
@@ -88,6 +90,41 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
   - Los agrega o edita el vendedor de la cuenta o jefatura. Finanzas solo consulta.
 - **Dashboard:** la tarjeta "Cartera de cuentas" muestra, por vendedor, cuentas activas, que no responden, sin contacto y sin asignar.
 
+## Lista de precios (confidencial)
+
+**Pantalla "Lista de precios".** Todos la consultan; **solo jefatura, finanzas y administración** la modifican:
+- Agregar, editar o quitar productos.
+- Importar la lista completa.
+- Exportarla a CSV.
+- Ver el historial de cambios: quién actualizó qué y cuándo.
+
+El `Repo` vuelve a validar el rol en cada cambio, como lo haría el backend.
+
+**Al cotizar:**
+- El vendedor escribe el código o parte de la descripción y elige de la lista desplegable (flechas y Enter, o clic).
+- También puede abrir **"Buscar en la lista de precios"** para explorar por marca.
+- Se completan marca, descripción y precio de lista (en PEN se convierte con el tipo de cambio).
+- El vendedor puede **modificar la descripción y el precio solo para su cotización**: la lista no cambia. Si edita el precio, el formulario y la ficha lo marcan como "editado vs lista" y el ítem guarda el precio de lista (`listaUSD`) para control.
+
+**Importación** (`ListaPrecios`, en el navegador; el archivo no se sube a ningún servidor):
+- **Formatos:** Excel `.xlsx` con una hoja por marca, o CSV con columna Marca. El CSV que exporta la propia pantalla es reimportable.
+- **Qué interpreta:**
+  - Encabezados en distintas filas.
+  - Varias columnas de código: usa la que tiene más datos.
+  - Precio en "Lista 1" o "L1".
+  - Comas o puntos decimales.
+  - Filas de sección y celdas con error (`#N/A`), que se omiten y se reportan como "sin precio".
+- **Dos modos:**
+  - **Reemplazar las marcas del archivo:** cada marca queda exactamente como en el archivo.
+  - **Solo agregar y actualizar precios:** no quita nada.
+- **Las cotizaciones ya emitidas no cambian:** guardan el precio con el que se cotizaron.
+
+**Confidencialidad:**
+- **Este repositorio es público.** El `index.html` versionado solo trae una lista **ficticia** de unos 60 productos.
+- **La lista real no se versiona.** Se entrega aparte una copia privada del HTML (`index-PRIVADO-con-lista-de-precios.html`) que la trae embebida (`window.__LISTA_PRECIOS_PRIVADA`) y que `Repo.init` carga en lugar de la ficticia.
+- **Barrera en el repositorio:** el `.gitignore` bloquea los archivos `*PRIVADO*`, los `.xlsx` y los CSV de listas de precios dentro de esta carpeta.
+- **Producción:** la lista vive en la base de datos y la API la entrega solo a usuarios autenticados. Las búsquedas se hacen en el servidor, de modo que el navegador no recibe la lista completa.
+
 ## Descuentos
 
 El descuento de una cotización puede ingresarse **en porcentaje o en monto**. En porcentaje se aplica sobre la suma (`descuentoTipo`, `descuentoPct`), y la ficha y el PDF muestran "Descuento (x%)".
@@ -101,8 +138,9 @@ El descuento de una cotización puede ingresarse **en porcentaje o en monto**. E
 | **Proyecto** | `id`, `nombre`, `usuarioFinal`, `tipo` (estatal, privado o directa). `PR-DIRECTA` = "Compra directa (sin proyecto)". Un proyecto puede tener oportunidades de varios integradores |
 | **Oportunidad** | `id`, `clienteId`, `proyectoId`, `vendedorId`, `etapa` (la probabilidad se deriva), `fechaInicio`, `fechaOC` (estimada, la define el vendedor), `proxContacto`, `motivoPerdida`, `motivoOtro`, `fechaReactivacion`, `fechaCierre`, `postventa`, `origen` (correo, pdf o manual), `pendiente` (leída del correo y aún sin completar) |
 | **Cotización** | `id`, `oppId`, `numero` (texto libre, como figura en el PDF), `revision` (R0, R1… o ALT), `tipo` (original, revision o alternativa), `fechaEmision`, `moneda` (USD o PEN), `tc` (tipo de cambio del día si es PEN), `condicionPago`, `validezDias`, `plazo`, `items[]`, `descuentoTipo` (pct o monto), `descuentoPct`, `descuento` (monto resultante), `vigente`, `contacto`. La suma, el neto sin IGV, el IGV 18 % y el total se **calculan** (`Rules.totales`). Una oportunidad tiene una o más cotizaciones y solo una vigente |
-| **Ítem** | `cant`, `unidad`, `codigo`, `marca`, `descripcion`, `valorUnit` (en la moneda de la cotización). El total se calcula |
+| **Ítem** | `cant`, `unidad`, `codigo`, `marca`, `descripcion`, `valorUnit` (en la moneda de la cotización), `listaUSD` (precio de lista al momento de cotizar, si vino de la lista). El total se calcula |
 | **Seguimiento** | `id`, `oppId`, `fecha`, `canal` (WhatsApp, Llamada, Correo, Visita, Reunión o "Sistema" para registros automáticos), `nota`, `resultado` (respondió o sin respuesta), `proxContacto`, `usuarioId`, `auto` |
+| **Producto (lista de precios)** | `id`, `marca`, `codigo`, `descripcion`, `precio` (USD, precio de lista sin IGV), `actualizado`, `actualizadoPor`. Más `catalogoInfo` (fecha, autor y origen de la última actualización) y `catalogoLog` (historial de cambios) |
 | **Gestión de cuenta** | `id`, `clienteId`, `fecha`, `canal`, `resultado` (respondió o sin respuesta), `nota`, `usuarioId`. Es un contacto con la cuenta sin oportunidad de por medio |
 | **Post-venta** (en la oportunidad) | `oc`, `pedido`, `transito`, `recibido`, `entregado`, `facturado`, `facturaMonto` (USD sin IGV), `cobrado`, `adelantoCobrado` |
 | **Tipo de cambio** | `fx[fecha]`: valor diario ficticio alrededor de 3.75 |
@@ -197,9 +235,10 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 6. **Persistencia** de toda la información.
 7. **Importación de los FUP actuales**, con mapeo de columnas que varían entre vendedores. Hay que normalizar las probabilidades intermedias a la etapa más cercana y convertir el motivo de pérdida de texto libre a la lista cerrada.
 8. **Generación del PDF en el servidor**, envío desde el Outlook del vendedor con copia al buzón común, catálogo y lista de precios reales, y aprobación de descuentos especiales o de registro con la marca.
-9. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
-10. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
-11. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
+9. **Lista de precios en el servidor:** búsqueda en la API, permisos por rol, historial de precios por producto, varias listas (Lista 1, 2…) y aprobación de precios por debajo de un margen.
+10. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
+11. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
+12. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
 
 ## Decisiones tomadas con el negocio para el prototipo
 
@@ -214,6 +253,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - Jefatura asigna cuentas; los vendedores registran cuentas nuevas, que quedan asignadas a ellos.
 - Estado de la cuenta automático con umbral de 60 días. Alerta al vendedor y a jefatura cuando el estado es "No responde" o "Sin contacto".
 - Agenda de contactos común y opcional.
+- Lista de precios confidencial: la mantienen jefatura, finanzas y administración; los vendedores la consultan y ajustan precio y descripción solo en sus cotizaciones. Se toma la columna "Lista 1" o "L1" como precio en USD, y los productos sin precio en el archivo no se cargan.
 - **Excepción en la data de demo:** hay una oferta de unos 236K USD para mostrar la etapa "Oferta grande sin feedback". El resto de montos va de 200 a 120,000 USD.
 
 ## Notas técnicas

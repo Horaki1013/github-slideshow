@@ -332,6 +332,13 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .hero-amount{font-size:23px}
   .tbl{font-size:12px}
 }
+/* Buscador de productos (lista de precios) */
+.ac-list{position:fixed;z-index:130;background:#fff;border:1px solid var(--border-2);border-radius:8px;box-shadow:var(--shadow-lg);max-height:320px;overflow:auto;width:min(440px,calc(100vw - 24px))}
+.ac-list button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-size:12.5px}
+.ac-list button.act,.ac-list button:hover{background:var(--brand-50)}
+.ac-list .ac-meta{color:var(--muted);font-size:11.5px}
+.ac-list .ac-empty{padding:10px;color:var(--muted);font-size:12.5px}
+.conf{display:inline-flex;align-items:center;gap:6px;background:#2b1f05;color:#ffd98a;border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 /* Fúnel vertical */
 .funnel{display:flex;flex-direction:column;gap:4px}
 .f-group{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:8px 0 2px;text-align:center}
@@ -516,6 +523,10 @@ const Config = {
     { id:'d120', nombre:'120 días',  fact:4 },
   ],
 
+  // Nombre de hoja o marca en la lista de precios → nombre en el sistema
+  MARCA_ALIAS: { 'MOXA': 'Moxa', 'ADVANTECH': 'Advantech', 'BLACKBOX': 'Black Box', 'BLACK BOX': 'Black Box', 'ZENITEL': 'Zenitel', 'HMS': 'HMS/Anybus',
+    'HMS/ANYBUS': 'HMS/Anybus', 'ANYBUS': 'HMS/Anybus', 'INHAND': 'InHand', 'TOSIBOX': 'Tosibox', 'PULS': 'Puls', 'REIGN POWER': 'Reign Power', 'ATEN': 'ATEN',
+    'MICROHARD': 'Microhard', 'MEAN WELL': 'Mean Well', 'ABSOPULSE': 'Absopulse', 'WINMATE': 'Winmate', 'TRANSCEND': 'Transcend' },
   MARCAS: ['Moxa','Advantech','Black Box','Zenitel','Puls','InHand','Tosibox','HMS/Anybus','Mean Well','Absopulse','Winmate','Transcend'],
   UNIDADES: ['Und','Kit','Lic','Mts','Glb'],
 
@@ -617,6 +628,147 @@ const Util = (() => {
   return { rng, iso, parse, today, setToday, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
     endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, moneyK, pct,
     round2, esc, sum, groupBy, normNum, pad, nf2 };
+})();
+
+/* =====================================================================
+   CAPA 1b · LISTAPRECIOS — importador de la lista de precios (Excel .xlsx o CSV).
+   Se ejecuta en el navegador: el archivo no se sube a ningún servidor.
+   Reconoce una hoja por marca, encabezados en distintas filas, varias columnas de
+   código, precios con coma o punto y celdas con error (#N/A), que se omiten.
+   ===================================================================== */
+const ListaPrecios = (() => {
+  const RX_COD = /model|part|c[oó]digo|code|order/i;
+  const RX_PRECIO = /^(lista\s*1|l\s*1|lista|precio( de)?( lista)?( usd)?|price|pvp)$/i;
+  const RX_MARCA = /^(marca|brand)$/i;
+  const txt = v => v == null ? '' : String(v).replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+  function num(v) {
+    if (v == null) return NaN;
+    if (typeof v === 'number') return v;
+    let s = String(v).replace(/[\s $]|USD/gi, '');
+    if (!s || /^#/.test(s)) return NaN;
+    if (/^\d{1,3}(\.\d{3})+,\d+$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    else if (/^\d+,\d{1,4}$/.test(s)) s = s.replace(',', '.');
+    else s = s.replace(/,/g, '');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : NaN;
+  }
+  const marcaDe = nombre => { const k = txt(nombre).toUpperCase(); return Config.MARCA_ALIAS[k] || (k ? k.charAt(0) + k.slice(1).toLowerCase() : 'Otra'); };
+  function columnas(rows) {
+    for (let i = 0; i < Math.min(15, rows.length); i++) {
+      const c = (rows[i] || []).map(txt);
+      const precio = c.findIndex(x => RX_PRECIO.test(x));
+      const marca = c.findIndex(x => RX_MARCA.test(x));
+      const cods = c.map((x, j) => RX_COD.test(x) && j !== precio ? j : -1).filter(j => j >= 0);
+      if (precio >= 0 && cods.length) {
+        const cod = cods.map(j => [j, rows.slice(i + 1).filter(r => r && txt(r[j])).length]).sort((a, b) => b[1] - a[1])[0][0];
+        let desc = c.findIndex((x, j) => j !== cod && j !== precio && j !== marca && /desc|product name|nombre/i.test(x));
+        if (desc < 0) desc = c.findIndex((x, j) => j !== cod && j !== precio && j !== marca && x);
+        return { fila: i, cod, desc, precio, marca };
+      }
+    }
+    return null;
+  }
+  /** hojas: [{ name, rows: [[celdas]] }] → { items: [{ marca, codigo, descripcion, precio }], resumen: [...] } */
+  function interpretar(hojas) {
+    const items = [], resumen = [];
+    hojas.forEach(h => {
+      let col = columnas(h.rows), desde;
+      if (col) desde = col.fila + 1;
+      else { const ancho = Math.max(0, ...h.rows.map(r => (r || []).length)); col = { cod: 0, desc: 1, precio: ancho - 1, marca: -1 }; desde = 0; }
+      const marcaHoja = marcaDe(h.name);
+      let ok = 0, sinPrecio = 0;
+      const vistos = new Set();
+      for (let i = desde; i < h.rows.length; i++) {
+        const r = h.rows[i] || [], codigo = txt(r[col.cod]);
+        if (!codigo) continue;
+        const precio = num(r[col.precio]);
+        if (!(precio > 0)) { if (txt(r[col.precio])) sinPrecio++; continue; }
+        const marca = col.marca >= 0 && txt(r[col.marca]) ? marcaDe(r[col.marca]) : marcaHoja;
+        const key = marca + '|' + codigo.toUpperCase();
+        if (vistos.has(key)) continue;
+        vistos.add(key);
+        items.push({ marca, codigo, descripcion: txt(r[col.desc]) || codigo, precio: Math.round(precio * 100) / 100 });
+        ok++;
+      }
+      resumen.push({ hoja: h.name, marca: col.marca >= 0 ? '(columna Marca)' : marcaHoja, productos: ok, sinPrecio });
+    });
+    return { items, resumen };
+  }
+  /** Lector mínimo de .xlsx (ZIP + XML) con las APIs del navegador; no necesita librerías */
+  async function leerXlsx(buf) {
+    const dv = new DataView(buf), u8 = new Uint8Array(buf), dec = new TextDecoder();
+    let eocd = -1;
+    for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 70000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('El archivo no es un Excel (.xlsx) válido.');
+    const n = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const files = {};
+    for (let k = 0; k < n; k++) {
+      const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+      files[dec.decode(u8.subarray(p + 46, p + 46 + nlen))] = { method: dv.getUint16(p + 10, true), csize: dv.getUint32(p + 20, true), off: dv.getUint32(p + 42, true) };
+      p += 46 + nlen + elen + clen;
+    }
+    async function leer(name) {
+      const f = files[name];
+      if (!f) return null;
+      const ini = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true);
+      const data = u8.subarray(ini, ini + f.csize);
+      if (f.method === 0) return dec.decode(data);
+      const st = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return dec.decode(await new Response(st).arrayBuffer());
+    }
+    const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+    const tags = (node, t) => Array.from(node.getElementsByTagName(t));
+    const wbTxt = await leer('xl/workbook.xml');
+    if (!wbTxt) throw new Error('No se encontró el libro dentro del archivo.');
+    const relMap = {};
+    tags(xml(await leer('xl/_rels/workbook.xml.rels')), 'Relationship').forEach(r => { relMap[r.getAttribute('Id')] = r.getAttribute('Target'); });
+    const ssTxt = await leer('xl/sharedStrings.xml');
+    const ss = ssTxt ? tags(xml(ssTxt), 'si').map(si => tags(si, 't').map(t => t.textContent).join('')) : [];
+    const hojas = [];
+    for (const sh of tags(xml(wbTxt), 'sheet')) {
+      const target = (relMap[sh.getAttribute('r:id')] || '').replace(/^\/?xl\//, '').replace(/^\//, '');
+      const sheetTxt = await leer('xl/' + target);
+      if (!sheetTxt) continue;
+      const rows = tags(xml(sheetTxt), 'row').map(row => {
+        const arr = [];
+        tags(row, 'c').forEach(c => {
+          const letras = (c.getAttribute('r') || '').replace(/\d+/g, '');
+          let col = 0;
+          for (const ch of letras) col = col * 26 + (ch.charCodeAt(0) - 64);
+          col = letras ? col - 1 : arr.length;
+          const t = c.getAttribute('t'), v = c.getElementsByTagName('v')[0];
+          arr[col] = t === 's' ? (v ? ss[+v.textContent] : null) : t === 'inlineStr' ? tags(c, 't').map(x => x.textContent).join('')
+            : (t === 'e' || t === 'str' || t === 'b') ? (v ? v.textContent : null) : (v ? +v.textContent : null);
+        });
+        return arr;
+      });
+      hojas.push({ name: sh.getAttribute('name'), rows });
+    }
+    return hojas;
+  }
+  function leerCsv(text) {
+    const primera = text.split(/\r?\n/)[0] || '';
+    const sep = (primera.match(/;/g) || []).length >= (primera.match(/,/g) || []).length ? ';' : ',';
+    const rows = [];
+    let row = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === sep) { row.push(cell); cell = ''; }
+      else if (ch === '\n') { row.push(cell.replace(/\r$/, '')); rows.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return [{ name: 'CSV', rows: rows.map(r => r.map(x => x.replace(/^﻿/, ''))) }];
+  }
+  async function leerArchivo(file) {
+    if (/\.csv$/i.test(file.name)) return leerCsv(await file.text());
+    if (/\.xlsx$/i.test(file.name)) return leerXlsx(await file.arrayBuffer());
+    throw new Error('Formato no soportado: usa Excel (.xlsx) o CSV.');
+  }
+  return { interpretar, leerXlsx, leerCsv, leerArchivo, num, marcaDe };
 })();
 
 /* =====================================================================
@@ -743,6 +895,7 @@ const DemoData = (() => {
       { id:'u4', nombre:'Diego Huamán',     iniciales:'DH', correo:'dhuaman@techvalue-demo.pe',   meta:40000, rol:'vendedor', usuario:'dh', clave:'demo', perfil:'Por debajo de la meta' },
       { id:'u5', nombre:'Valeria Castillo', iniciales:'VC', correo:'vcastillo@techvalue-demo.pe', meta:40000, rol:'vendedor', usuario:'vc', clave:'demo', perfil:'Nueva (poco historial)' },
       { id:'u6', nombre:'Roberto Valdivia', iniciales:'RV', correo:'rvaldivia@techvalue-demo.pe', meta:null,  rol:'jefatura', usuario:'jefatura', clave:'demo', perfil:'Jefatura comercial' },
+      { id:'u8', nombre:'Mónica Ugarte',    iniciales:'MU', correo:'mugarte@techvalue-demo.pe',   meta:null,  rol:'admin',    usuario:'admin', clave:'demo', perfil:'Administración (lista de precios)' },
       { id:'u7', nombre:'Patricia Gómez',   iniciales:'PG', correo:'pgomez@techvalue-demo.pe',    meta:null,  rol:'finanzas', usuario:'finanzas', clave:'demo', perfil:'Finanzas (solo lectura)' },
     ];
     const vendedores = db.users.filter(u => u.rol === 'vendedor');
@@ -1183,7 +1336,11 @@ const DemoData = (() => {
     });
 
     db.opps.forEach(o => { delete o._ultimoNumero; });
-    db.catalogo = CATALOGO; // lista de precios ficticia para cotizar en la plataforma
+    // Lista de precios FICTICIA para la demo (la real se importa o se carga desde un archivo privado)
+    db.catalogo = CATALOGO.map((p, i) => ({ id: 'P-' + (i + 1), marca: p.marca, codigo: p.codigo, descripcion: p.descripcion, precio: p.precio, actualizado: addDays(hoy, -20), actualizadoPor: 'u7' }));
+    db.seq.producto = db.catalogo.length + 1;
+    db.catalogoInfo = { actualizado: addDays(hoy, -20), por: 'u7', origen: 'demo' };
+    db.catalogoLog = [{ fecha: addDays(hoy, -20), usuarioId: 'u7', accion: `Lista de precios de demostración cargada (${db.catalogo.length} productos ficticios)` }];
     return db;
   }
 
@@ -1478,7 +1635,7 @@ const Rules = (() => {
   }
   /** Alertas que ve cada usuario en la campana */
   function alertasUsuario(db, user, hoy = Util.today()) {
-    if (!user || user.rol === 'finanzas') return [];
+    if (!user || !['vendedor', 'jefatura'].includes(user.rol)) return [];
     const out = [];
     db.opps.forEach(o => {
       if (user.rol === 'vendedor' && o.vendedorId !== user.id) return;
@@ -1576,11 +1733,12 @@ const Rules = (() => {
 
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
-    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'proyeccion', 'facturado', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado', 'contactos'],
+    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'notificaciones'],
+    finanzas: ['proyeccion', 'facturado', 'contactos', 'catalogo'],
+    admin: ['catalogo', 'contactos'],
   };
-  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion' };
+  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'catalogo' };
   function puede(user, accion, opp) {
     if (!user) return false;
     switch (accion) {
@@ -1595,6 +1753,9 @@ const Rules = (() => {
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
       case 'asignar_cuenta': return user.rol === 'jefatura';
+      // Lista de precios: todos la consultan; solo jefatura, finanzas y administración la modifican
+      case 'ver_catalogo': return true;
+      case 'editar_catalogo': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);
       default: return false;
     }
   }
@@ -1622,11 +1783,27 @@ const Repo = (() => {
   const opp = id => db.opps.find(o => o.id === id) || fail('Oportunidad no encontrada.');
   const log = (o, nota, usuarioId) => db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Sistema', nota, proxContacto: o.proxContacto || null, usuarioId, auto: true });
   const guardar = o => { const e = Rules.validarOportunidad(o); if (e) fail(e); touch(); };
+  /** Si el HTML trae una lista de precios privada (copia local, nunca publicada), reemplaza a la ficticia */
+  function cargarListaPrivada() {
+    const L = typeof window !== 'undefined' && window.__LISTA_PRECIOS_PRIVADA;
+    if (!Array.isArray(L) || !L.length) return;
+    const f = window.__LISTA_PRECIOS_FECHA || hoy();
+    db.catalogo = L.map((r, i) => ({ id: 'P-' + (i + 1), marca: r[0], codigo: String(r[1]), descripcion: r[2], precio: r[3], actualizado: f, actualizadoPor: null }));
+    db.seq.producto = L.length + 1;
+    db.catalogoInfo = { actualizado: f, por: null, origen: 'privado', archivo: window.__LISTA_PRECIOS_ARCHIVO || '' };
+    db.catalogoLog.unshift({ fecha: f, usuarioId: null, accion: `Lista de precios real cargada desde archivo privado (${L.length} productos)` });
+  }
+  const editorCatalogo = usuarioId => {
+    const u = db.users.find(x => x.id === usuarioId);
+    if (!Rules.puede(u, 'editar_catalogo')) fail('Solo jefatura, finanzas o administración pueden modificar la lista de precios.');
+    return u;
+  };
+  const logCatalogo = (usuarioId, accion) => db.catalogoLog.unshift({ fecha: hoy(), usuarioId, accion });
 
   return {
     /** GET /demo/reset  (en producción: carga inicial desde la API) */
-    async init() { db = DemoData.generate(hoy()); return true; },
-    async reset() { db = DemoData.generate(hoy()); return true; },
+    async init() { db = DemoData.generate(hoy()); cargarListaPrivada(); return true; },
+    async reset() { db = DemoData.generate(hoy()); cargarListaPrivada(); return true; },
     /** GET /snapshot — la UI solo lee de aquí; nunca modifica el objeto directamente */
     async snapshot() { return db; },
     /** POST /auth/login (simulado: no es seguridad real) */
@@ -1746,6 +1923,61 @@ const Repo = (() => {
       db.gestiones.push({ id: 'G-' + (db.seq.gestion++), clienteId, fecha: hoy(), canal: g.canal || 'WhatsApp', resultado: g.resultado, nota: (g.nota || '').trim(), usuarioId });
       touch();
     },
+    /** POST/PATCH /catalogo — agrega o edita un producto (solo jefatura, finanzas o administración) */
+    async guardarProducto(p, usuarioId) {
+      editorCatalogo(usuarioId);
+      const e = {};
+      if (!String(p.marca || '').trim()) e.marca = 'Indica la marca.';
+      if (!String(p.codigo || '').trim()) e.codigo = 'Indica el código.';
+      if (!(+p.precio > 0)) e.precio = 'El precio de lista debe ser mayor que cero.';
+      const marca = String(p.marca || '').trim(), codigo = String(p.codigo || '').trim();
+      if (!e.codigo && db.catalogo.some(x => x.id !== p.id && x.marca === marca && x.codigo.toUpperCase() === codigo.toUpperCase())) e.codigo = `Ya existe ${codigo} en ${marca}.`;
+      if (Object.keys(e).length) fail(Object.values(e)[0], e);
+      const data = { marca, codigo, descripcion: String(p.descripcion || '').trim() || codigo, precio: Util.round2(+p.precio), actualizado: hoy(), actualizadoPor: usuarioId };
+      if (p.id) {
+        const x = db.catalogo.find(y => y.id === p.id) || fail('Producto no encontrado.');
+        const antes = x.precio;
+        Object.assign(x, data);
+        logCatalogo(usuarioId, `Editó ${marca} ${codigo}${antes !== data.precio ? `: precio ${Util.money(antes)} → ${Util.money(data.precio)}` : ''}`);
+      } else {
+        db.catalogo.push(Object.assign({ id: 'P-' + (db.seq.producto++) }, data));
+        logCatalogo(usuarioId, `Agregó ${marca} ${codigo} (${Util.money(data.precio)})`);
+      }
+      db.catalogoInfo = Object.assign({}, db.catalogoInfo, { actualizado: hoy(), por: usuarioId });
+      touch();
+    },
+    /** DELETE /catalogo/:id */
+    async quitarProducto(id, usuarioId) {
+      editorCatalogo(usuarioId);
+      const i = db.catalogo.findIndex(x => x.id === id);
+      if (i < 0) fail('Producto no encontrado.');
+      const [x] = db.catalogo.splice(i, 1);
+      logCatalogo(usuarioId, `Quitó ${x.marca} ${x.codigo} de la lista`);
+      db.catalogoInfo = Object.assign({}, db.catalogoInfo, { actualizado: hoy(), por: usuarioId });
+      touch();
+      return x;
+    },
+    /** POST /catalogo/importar — modo "reemplazar" (las marcas del archivo quedan exactamente como en él) o "completar" (agrega y actualiza, no quita) */
+    async importarCatalogo(items, modo, usuarioId, archivo) {
+      editorCatalogo(usuarioId);
+      if (!items || !items.length) fail('El archivo no tiene productos con precio.');
+      const marcas = new Set(items.map(i => i.marca)), idx = new Map(db.catalogo.map(p => [p.marca + '|' + p.codigo.toUpperCase(), p]));
+      let agregados = 0, actualizados = 0, quitados = 0;
+      const vigentes = new Set(), nuevos = [];
+      items.forEach(i => {
+        const ex = idx.get(i.marca + '|' + i.codigo.toUpperCase());
+        if (ex) {
+          vigentes.add(ex.id);
+          if (ex.precio !== i.precio || ex.descripcion !== i.descripcion) { Object.assign(ex, { precio: i.precio, descripcion: i.descripcion, actualizado: hoy(), actualizadoPor: usuarioId }); actualizados++; }
+        } else { nuevos.push({ id: 'P-' + (db.seq.producto++), marca: i.marca, codigo: i.codigo, descripcion: i.descripcion, precio: i.precio, actualizado: hoy(), actualizadoPor: usuarioId }); agregados++; }
+      });
+      if (modo === 'reemplazar') { const antes = db.catalogo.length; db.catalogo = db.catalogo.filter(p => !marcas.has(p.marca) || vigentes.has(p.id)); quitados = antes - db.catalogo.length; }
+      db.catalogo.push(...nuevos);
+      db.catalogoInfo = { actualizado: hoy(), por: usuarioId, origen: 'importado', archivo: archivo || '' };
+      logCatalogo(usuarioId, `Importó ${archivo || 'lista de precios'} (${modo === 'reemplazar' ? 'reemplazando' : 'completando'} ${[...marcas].join(', ')}): ${agregados} nuevos, ${actualizados} actualizados, ${quitados} quitados`);
+      touch();
+      return { agregados, actualizados, quitados };
+    },
     /** PATCH /cotizaciones/:id/vigente */
     /** GET /catalogo — lista de precios para cotizar en la plataforma */
     async catalogo() { return db.catalogo || []; },
@@ -1804,7 +2036,7 @@ const Repo = (() => {
         }
       }
       const items = p.items.filter(it => String(it.codigo || '').trim()).map(it => ({ cant: +it.cant, unidad: it.unidad || 'Und', codigo: it.codigo.trim(), marca: it.marca,
-        descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit) }));
+        descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit), listaUSD: +it.listaUSD > 0 ? +it.listaUSD : null }));
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
         vigente: true, contacto: p.contacto || '', origen: p.origen };
@@ -1918,6 +2150,14 @@ const SelfTest = (() => {
       return r.c1.estado === 'activo' && r.c2.estado === 'sin_contacto' && r.c3.estado === 'no_responde' && r.c4.estado === 'activo' &&
         r.c2.alerta && r.c3.alerta && !r.c4.alerta && r.c2.diasSinCotizar === 127;
     }],
+    ['Importador de lista de precios (encabezados, comas decimales, #N/A, secciones)', () => {
+      const r = ListaPrecios.interpretar([
+        { name: 'MOXA', rows: [[null, null, '0.6'], ['Model Name', 'Description', 'Lista 1'], ['EDS-408A', 'Switch 8 puertos', '\u00a0 520,50 '], ['X-1', '#N/A', '#N/A'], [null, 'Sección', null]] },
+        { name: 'ZENITEL', rows: [['Short code', 'Part Number', 'Description', 'L1'], [null, '1001', 'Estación IP', 371.25], [null, '1002', 'Otra', 99]] },
+        { name: 'TOSIBOX', rows: [['TOSIBOX PRODUCTS', null, 'Lista 1'], ['TOSIBOX Part Number', 'Product Name', null], ['TBL350', 'Lock 350', '884']] }]);
+      const m = r.items.find(i => i.codigo === 'EDS-408A'), z = r.items.find(i => i.codigo === '1001'), t = r.items.find(i => i.codigo === 'TBL350');
+      return r.items.length === 4 && m.marca === 'Moxa' && m.precio === 520.5 && z.marca === 'Zenitel' && z.descripcion === 'Estación IP' && t.precio === 884 && r.resumen[0].sinPrecio === 1;
+    }],
     ['Días hábiles respetan feriados de Perú (28 y 29 de julio)', () =>
       Util.addBizDays('2026-07-27', 3) === '2026-08-03' && Util.bizDaysBetween('2026-07-24', '2026-07-30') === 2],
     ['No se cierra como Perdida sin motivo ni queda abierta sin próximo contacto', () => {
@@ -1956,7 +2196,7 @@ const UI = (() => {
     proy: { tipo: 'facturacion', vendedor: '', condicion: '' },
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
-    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' },
+    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -1992,6 +2232,7 @@ const UI = (() => {
     back: '<path d="M15 18l-6-6 6-6"/>',
     alert: '<path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
     file: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
+    tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L2 12V2h10l8.6 8.6a2 2 0 010 2.8z"/><circle cx="7" cy="7" r="1.5"/>',
     users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8"/>',
     book: '<path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5z"/><path d="M4 19.5V21h16M9 7h7M9 11h5"/>',
     receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
@@ -2028,12 +2269,13 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['notificaciones', 'Notificaciones', 'bell']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['contactos', 'Agenda de contactos', 'book']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['notificaciones', 'Notificaciones', 'bell']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    admin: [['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda' };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'catalogo', 'contactos'], admin: ['catalogo', 'contactos'] };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -2080,7 +2322,7 @@ const UI = (() => {
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
-    bell.classList.toggle('hidden', u.rol === 'finanzas');
+    bell.classList.toggle('hidden', !['vendedor', 'jefatura'].includes(u.rol));
     bell.innerHTML = I('bell') + (n ? `<span class="badge-count">${n > 99 ? '99+' : n}</span>` : '');
     bell.setAttribute('aria-label', `Alertas (${n})`);
     $('#user-btn').innerHTML = avatar(u) + `<span class="uname">${E(u.nombre)}</span>`;
@@ -2523,6 +2765,36 @@ const UI = (() => {
   const funnelToggle = () => `<div class="seg-toggle" role="group" aria-label="Ancho del fúnel según"><button class="${S.funnelMedida !== 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="cantidad">Cantidad</button><button class="${S.funnelMedida === 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="monto">Monto</button></div>`;
   ACTIONS['funnel-medida'] = el => { S.funnelMedida = el.dataset.v; render(true); };
 
+  /* ---------- Lista de precios: búsqueda rápida (por escritura o por marca) ---------- */
+  function catIndex() {
+    const db = S.db;
+    if (S.catIdx && S.catIdx.v === db._v && S.catIdx.n === db.catalogo.length) return S.catIdx.list;
+    const list = db.catalogo.map(p => ({ p, c: p.codigo.toLowerCase(), k: (p.codigo + ' ' + p.descripcion + ' ' + p.marca).toLowerCase() }));
+    S.catIdx = { v: db._v, n: db.catalogo.length, list };
+    return list;
+  }
+  /** Coincidencias por código (empieza con) primero y luego por palabras en código/descripción/marca */
+  function buscarProductos(q, marca, limite = 12) {
+    const t = String(q || '').trim().toLowerCase(), ws = t.split(/\s+/).filter(Boolean);
+    const a = [], b = [];
+    let total = 0;
+    for (const x of catIndex()) {
+      if (marca && x.p.marca !== marca) continue;
+      if (!t) { total++; if (b.length < limite) b.push(x.p); continue; }
+      if (x.c.startsWith(t)) { total++; if (a.length < limite) a.push(x.p); }
+      else if (ws.every(w => x.k.includes(w))) { total++; if (b.length < limite) b.push(x.p); }
+    }
+    const res = a.concat(b).slice(0, limite);
+    res.total = total;
+    return res;
+  }
+  function marcasCatalogo() {
+    const n = {};
+    S.db.catalogo.forEach(p => { n[p.marca] = (n[p.marca] || 0) + 1; });
+    return Object.keys(n).sort((x, y) => n[y] - n[x]).map(m => ({ marca: m, n: n[m] }));
+  }
+  const marcasDisponibles = () => [...new Set([...Config.MARCAS, ...marcasCatalogo().map(x => x.marca)])];
+
   /* ---------- Cuentas: componentes y modales ---------- */
   const contactoLinks = k => (k.telefono ? `<a class="btn sm" href="https://wa.me/${k.telefono.replace(/\D/g, '')}" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp">${I('msg')}</a><a class="btn sm" href="tel:${k.telefono.replace(/\s/g, '')}" title="Llamar" aria-label="Llamar">${I('phone')}</a>` : '') +
     (k.correo ? `<a class="btn sm" href="mailto:${E(k.correo)}" title="Correo" aria-label="Correo">${I('mail')}</a>` : '');
@@ -2660,7 +2932,7 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' };
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.catF = { q: '', marca: '' };
       go(Rules.INICIO[S.user.rol]);
     } catch (e) { toast(e.message); }
   }
@@ -2969,7 +3241,7 @@ const UI = (() => {
         </dl>
         <div class="table-wrap"><table class="tbl"><thead><tr><th class="r">Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">V. unit.</th><th class="r">Total</th></tr></thead><tbody>
           ${q.items.map(it => `<tr><td class="r">${it.cant}</td><td>${E(it.unidad)}</td><td class="nowrap"><strong>${E(it.codigo)}</strong></td><td>${E(it.marca)}</td><td class="small">${E(it.descripcion)}</td>
-            <td class="r num">${Util.nf2.format(it.valorUnit)}</td><td class="r num">${Util.nf2.format(it.cant * it.valorUnit)}</td></tr>`).join('')}
+            <td class="r num">${Util.nf2.format(it.valorUnit)}${it.listaUSD && Math.abs(it.valorUnit - (cur === 'PEN' ? it.listaUSD * q.tc : it.listaUSD)) > 0.01 ? `<div class="cell-sub" title="Precio de lista: ${Util.money(it.listaUSD)}">editado vs lista</div>` : ''}</td><td class="r num">${Util.nf2.format(it.cant * it.valorUnit)}</td></tr>`).join('')}
         </tbody></table></div>
         <div class="totals">
           <span class="t">Suma</span><span class="num right">${Util.money(t.suma, cur)}</span>
@@ -3031,7 +3303,49 @@ const UI = (() => {
   /* =====================================================================
      8.5 NUEVA COTIZACIÓN — cotizar en la plataforma (genera el PDF) o leer un PDF ya enviado (simulado)
      ===================================================================== */
-  const itemVacio = () => ({ cant: 1, unidad: 'Und', codigo: '', marca: 'Moxa', descripcion: '', valorUnit: '' });
+  const itemVacio = () => ({ cant: 1, unidad: 'Und', codigo: '', marca: 'Moxa', descripcion: '', valorUnit: '', listaUSD: null });
+  /** Precio de lista convertido a la moneda de la cotización y aviso si el vendedor lo editó */
+  function listaHint(d, it) {
+    if (!(+it.listaUSD > 0)) return '';
+    const l = d.moneda === 'PEN' ? Util.round2(it.listaUSD * (+d.tc || Config.TC_REFERENCIA)) : +it.listaUSD;
+    return Math.abs((+it.valorUnit || 0) - l) > 0.005 ? `<span style="color:var(--warn);font-weight:700">Editado · lista ${Util.nf2.format(l)}</span>` : 'Precio de lista';
+  }
+  function aplicarProducto(i, p) {
+    const d = S.nueva.d, it = d.items[i];
+    Object.assign(it, { codigo: p.codigo, marca: p.marca, descripcion: p.descripcion, listaUSD: p.precio,
+      valorUnit: d.moneda === 'PEN' ? Util.round2(p.precio * (+d.tc || Config.TC_REFERENCIA)) : p.precio });
+  }
+  /* Lista desplegable de coincidencias bajo el campo de código */
+  let acEstado = null;
+  const cerrarAc = () => { const l = document.getElementById('ac-list'); if (l) l.remove(); acEstado = null; };
+  function mostrarAc(el) {
+    const q = el.value.trim();
+    if (q.length < 2) { cerrarAc(); return; }
+    const res = buscarProductos(q, null, 12);
+    let l = document.getElementById('ac-list');
+    if (!l) { l = document.createElement('div'); l.id = 'ac-list'; l.className = 'ac-list'; l.setAttribute('role', 'listbox'); document.body.appendChild(l); }
+    const r = el.getBoundingClientRect();
+    l.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 448)) + 'px';
+    l.style.top = Math.min(r.bottom + 4, window.innerHeight - 200) + 'px';
+    acEstado = { i: +el.dataset.ac, res, act: 0 };
+    l.innerHTML = res.length ? res.map((p, k) => `<button type="button" role="option" data-ac-pick="${k}" class="${k === 0 ? 'act' : ''}"><strong>${E(p.codigo)}</strong> · ${E(p.marca)} <span style="float:right" class="num">${Util.money(p.precio)}</span><div class="ac-meta">${E(p.descripcion)}</div></button>`).join('') +
+      (res.total > res.length ? `<div class="ac-empty">${res.total - res.length} coincidencias más: sigue escribiendo para afinar.</div>` : '')
+      : '<div class="ac-empty">Sin coincidencias en la lista de precios. Puedes escribir el ítem a mano.</div>';
+  }
+  document.addEventListener('mousedown', e => {
+    const b = e.target.closest && e.target.closest('[data-ac-pick]');
+    if (b && acEstado) { e.preventDefault(); const { i, res } = acEstado; aplicarProducto(i, res[+b.dataset.acPick]); cerrarAc(); render(true); return; }
+    if (!(e.target.closest && e.target.closest('#ac-list'))) cerrarAc();
+  });
+  document.addEventListener('keydown', e => {
+    if (!acEstado || !e.target.dataset || e.target.dataset.ac == null) return;
+    const l = document.getElementById('ac-list'); if (!l) return;
+    const n = acEstado.res.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!n) return; acEstado.act = (acEstado.act + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; l.querySelectorAll('[data-ac-pick]').forEach((b, k) => b.classList.toggle('act', k === acEstado.act)); }
+    else if (e.key === 'Enter') { if (n) { e.preventDefault(); const { i, res, act } = acEstado; aplicarProducto(i, res[act]); cerrarAc(); render(true); } }
+    else if (e.key === 'Escape') cerrarAc();
+  });
+  window.addEventListener('scroll', () => cerrarAc(), true);
   function tcDelDia(f) {
     let d = f;
     for (let i = 0; i < 10; i++) { if (S.db.fx[d]) return S.db.fx[d]; d = Util.addDays(d, -1); }
@@ -3173,16 +3487,15 @@ const UI = (() => {
         ${d.items.map((it, i) => `<tr>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td><input type="text" list="nq-cat" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="EDS-408A" aria-label="Código"></td>
-          <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options(Config.MARCAS.map(x => [x, x]), it.marca)}</select></td>
+          <td><input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Escribe código o descripción" aria-label="Código: escribe para buscar en la lista de precios" style="min-width:150px"></td>
+          <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options(marcasDisponibles().map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción"></td>
-          <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"></td>
+          <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"><div class="field-hint" id="nq-lista-${i}">${listaHint(d, it)}</div></td>
           <td class="r num" id="nq-tot-${i}">${Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0))}</td>
           <td><button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`).join('')}
         </tbody></table></div>
-        <datalist id="nq-cat">${(db.catalogo || []).map(p => `<option value="${E(p.codigo)}">${E(p.marca)} · ${E(p.descripcion)}</option>`).join('')}</datalist>
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
-          <button type="button" class="btn sm" data-action="nq-add-item">${I('plus')} Agregar ítem</button>
+          <div class="btn-row"><button type="button" class="btn sm" data-action="nq-add-item">${I('plus')} Agregar ítem</button><button type="button" class="btn sm" data-action="nq-explorar">${I('tag')} Buscar en la lista de precios</button></div>
           <div class="totals" id="nq-totales">${totalesHTML(d, t, usd)}</div>
         </div>`)}
       ${sec(4, 'Proyecto', `<div class="form-grid">
@@ -3235,7 +3548,7 @@ const UI = (() => {
   }
   function actualizarCalculos() {
     const d = S.nueva.d, { t, usd } = totalesDraft(d);
-    d.items.forEach((it, i) => { const td = $('#nq-tot-' + i); if (td) td.textContent = Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0)); });
+    d.items.forEach((it, i) => { const td = $('#nq-tot-' + i); if (td) td.textContent = Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0)); const lh = $('#nq-lista-' + i); if (lh) lh.innerHTML = listaHint(d, it); });
     const box = $('#nq-totales');
     if (box) {
       // se actualizan solo los textos para no perder el foco del campo de descuento
@@ -3254,13 +3567,17 @@ const UI = (() => {
     if (path === 'clienteId') { const c = value && value !== '__nuevo' ? cli(value) : null; d.contacto = c && c.contactos[0] ? c.contactos[0].nombre : ''; d.modoTocado = false; }
     if (path === 'proyectoSel' || path === 'clienteNuevo.ruc') d.modoTocado = false;
     if (path === 'numero') d.numAuto = false;
+    if (path === 'moneda') { // los ítems con precio de lista sin editar se convierten a la nueva moneda
+      const tcOld = +d.tc || Config.TC_REFERENCIA, tcNew = tcDelDia(d.fechaEmision), old = value === 'PEN' ? 'USD' : 'PEN';
+      d.items.forEach(it => { if (!(+it.listaUSD > 0)) return; const lo = old === 'PEN' ? Util.round2(it.listaUSD * tcOld) : +it.listaUSD; if (Math.abs((+it.valorUnit || 0) - lo) < 0.01) it.valorUnit = value === 'PEN' ? Util.round2(it.listaUSD * tcNew) : +it.listaUSD; });
+    }
     if (path === 'fechaEmision' || path === 'moneda') d.tc = tcDelDia(d.fechaEmision);
   }
   document.addEventListener('input', e => {
     const el = e.target;
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
     if (el.dataset.nq && el.tagName !== 'SELECT' && !el.dataset.nqRender) { setDraft(el.dataset.nq, el.value); actualizarCalculos(); }
-    if (el.dataset.nqi != null) { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); }
+    if (el.dataset.nqi != null) { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); if (el.dataset.ac != null) mostrarAc(el); }
   });
   document.addEventListener('change', e => {
     const el = e.target;
@@ -3269,17 +3586,45 @@ const UI = (() => {
     else if (el.dataset.nqi != null) {
       const d = S.nueva.d, it = d.items[+el.dataset.nqi];
       it[el.dataset.k] = el.value;
-      const p = el.dataset.k === 'codigo' && (S.db.catalogo || []).find(x => x.codigo.toLowerCase() === el.value.trim().toLowerCase());
-      if (p) { // completa desde la lista de precios
-        it.codigo = p.codigo; it.marca = p.marca;
-        if (!String(it.descripcion || '').trim()) it.descripcion = p.descripcion;
-        if (!(+it.valorUnit > 0)) it.valorUnit = d.moneda === 'PEN' ? Util.round2(p.precio * (+d.tc || Config.TC_REFERENCIA)) : p.precio;
-        render(true);
-      } else actualizarCalculos();
+      const p = el.dataset.k === 'codigo' && it.codigo && !it.listaUSD && (S.db.catalogo || []).find(x => x.codigo.toLowerCase() === el.value.trim().toLowerCase());
+      if (p) { aplicarProducto(+el.dataset.nqi, p); cerrarAc(); render(true); } // código exacto de la lista
+      else actualizarCalculos();
     }
     else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; render(true); }
   });
   ACTIONS['nq-add-item'] = () => { S.nueva.d.items.push(itemVacio()); render(true); };
+  /** Explorar la lista de precios por marca y agregar ítems a la cotización */
+  ACTIONS['nq-explorar'] = () => {
+    const marcas = marcasCatalogo();
+    const root = modal({
+      title: 'Buscar en la lista de precios', wide: true,
+      body: `<div class="filters" style="margin-bottom:8px"><label class="field">Marca<select id="ex-marca">${options(marcas.map(m => [m.marca, `${m.marca} (${m.n})`]), '', 'Todas las marcas')}</select></label>
+        <label class="field">Buscar<input type="text" id="ex-q" placeholder="Código o descripción" autocomplete="off"></label></div>
+        <div id="ex-res"></div><p class="small muted" style="margin-bottom:0">Al agregar un producto, su descripción y precio quedan editables solo para esta cotización; la lista no cambia.</p>`,
+      actions: [{ label: 'Listo', cls: 'primary' }],
+    });
+    const pintar = () => {
+      const res = buscarProductos(root.querySelector('#ex-q').value, root.querySelector('#ex-marca').value, 40);
+      root.querySelector('#ex-res').innerHTML = `<div class="small muted" style="margin-bottom:6px">${res.total} productos${res.total > res.length ? ` · mostrando ${res.length}` : ''}</div>
+        <div class="table-wrap" style="max-height:46vh"><table class="tbl"><thead><tr><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">Precio lista USD</th><th></th></tr></thead><tbody>
+        ${res.map(p => `<tr><td class="nowrap"><strong>${E(p.codigo)}</strong></td><td class="nowrap">${E(p.marca)}</td><td class="small">${E(p.descripcion)}</td><td class="r num">${Util.nf2.format(p.precio)}</td>
+          <td><button type="button" class="btn sm" data-ex-add="${p.id}">${I('plus')} Agregar</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted center">Sin resultados.</td></tr>'}</tbody></table></div>`;
+    };
+    let t = null;
+    root.querySelector('#ex-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(pintar, 150); });
+    root.querySelector('#ex-marca').addEventListener('change', pintar);
+    root.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-ex-add]');
+      if (!b) return;
+      const p = S.db.catalogo.find(x => x.id === b.dataset.exAdd), d = S.nueva.d;
+      let i = d.items.findIndex(it => !String(it.codigo || '').trim());
+      if (i < 0) { d.items.push(itemVacio()); i = d.items.length - 1; }
+      aplicarProducto(i, p);
+      b.textContent = 'Agregado ✓'; b.disabled = true;
+      render(true);
+    });
+    pintar();
+  };
   ACTIONS['nq-del-item'] = el => { const d = S.nueva.d; if (d.items.length > 1) { d.items.splice(+el.dataset.i, 1); render(true); } };
   ACTIONS['nq-cancelar'] = () => { S.nueva = null; go('mi-dia'); };
   ACTIONS['nq-preview'] = () => {
@@ -3304,7 +3649,7 @@ const UI = (() => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({}, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
+      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
@@ -3804,6 +4149,108 @@ const UI = (() => {
   CHANGES['agf'] = el => { S.agF[el.name] = el.value; render(true); };
   let tAg = null;
   INPUTS['agf'] = el => { S.agF[el.name] = el.value; clearTimeout(tAg); tAg = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="agf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+
+  /* =====================================================================
+     LISTA DE PRECIOS — confidencial. Todos consultan; jefatura, finanzas y administración la mantienen.
+     ===================================================================== */
+  PAGES['catalogo'] = async () => {
+    const db = S.db, u = S.user, F = S.catF, ed = Rules.puede(u, 'editar_catalogo');
+    const marcas = marcasCatalogo(), info = db.catalogoInfo || {};
+    const res = buscarProductos(F.q, F.marca, 150);
+    const quien = id => id && usr(id) ? usr(id).nombre : '—';
+    view().innerHTML = `
+      <div class="page-head"><div><h1>Lista de precios <span class="conf">${I('alert').replace('<svg', '<svg width="12" height="12"')} Confidencial · uso interno</span></h1>
+        <p class="muted">${db.catalogo.length.toLocaleString('en-US')} productos · ${marcas.length} marcas · actualizada el ${Util.fmtDate(info.actualizado)}${info.por ? ' por ' + E(quien(info.por)) : ''}${info.archivo ? ' · ' + E(info.archivo) : ''}</p></div>
+        ${ed ? `<div class="btn-row"><button class="btn" data-action="cat-exportar">${I('download')} Exportar CSV</button><button class="btn" data-action="cat-importar">${I('upload')} Importar lista (Excel o CSV)</button><button class="btn primary" data-action="cat-producto">${I('plus')} Agregar producto</button></div>` : ''}</div>
+      <input type="file" id="cat-file" accept=".xlsx,.csv" class="hidden">
+      ${info.origen === 'privado' ? `<div class="alert warn"><div><strong>Lista real cargada desde un archivo privado.</strong> Este archivo contiene precios confidenciales: no lo publiques ni lo compartas fuera de la empresa.</div></div>`
+        : info.origen === 'demo' ? `<div class="alert info"><div><strong>Lista de demostración con precios ficticios.</strong> ${ed ? 'Puedes importar la lista real (Excel con una hoja por marca, o CSV): se lee en este navegador y no se sube a ningún servidor.' : 'Jefatura, finanzas o administración cargan y actualizan la lista real.'}</div></div>` : ''}
+      ${ed ? '' : `<div class="alert info" style="margin-top:10px"><div>Busca aquí cualquier producto. Al cotizar, escribe el código o la descripción y elige de la lista: se completan descripción y precio, que puedes ajustar <strong>solo para tu cotización</strong>. La lista la actualizan jefatura, finanzas o administración.</div></div>`}
+      <div class="card" style="padding:12px;margin-top:12px">
+        <div class="filters" style="margin:0"><label class="field">Buscar<input type="text" data-input="catf" name="q" value="${E(F.q)}" placeholder="Código o descripción" autocomplete="off"></label>
+          <label class="field">Marca<select data-change="catf" name="marca">${options(marcas.map(m => [m.marca, `${m.marca} (${m.n.toLocaleString('en-US')})`]), F.marca, 'Todas las marcas')}</select></label></div>
+        <div class="btn-row" style="margin-top:10px">${marcas.map(m => `<button class="chip${F.marca === m.marca ? ' dark' : ''}" style="cursor:pointer" data-action="cat-marca" data-m="${E(m.marca)}">${E(m.marca)} · ${m.n.toLocaleString('en-US')}</button>`).join('')}</div>
+      </div>
+      <div class="small muted" style="margin:10px 0 6px" id="cat-count">${res.total.toLocaleString('en-US')} productos${res.total > res.length ? ` · mostrando ${res.length}; escribe para afinar la búsqueda` : ''}</div>
+      <div class="table-wrap"><table class="tbl" style="min-width:${ed ? 980 : 820}px"><thead><tr><th>Marca</th><th>Código</th><th>Descripción</th><th class="r">Precio lista (USD)</th><th>Actualizado</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+        ${res.map(p => `<tr><td class="nowrap">${E(p.marca)}</td><td class="nowrap"><strong>${E(p.codigo)}</strong></td><td class="small">${E(p.descripcion)}</td><td class="r num">${Util.nf2.format(p.precio)}</td>
+          <td class="small nowrap">${Util.fmtDate(p.actualizado)}${p.actualizadoPor ? `<div class="cell-sub">${E(quien(p.actualizadoPor))}</div>` : ''}</td>
+          ${ed ? `<td class="nowrap"><button class="btn sm" data-action="cat-producto" data-id="${p.id}">Editar</button> <button class="btn sm bad" data-action="cat-quitar" data-id="${p.id}">Quitar</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="6" class="center muted" style="padding:20px">Sin productos con estos filtros.</td></tr>`}
+      </tbody></table></div>
+      ${ed ? `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2><span class="sub">Quién actualizó la lista y cuándo</span></div>
+        <ul class="timeline">${(db.catalogoLog || []).slice(0, 15).map(l => `<li><div class="t-date">${Util.fmtDate(l.fecha)}</div><div>${E(l.accion)}<div class="small muted">${E(l.usuarioId ? quien(l.usuarioId) : 'Sistema')}</div></div></li>`).join('')}</ul></section>` : ''}`;
+    const inp = $('#cat-file');
+    if (inp) inp.addEventListener('change', async () => {
+      const f = inp.files[0];
+      if (!f) return;
+      try {
+        toast('Leyendo la lista de precios en este navegador…');
+        const r = ListaPrecios.interpretar(await ListaPrecios.leerArchivo(f));
+        S.catImport = { r, archivo: f.name };
+        abrirImportacion();
+      } catch (e) { toast('No se pudo leer el archivo: ' + e.message); }
+      inp.value = '';
+    });
+  };
+  function abrirImportacion() {
+    const { r, archivo } = S.catImport;
+    modal({
+      title: 'Importar lista de precios', wide: true,
+      body: `<p style="margin-top:0"><strong>${E(archivo)}</strong> · ${r.items.length.toLocaleString('en-US')} productos con precio. El archivo se leyó en este navegador; no se envió a ningún servidor.</p>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Hoja</th><th>Marca</th><th class="r">Productos</th><th class="r">Omitidos sin precio</th></tr></thead><tbody>
+        ${r.resumen.map(x => `<tr><td>${E(x.hoja)}</td><td>${E(x.marca)}</td><td class="r">${x.productos.toLocaleString('en-US')}</td><td class="r">${x.sinPrecio ? `<span class="chip warn">${x.sinPrecio}</span>` : 0}</td></tr>`).join('')}</tbody></table></div>
+        <div class="stack" style="margin-top:12px">
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="reemplazar" checked><span><strong>Reemplazar las marcas del archivo</strong> — cada marca incluida queda exactamente como en el archivo (se quitan los productos que ya no figuran).</span></label>
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="completar"><span><strong>Solo agregar y actualizar precios</strong> — no se quita ningún producto.</span></label>
+        </div>
+        <p class="small muted">Las cotizaciones ya emitidas no cambian: guardan el precio con el que se cotizó.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('upload')} Importar`, cls: 'primary', onClick: async root => {
+        const x = await Repo.importarCatalogo(r.items, val(root, 'modo'), S.user.id, archivo);
+        S.catImport = null; S.catF = { q: '', marca: '' };
+        toast(`Lista importada: ${x.agregados} nuevos, ${x.actualizados} actualizados, ${x.quitados} quitados.`); refresh();
+      } }],
+    });
+  }
+  function abrirProducto(id) {
+    const p = id ? S.db.catalogo.find(x => x.id === id) : {};
+    modal({
+      title: id ? 'Editar producto' : 'Agregar producto',
+      body: `<div class="form-grid">
+        <label class="field"><span>Marca <span class="req">*</span></span><input type="text" name="marca" list="cat-marcas" value="${E(p.marca || '')}"><datalist id="cat-marcas">${marcasDisponibles().map(m => `<option value="${E(m)}">`).join('')}</datalist></label>
+        <label class="field"><span>Código <span class="req">*</span></span><input type="text" name="codigo" value="${E(p.codigo || '')}"></label>
+        <label class="field"><span>Precio de lista USD (sin IGV) <span class="req">*</span></span><input type="number" min="0" step="0.01" name="precio" value="${E(p.precio || '')}"></label></div>
+        <label class="field" style="margin-top:12px">Descripción<textarea name="descripcion">${E(p.descripcion || '')}</textarea></label>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        await Repo.guardarProducto({ id: id || null, marca: val(root, 'marca'), codigo: val(root, 'codigo'), descripcion: val(root, 'descripcion'), precio: val(root, 'precio') }, S.user.id);
+        toast(id ? 'Producto actualizado.' : 'Producto agregado a la lista.'); refresh();
+      } }],
+    });
+  }
+  ACTIONS['cat-importar'] = () => { const i = $('#cat-file'); if (i) i.click(); };
+  ACTIONS['cat-producto'] = el => abrirProducto(el.dataset.id || null);
+  ACTIONS['cat-quitar'] = el => {
+    const p = S.db.catalogo.find(x => x.id === el.dataset.id);
+    modal({ title: 'Quitar producto', body: `<p style="margin-top:0">¿Quitar <strong>${E(p.marca)} ${E(p.codigo)}</strong> de la lista de precios? Las cotizaciones ya emitidas no se afectan.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Quitar', cls: 'bad', onClick: async () => {
+        const x = await Repo.quitarProducto(p.id, S.user.id);
+        toast(`${x.codigo} quitado de la lista.`, { undo: async () => { await Repo.guardarProducto(Object.assign({}, x, { id: null }), S.user.id); toast('Producto restaurado.'); refresh(); } });
+        refresh();
+      } }] });
+  };
+  ACTIONS['cat-marca'] = el => { S.catF.marca = S.catF.marca === el.dataset.m ? '' : el.dataset.m; render(true); };
+  ACTIONS['cat-exportar'] = () => {
+    const cell = v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const csv = '﻿' + ['Marca;Código;Descripción;Precio USD', ...S.db.catalogo.map(p => [p.marca, p.codigo, p.descripcion, p.precio].map(cell).join(';'))].join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `lista_precios_${hoy()}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('Lista exportada (CSV reimportable). Es información confidencial.');
+  };
+  CHANGES['catf'] = el => { S.catF[el.name] = el.value; render(true); };
+  let tCat = null;
+  INPUTS['catf'] = el => { S.catF[el.name] = el.value; clearTimeout(tCat); tCat = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="catf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
 
   /* ---------- Arranque ---------- */
   let tResize = null;
