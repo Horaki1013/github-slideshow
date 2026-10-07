@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia:** los cambios viven en memoria durante la sesión. No se usa `localStorage` ni otro almacenamiento. El botón **Restablecer datos de demo** (menú de usuario) regenera todo.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 7/7 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 9/9 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -24,9 +24,9 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 
 | Rol | Pantallas | Puede editar |
 |---|---|---|
-| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo |
-| Jefatura | Dashboard, Oportunidades (todas), Ficha, Proyección, Facturado, Notificaciones | Reasignar oportunidad o cliente |
-| Finanzas | Proyección de facturación y cobranza, Facturado | Nada |
+| Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mis cuentas, Agenda de contactos, Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo; puede registrar cuentas nuevas (quedan asignadas a él) y contactos de sus cuentas |
+| Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Proyección, Facturado, Notificaciones | Crear cuentas, asignar o reasignar cuentas y oportunidades, editar contactos |
+| Finanzas | Proyección de facturación y cobranza, Facturado, Agenda de contactos | Nada |
 
 Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario entra por URL a una ruta o a una oportunidad que no le corresponde, el sistema lo redirige o le muestra "Sin acceso".
 
@@ -66,17 +66,44 @@ En el Dashboard (toda la empresa o por vendedor) y en "Mi proyección" de cada v
 
 Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fúnel.
 
+## Cuentas, estado automático y agenda de contactos
+
+- **Cuentas** (vendedor: "Mis cuentas"; jefatura: todas). Muestra el estado, la última cotización, el último contacto, las oportunidades abiertas y los contactos de cada cuenta.
+  - **Jefatura asigna** cada cuenta a un vendedor desde la tabla o desde la ficha de la cuenta. Hay cuentas "Sin asignar" para repartir. Reasignar mueve también las oportunidades abiertas y en pausa.
+  - **El vendedor registra cuentas nuevas** que consigue por su cuenta; quedan asignadas a él. Jefatura también puede crearlas y asignarlas o dejarlas sin asignar. Se valida el RUC (11 dígitos y que no exista ya).
+- **Estado de la cuenta** (`Rules.cuentas`), recalculado automáticamente cada día:
+
+| Estado | Regla |
+|---|---|
+| Activo | Cotizada en los últimos 60 días, o respondió a un contacto en ese período |
+| No responde | Más de 60 días sin cotizar; hubo intentos de contacto y ninguno tuvo respuesta |
+| Sin contacto | Más de 60 días sin cotizar y sin intentos de contacto en ese período |
+
+  - Los contactos que cuentan son los seguimientos de sus oportunidades y las **gestiones de cuenta** (contactos sin cotización). Ambos registran si el cliente **respondió o no**.
+  - Una cuenta que nunca se cotizó cuenta los días desde su fecha de alta.
+  - El umbral está en `Config.CUENTA_INACTIVA_DIAS` (60).
+- **Alerta de cuenta sin cotizar:** cuando el estado es "No responde" o "Sin contacto", la alerta llega **al vendedor asignado y a jefatura**. Aparece en la campana, en Mi día ("Cuentas sin cotizar (2+ meses)"), en el correo diario del vendedor y en el resumen semanal de jefatura. Desde la alerta se puede **registrar una gestión** o **cotizar** con el cliente ya elegido.
+- **Agenda de contactos común:** todos consultan los contactos de todas las cuentas, con búsqueda y accesos a WhatsApp, llamada y correo.
+  - Registrar contactos es **opcional**. Solo el nombre es obligatorio; cargo, correo y teléfono son opcionales.
+  - Los agrega o edita el vendedor de la cuenta o jefatura. Finanzas solo consulta.
+- **Dashboard:** la tarjeta "Cartera de cuentas" muestra, por vendedor, cuentas activas, que no responden, sin contacto y sin asignar.
+
+## Descuentos
+
+El descuento de una cotización puede ingresarse **en porcentaje o en monto**. En porcentaje se aplica sobre la suma (`descuentoTipo`, `descuentoPct`), y la ficha y el PDF muestran "Descuento (x%)".
+
 ## Modelo de datos
 
 | Entidad | Campos |
 |---|---|
 | **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura o finanzas) |
-| **Cliente** | `id`, `razonSocial`, `ruc` (11 dígitos), `vendedorId`, `ciudad`, `tipo`, `contactos[]` (nombre, correo, teléfono). El **segmento** T1, T2 o CO se calcula (`Rules.segmento`) |
+| **Cliente** | `id`, `razonSocial`, `ruc` (11 dígitos), `vendedorId`, `ciudad`, `tipo`, `fechaAlta`, `registradoPor`, `contactos[]` (id, nombre, cargo, correo, teléfono; todo opcional salvo el nombre). El **segmento** (T1, T2 o CO) y el **estado** (activo, no responde o sin contacto) se calculan (`Rules.segmento`, `Rules.cuentas`). `vendedorId` puede ser nulo (sin asignar) |
 | **Proyecto** | `id`, `nombre`, `usuarioFinal`, `tipo` (estatal, privado o directa). `PR-DIRECTA` = "Compra directa (sin proyecto)". Un proyecto puede tener oportunidades de varios integradores |
 | **Oportunidad** | `id`, `clienteId`, `proyectoId`, `vendedorId`, `etapa` (la probabilidad se deriva), `fechaInicio`, `fechaOC` (estimada, la define el vendedor), `proxContacto`, `motivoPerdida`, `motivoOtro`, `fechaReactivacion`, `fechaCierre`, `postventa`, `origen` (correo, pdf o manual), `pendiente` (leída del correo y aún sin completar) |
-| **Cotización** | `id`, `oppId`, `numero` (texto libre, como figura en el PDF), `revision` (R0, R1… o ALT), `tipo` (original, revision o alternativa), `fechaEmision`, `moneda` (USD o PEN), `tc` (tipo de cambio del día si es PEN), `condicionPago`, `validezDias`, `plazo`, `items[]`, `descuento`, `vigente`, `contacto`. La suma, el neto sin IGV, el IGV 18 % y el total se **calculan** (`Rules.totales`). Una oportunidad tiene una o más cotizaciones y solo una vigente |
+| **Cotización** | `id`, `oppId`, `numero` (texto libre, como figura en el PDF), `revision` (R0, R1… o ALT), `tipo` (original, revision o alternativa), `fechaEmision`, `moneda` (USD o PEN), `tc` (tipo de cambio del día si es PEN), `condicionPago`, `validezDias`, `plazo`, `items[]`, `descuentoTipo` (pct o monto), `descuentoPct`, `descuento` (monto resultante), `vigente`, `contacto`. La suma, el neto sin IGV, el IGV 18 % y el total se **calculan** (`Rules.totales`). Una oportunidad tiene una o más cotizaciones y solo una vigente |
 | **Ítem** | `cant`, `unidad`, `codigo`, `marca`, `descripcion`, `valorUnit` (en la moneda de la cotización). El total se calcula |
-| **Seguimiento** | `id`, `oppId`, `fecha`, `canal` (WhatsApp, Llamada, Correo, Visita, Reunión o "Sistema" para registros automáticos), `nota`, `proxContacto`, `usuarioId`, `auto` |
+| **Seguimiento** | `id`, `oppId`, `fecha`, `canal` (WhatsApp, Llamada, Correo, Visita, Reunión o "Sistema" para registros automáticos), `nota`, `resultado` (respondió o sin respuesta), `proxContacto`, `usuarioId`, `auto` |
+| **Gestión de cuenta** | `id`, `clienteId`, `fecha`, `canal`, `resultado` (respondió o sin respuesta), `nota`, `usuarioId`. Es un contacto con la cuenta sin oportunidad de por medio |
 | **Post-venta** (en la oportunidad) | `oc`, `pedido`, `transito`, `recibido`, `entregado`, `facturado`, `facturaMonto` (USD sin IGV), `cobrado`, `adelantoCobrado` |
 | **Tipo de cambio** | `fx[fecha]`: valor diario ficticio alrededor de 3.75 |
 | **Histórico** | `historico[]`: facturación de los meses 7 a 12 hacia atrás, por cliente. Solo se usa para calcular el segmento |
@@ -183,6 +210,10 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - Reasignar un cliente mueve también sus oportunidades abiertas y en pausa.
 - Una sola factura por oportunidad.
 - Proyecto obligatorio, con la opción "Compra directa".
+- Descuento en porcentaje o en monto.
+- Jefatura asigna cuentas; los vendedores registran cuentas nuevas, que quedan asignadas a ellos.
+- Estado de la cuenta automático con umbral de 60 días. Alerta al vendedor y a jefatura cuando el estado es "No responde" o "Sin contacto".
+- Agenda de contactos común y opcional.
 - **Excepción en la data de demo:** hay una oferta de unos 236K USD para mostrar la etapa "Oferta grande sin feedback". El resto de montos va de 200 a 120,000 USD.
 
 ## Notas técnicas

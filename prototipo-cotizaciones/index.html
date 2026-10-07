@@ -421,6 +421,17 @@ const Config = {
   SEGMENTO_T2_USD: 10000,
   OFERTA_GRANDE_USD: 200000,
   TC_REFERENCIA: 3.75,
+  CUENTA_INACTIVA_DIAS: 60,           // ~2 meses sin cotizar → alerta al vendedor y a jefatura
+
+  // Estado de la cuenta (se calcula; ver Rules.cuentas)
+  ESTADOS_CUENTA: {
+    activo:       { nombre: 'Activo',       cls: 'ok',   regla: 'Cotizada en los últimos 60 días, o respondió a un contacto en ese período.' },
+    no_responde:  { nombre: 'No responde',  cls: 'warn', regla: 'Más de 60 días sin cotizar; hubo intentos de contacto y ninguno tuvo respuesta.' },
+    sin_contacto: { nombre: 'Sin contacto', cls: 'bad',  regla: 'Más de 60 días sin cotizar y sin intentos de contacto en ese período.' },
+  },
+  RESULTADOS_CONTACTO: [['respondio', 'Respondió'], ['sin_respuesta', 'No respondió']],
+  TIPOS_CUENTA: ['Integrador', 'Cliente final', 'Distribuidor'],
+  CIUDADES: ['Lima', 'Arequipa', 'Trujillo', 'Piura', 'Chiclayo', 'Cusco', 'Huancayo', 'Ica', 'Moquegua', 'Tacna', 'Cajamarca', 'Iquitos'],
 
   // Escala de CRITERIOS (sin cambios). El vendedor elige la etapa; la probabilidad se deriva.
   ETAPAS: [
@@ -715,7 +726,7 @@ const DemoData = (() => {
     };
 
     const db = { _v: 1, users: [], clients: [], projects: [], opps: [], quotes: [], followups: [], historico: [], fx: {},
-      seq: { opp: 1000, quote: 5000, fu: 1, client: 100, project: 100 } };
+      seq: { opp: 1000, quote: 5000, fu: 1, client: 100, project: 100, contacto: 1, gestion: 1 } };
 
     /* ---- Tipo de cambio diario ficticio (alrededor de 3.75) ---- */
     let tc = 3.75;
@@ -786,6 +797,15 @@ const DemoData = (() => {
       db.clients.push({ id: 'C-' + (++db.seq.client), razonSocial: razon, ruc: nuevoRuc(), vendedorId: asignacion[i],
         ciudad: R.w(CIUDADES), tipo: i % 8 === 7 ? 'Cliente final' : 'Integrador', contactos: contactos(dominio, R.int(1, 3)) });
     }
+    // Campos de cuenta y agenda (con un generador aparte para no alterar el resto de la demo)
+    const r2 = Util.rng(SEED + 7), pick2 = a => a[Math.floor(r2() * a.length)];
+    const CARGOS = ['Gerente de proyectos','Jefe de compras','Ingeniero de proyectos','Supervisor de mantenimiento','Gerente comercial',
+      'Especialista en automatización','Asistente de logística','Jefe de sistemas'];
+    db.clients.forEach(c => {
+      c.fechaAlta = addDays(hoy, -(200 + Math.floor(r2() * 900)));
+      c.registradoPor = 'u6';
+      c.contactos.forEach(k => { k.id = 'K-' + (db.seq.contacto++); k.cargo = r2() < 0.65 ? pick2(CARGOS) : ''; });
+    });
     const clientesDe = vid => db.clients.filter(c => c.vendedorId === vid);
     const elegirCliente = vid => { const cs = clientesDe(vid); return R.w(cs.map((c, i) => [c, i < 3 ? 4 : 1])); };
 
@@ -853,7 +873,7 @@ const DemoData = (() => {
       const suma = Util.sum(items, it => it.cant * it.valorUnit);
       const q = { id: 'Q-' + (++db.seq.quote), oppId: opp.id, numero: o.numero, revision: o.revision || 'R0', tipo: o.tipo || 'original',
         fechaEmision: fecha, moneda: o.moneda, tc: tcq, condicionPago: o.condicionPago, validezDias: o.validezDias, plazo: o.plazo,
-        items, descuento: o.descPct ? Util.round2(suma * o.descPct) : 0, vigente: false, contacto: o.contacto, origen: o.origen || 'correo' };
+        items, descuento: o.descPct ? Util.round2(suma * o.descPct) : 0, descuentoTipo: o.descPct ? 'pct' : 'monto', descuentoPct: o.descPct ? Math.round(o.descPct * 100) : 0, vigente: false, contacto: o.contacto, origen: o.origen || 'correo' };
       db.quotes.push(q);
       return q;
     }
@@ -867,7 +887,8 @@ const DemoData = (() => {
       resolvio:'El cliente reparó su equipo actual.', otro_integrador:'La buena pro la obtuvo otro integrador al que también cotizamos.', otro:'Se integró con equipos que el cliente ya tenía en almacén.' };
     const pickCanal = () => R.w([['WhatsApp',45],['Llamada',30],['Correo',15],['Visita',5],['Reunión',5]]);
     function addFu(opp, fecha, canal, nota, prox, auto) {
-      db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: opp.id, fecha, canal, nota, proxContacto: prox || null, usuarioId: auto ? 'sistema' : opp.vendedorId, auto: !!auto });
+      db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: opp.id, fecha, canal, nota, proxContacto: prox || null, usuarioId: auto ? 'sistema' : opp.vendedorId, auto: !!auto,
+        resultado: auto ? null : /sin respuesta/i.test(nota) ? 'sin_respuesta' : 'respondio' });
     }
 
     /* spec: { vid, cliente, proyectoId, inicio, monto, marca, etapa, fin, revisiones, alternativa, ... } */
@@ -1133,6 +1154,34 @@ const DemoData = (() => {
       }
     }
 
+    /* ---- 10) Cuentas nuevas: sin asignar (para que jefatura las asigne) y una registrada por un vendedor ---- */
+    [['Vértice Norte Automatización S.A.C.', null], ['Ribera Sur Ingeniería E.I.R.L.', null], ['Pampa Alta Conectividad S.R.L.', null], ['Laguna Azul Sistemas de Control S.A.C.', 'u5']]
+      .forEach(([razon, vid], i) => {
+        const dominio = slug(razon.split(' ').slice(0, 2).join('')) + '.demo.pe';
+        const c = { id: 'C-' + (++db.seq.client), razonSocial: razon, ruc: nuevoRuc(), vendedorId: vid, ciudad: pick2(['Lima', 'Arequipa', 'Trujillo']), tipo: 'Integrador',
+          contactos: contactos(dominio, 1), fechaAlta: prevBizDay(addDays(hoy, -(3 + i * 4))), registradoPor: vid || 'u6' };
+        c.contactos.forEach(k => { k.id = 'K-' + (db.seq.contacto++); k.cargo = pick2(CARGOS); });
+        db.clients.push(c);
+      });
+
+    /* ---- 11) Gestiones de cuenta (contactos sin cotización) para mostrar los estados de la cartera ---- */
+    db.gestiones = [];
+    const ultimaCot = {}, oppCli = {};
+    db.opps.forEach(o => { oppCli[o.id] = o.clienteId; });
+    db.quotes.forEach(q => { const c = oppCli[q.oppId]; if (!ultimaCot[c] || q.fechaEmision > ultimaCot[c]) ultimaCot[c] = q.fechaEmision; });
+    const limiteCta = addDays(hoy, -Config.CUENTA_INACTIVA_DIAS);
+    const NOTA_SR = ['Sin respuesta al WhatsApp.', 'No contesta las llamadas.', 'Correo sin respuesta.'];
+    const NOTA_OK = ['Sin proyectos por ahora; volver a llamar el próximo mes.', 'Pidió el catálogo actualizado.', 'Evalúan presupuesto para el próximo año.'];
+    db.clients.filter(c => c.vendedorId && (ultimaCot[c.id] || c.fechaAlta) < limiteCta).forEach((c, i) => {
+      const k = i % 4; // 0 y 1: no responde · 2: respondió (sigue activa) · 3: sin contacto
+      if (k === 3) return;
+      const n = k < 2 ? 1 + Math.floor(r2() * 2) : 1;
+      for (let j = 0; j < n; j++) {
+        db.gestiones.push({ id: 'G-' + (db.seq.gestion++), clienteId: c.id, fecha: prevBizDay(addDays(hoy, -(3 + Math.floor(r2() * 42)))), canal: pick2(['WhatsApp', 'Llamada', 'Correo']),
+          resultado: k < 2 ? 'sin_respuesta' : 'respondio', nota: k < 2 ? pick2(NOTA_SR) : pick2(NOTA_OK), usuarioId: c.vendedorId });
+      }
+    });
+
     db.opps.forEach(o => { delete o._ultimoNumero; });
     db.catalogo = CATALOGO; // lista de precios ficticia para cotizar en la plataforma
     return db;
@@ -1179,10 +1228,11 @@ const Rules = (() => {
   /** Totales de una cotización en su moneda: suma, descuento, neto sin IGV, IGV 18 % y total */
   function totales(q) {
     const suma = Util.round2(Util.sum(q.items, it => (+it.cant || 0) * (+it.valorUnit || 0)));
-    const descuento = Util.round2(+q.descuento || 0);
+    // descuento en monto o en porcentaje sobre la suma
+    const descuento = q.descuentoTipo === 'pct' ? Util.round2(suma * (+q.descuentoPct || 0) / 100) : Util.round2(+q.descuento || 0);
     const neto = Util.round2(suma - descuento);
     const igv = Util.round2(neto * Config.IGV);
-    return { suma, descuento, neto, igv, total: Util.round2(neto + igv) };
+    return { suma, descuento, neto, igv, total: Util.round2(neto + igv), descuentoPct: q.descuentoTipo === 'pct' ? (+q.descuentoPct || 0) : (suma ? Util.round2(descuento / suma * 100) : 0) };
   }
   /** PEN → USD con el tipo de cambio del día de emisión guardado en la cotización */
   const aUSD = (monto, q) => q.moneda === 'PEN' ? monto / (q.tc || Config.TC_REFERENCIA) : monto;
@@ -1345,6 +1395,61 @@ const Rules = (() => {
     return { seg: total > Config.SEGMENTO_T1_USD ? 'T1' : total >= Config.SEGMENTO_T2_USD ? 'T2' : 'CO', total };
   }
 
+  /* ---------- Cuentas: estado y alerta por falta de cotización ---------- */
+  /** Para cada cliente: última cotización, días sin cotizar, contactos (seguimientos de sus oportunidades + gestiones de cuenta),
+      estado (activo / no responde / sin contacto) y si corresponde alerta (más de 60 días sin cotizar y sin respuesta). */
+  function cuentas(db, hoy = Util.today()) {
+    const m = ix(db);
+    if (m.cta && m.ctaHoy === hoy) return m.cta;
+    const res = {}, lim = Util.addDays(hoy, -Config.CUENTA_INACTIVA_DIAS);
+    db.clients.forEach(c => { res[c.id] = { ultimaCot: null, contactos: [], abiertas: 0, opps: 0 }; });
+    db.opps.forEach(o => {
+      const r = res[o.clienteId];
+      if (!r) return;
+      r.opps++;
+      if (esAbierta(o)) r.abiertas++;
+      quotesOf(db, o).forEach(q => { if (q.fechaEmision <= hoy && (!r.ultimaCot || q.fechaEmision > r.ultimaCot)) r.ultimaCot = q.fechaEmision; });
+      followupsOf(db, o).forEach(f => { if (!f.auto && f.canal !== 'Sistema') r.contactos.push({ fecha: f.fecha, resultado: f.resultado || 'respondio', canal: f.canal, nota: f.nota, oppId: o.id, usuarioId: f.usuarioId }); });
+    });
+    (db.gestiones || []).forEach(g => { const r = res[g.clienteId]; if (r) r.contactos.push({ fecha: g.fecha, resultado: g.resultado, canal: g.canal, nota: g.nota, gestion: true, usuarioId: g.usuarioId }); });
+    db.clients.forEach(c => {
+      const r = res[c.id];
+      r.contactos.sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0);
+      r.ultimoContacto = r.contactos[0] || null;
+      r.diasSinCotizar = Util.diffDays(r.ultimaCot || c.fechaAlta || hoy, hoy);
+      const rec = r.contactos.filter(k => k.fecha >= lim && k.fecha <= hoy);
+      r.estado = r.diasSinCotizar < Config.CUENTA_INACTIVA_DIAS || rec.some(k => k.resultado === 'respondio') ? 'activo' : rec.length ? 'no_responde' : 'sin_contacto';
+      r.alerta = r.estado !== 'activo';
+    });
+    m.cta = res; m.ctaHoy = hoy;
+    return res;
+  }
+  const cuenta = (db, clienteId, hoy = Util.today()) => cuentas(db, hoy)[clienteId];
+  function alertaCuenta(db, c, hoy = Util.today()) {
+    const r = cuenta(db, c.id, hoy);
+    if (!r || !r.alerta) return null;
+    const est = Config.ESTADOS_CUENTA[r.estado];
+    return { tipo: 'cuenta_inactiva', nivel: r.estado === 'sin_contacto' ? 'bad' : 'warn', dias: r.diasSinCotizar, estado: r.estado,
+      texto: `${r.ultimaCot ? 'Sin cotizar hace' : 'Sin cotizaciones desde su alta hace'} ${r.diasSinCotizar} días · ${est.nombre}` };
+  }
+  function validarCliente(db, d) {
+    const e = {};
+    if (!String(d.razonSocial || '').trim()) e.razonSocial = 'La razón social es obligatoria.';
+    if (!/^\d{11}$/.test(String(d.ruc || '').trim())) e.ruc = 'El RUC debe tener 11 dígitos.';
+    else {
+      const ex = db.clients.find(c => c.ruc === String(d.ruc).trim());
+      if (ex) e.ruc = `Ya existe una cuenta con ese RUC: ${ex.razonSocial}${ex.vendedorId ? ' (asignada a ' + ix(db).user[ex.vendedorId].nombre + ')' : ' (sin asignar)'}.`;
+    }
+    if (d.contacto && (d.contacto.correo || d.contacto.telefono || d.contacto.cargo) && !String(d.contacto.nombre || '').trim()) e.contactoNombre = 'Indica el nombre del contacto.';
+    return e;
+  }
+  function validarContacto(k) {
+    const e = {};
+    if (!String(k.nombre || '').trim()) e.nombre = 'El nombre es obligatorio.';
+    if (k.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(k.correo).trim())) e.correo = 'Correo no válido.';
+    return e;
+  }
+
   /* ---------- Alertas de seguimiento ---------- */
   function alertasOpp(db, opp, hoy = Util.today()) {
     const out = [];
@@ -1382,7 +1487,13 @@ const Rules = (() => {
         out.push({ opp: o, alerta: a });
       });
     });
-    const orden = { sin_proximo: 0, atrasado: 1, primer_seguimiento: 2, hoy: 3, por_vencer: 4, oc_vencida: 5, reactivar: 6 };
+    // Cuentas sin cotizar (~2 meses): llegan al vendedor asignado y a jefatura
+    db.clients.forEach(c => {
+      if (user.rol === 'vendedor' && c.vendedorId !== user.id) return;
+      const a = alertaCuenta(db, c, hoy);
+      if (a) out.push({ cliente: c, alerta: a });
+    });
+    const orden = { sin_proximo: 0, atrasado: 1, primer_seguimiento: 2, hoy: 3, por_vencer: 4, oc_vencida: 5, reactivar: 6, cuenta_inactiva: 7 };
     return out.sort((a, b) => orden[a.alerta.tipo] - orden[b.alerta.tipo] || (b.alerta.dias || 0) - (a.alerta.dias || 0));
   }
   function saludSeguimiento(db, { vendedorId = null, hoy = Util.today() } = {}) {
@@ -1430,6 +1541,8 @@ const Rules = (() => {
     if (!p.condicionPago) e.condicionPago = 'Obligatorio.';
     if (!p.plazo) e.plazo = 'Obligatorio.';
     if (!(+p.validezDias > 0)) e.validezDias = 'Obligatorio.';
+    if (p.descuentoTipo === 'pct' && !(+p.descuentoPct >= 0 && +p.descuentoPct < 100)) e.descuento = 'El descuento debe estar entre 0 % y 99 %.';
+    if (p.descuentoTipo !== 'pct' && +p.descuento < 0) e.descuento = 'El descuento no puede ser negativo.';
     if (p.modo !== 'revision' && p.modo !== 'alternativa') {
       if (!p.proyectoId && !p.proyectoNuevo) e.proyecto = 'Indica el proyecto o "Compra directa".';
       if (p.proyectoNuevo && (!String(p.proyectoNuevo.nombre || '').trim() || !String(p.proyectoNuevo.usuarioFinal || '').trim())) e.proyecto = 'El proyecto nuevo necesita nombre y usuario final.';
@@ -1463,9 +1576,9 @@ const Rules = (() => {
 
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
-    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'proyeccion', 'facturado', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado'],
+    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'proyeccion', 'ranking', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'proyeccion', 'facturado', 'notificaciones'],
+    finanzas: ['proyeccion', 'facturado', 'contactos'],
   };
   const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion' };
   function puede(user, accion, opp) {
@@ -1476,6 +1589,12 @@ const Rules = (() => {
       case 'reasignar': return user.rol === 'jefatura';
       case 'crear_cotizacion': return user.rol === 'vendedor';
       case 'ver_todo': return user.rol === 'jefatura' || user.rol === 'finanzas';
+      // Cuentas (opp = cliente en estos casos)
+      case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      case 'editar_contactos': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
+      case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
+      case 'asignar_cuenta': return user.rol === 'jefatura';
       default: return false;
     }
   }
@@ -1485,7 +1604,7 @@ const Rules = (() => {
   return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, aUSD, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, saludSeguimiento, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles };
 })();
 
@@ -1517,13 +1636,13 @@ const Repo = (() => {
       return u;
     },
     /** POST /oportunidades/:id/seguimientos */
-    async registrarContacto(oppId, { canal, nota, proxContacto, usuarioId }) {
+    async registrarContacto(oppId, { canal, nota, proxContacto, usuarioId, resultado }) {
       const o = opp(oppId);
       if (!Rules.esAbierta(o)) fail('Solo se registran contactos en oportunidades abiertas.');
       if (!proxContacto) fail('Define el próximo contacto.', { proxContacto: 'Obligatorio' });
       if (proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.', { proxContacto: 'Fecha pasada' });
       const prev = o.proxContacto;
-      const fu = { id: 'S-' + (db.seq.fu++), oppId, fecha: hoy(), canal: canal || 'WhatsApp', nota: nota || '', proxContacto, usuarioId, auto: false };
+      const fu = { id: 'S-' + (db.seq.fu++), oppId, fecha: hoy(), canal: canal || 'WhatsApp', nota: nota || '', proxContacto, usuarioId, auto: false, resultado: resultado || 'respondio' };
       db.followups.push(fu);
       o.proxContacto = proxContacto;
       o.pendiente = false;
@@ -1597,6 +1716,36 @@ const Repo = (() => {
       guardar(o);
       return o;
     },
+    /** POST /clientes — nueva cuenta (vendedor: queda asignada a él; jefatura: elige a quién o la deja sin asignar) */
+    async crearCliente(d, usuarioId) {
+      const errs = Rules.validarCliente(db, d);
+      if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
+      const c = { id: 'C-' + (++db.seq.client), razonSocial: d.razonSocial.trim(), ruc: String(d.ruc).trim(), vendedorId: d.vendedorId || null, ciudad: d.ciudad || 'Lima',
+        tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
+      if (d.contacto && String(d.contacto.nombre || '').trim()) {
+        c.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: d.contacto.nombre.trim(), cargo: (d.contacto.cargo || '').trim(), correo: (d.contacto.correo || '').trim(), telefono: (d.contacto.telefono || '').trim() });
+      }
+      db.clients.push(c);
+      touch();
+      return c;
+    },
+    /** POST/PATCH /clientes/:id/contactos — agenda común de contactos */
+    async guardarContacto(clienteId, k) {
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
+      const errs = Rules.validarContacto(k);
+      if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
+      const data = { nombre: k.nombre.trim(), cargo: (k.cargo || '').trim(), correo: (k.correo || '').trim(), telefono: (k.telefono || '').trim() };
+      if (k.id) Object.assign(c.contactos.find(x => x.id === k.id) || fail('Contacto no encontrado.'), data);
+      else c.contactos.push(Object.assign({ id: 'K-' + (db.seq.contacto++) }, data));
+      touch();
+    },
+    /** POST /clientes/:id/gestiones — contacto con la cuenta sin oportunidad (cuenta sin cotizar) */
+    async registrarGestionCuenta(clienteId, g, usuarioId) {
+      if (!db.clients.some(x => x.id === clienteId)) fail('Cuenta no encontrada.');
+      if (!g.resultado) fail('Indica si el cliente respondió.', { resultado: 'Obligatorio' });
+      db.gestiones.push({ id: 'G-' + (db.seq.gestion++), clienteId, fecha: hoy(), canal: g.canal || 'WhatsApp', resultado: g.resultado, nota: (g.nota || '').trim(), usuarioId });
+      touch();
+    },
     /** PATCH /cotizaciones/:id/vigente */
     /** GET /catalogo — lista de precios para cotizar en la plataforma */
     async catalogo() { return db.catalogo || []; },
@@ -1649,15 +1798,17 @@ const Repo = (() => {
         if (ex) clienteId = ex.id;
         else {
           const c = { id: 'C-' + (++db.seq.client), razonSocial: p.clienteNuevo.razonSocial.trim(), ruc: p.clienteNuevo.ruc, vendedorId: p.vendedorId, ciudad: 'Lima', tipo: 'Integrador',
-            contactos: p.contacto ? [{ nombre: p.contacto, correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' }] : [] };
+            contactos: p.contacto ? [{ id: 'K-' + (db.seq.contacto++), nombre: p.contacto, cargo: '', correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' }] : [],
+            fechaAlta: hoy(), registradoPor: usuarioId };
           db.clients.push(c); clienteId = c.id;
         }
       }
       const items = p.items.filter(it => String(it.codigo || '').trim()).map(it => ({ cant: +it.cant, unidad: it.unidad || 'Und', codigo: it.codigo.trim(), marca: it.marca,
         descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit) }));
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
-        tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuento: Util.round2(+p.descuento || 0),
+        tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
         vigente: true, contacto: p.contacto || '', origen: p.origen };
+      q.descuento = Rules.totales(q).descuento;
       let o;
       if ((p.modo === 'revision' || p.modo === 'alternativa') && p.oppDestinoId) {
         o = opp(p.oppDestinoId);
@@ -1749,6 +1900,24 @@ const SelfTest = (() => {
       const a = Rules.avanceMeta(db, 't1', '2026-10-06');
       return a.facturado === 30000 && a.avance === 0.75 && a.falta === 10000;
     }],
+    ['Descuento en porcentaje o en monto', () => {
+      const t1 = Rules.totales({ items: [item(10, 1000)], descuentoTipo: 'pct', descuentoPct: 5 });
+      const t2 = Rules.totales({ items: [item(10, 1000)], descuentoTipo: 'monto', descuento: 500 });
+      return t1.descuento === 500 && t1.neto === 9500 && t1.igv === 1710 && t2.neto === 9500 && t2.descuentoPct === 5;
+    }],
+    ['Estado de cuenta tras 60 días sin cotizar (activo / no responde / sin contacto)', () => {
+      const hoy = '2026-10-06', db = miniDb();
+      db.clients = [{ id: 'c1', ruc: '1', fechaAlta: '2025-01-01', contactos: [] }, { id: 'c2', ruc: '2', fechaAlta: '2025-01-01', contactos: [] },
+        { id: 'c3', ruc: '3', fechaAlta: '2025-01-01', contactos: [] }, { id: 'c4', ruc: '4', fechaAlta: '2025-01-01', contactos: [] }];
+      addOpp(db, { clienteId: 'c1', etapa: 'e3' }, { fechaEmision: '2026-09-20' });          // cotizado hace 16 días
+      addOpp(db, { clienteId: 'c2', etapa: 'perdida' }, { fechaEmision: '2026-06-01' });     // 127 días, sin contacto
+      addOpp(db, { clienteId: 'c3', etapa: 'perdida' }, { fechaEmision: '2026-06-01' });     // 127 días, no responde
+      db.gestiones = [{ clienteId: 'c3', fecha: '2026-09-25', resultado: 'sin_respuesta' }, { clienteId: 'c4', fecha: '2026-09-25', resultado: 'respondio' }];
+      db._v++;
+      const r = Rules.cuentas(db, hoy);
+      return r.c1.estado === 'activo' && r.c2.estado === 'sin_contacto' && r.c3.estado === 'no_responde' && r.c4.estado === 'activo' &&
+        r.c2.alerta && r.c3.alerta && !r.c4.alerta && r.c2.diasSinCotizar === 127;
+    }],
     ['Días hábiles respetan feriados de Perú (28 y 29 de julio)', () =>
       Util.addBizDays('2026-07-27', 3) === '2026-08-03' && Util.bizDaysBetween('2026-07-24', '2026-07-30') === 2],
     ['No se cierra como Perdida sin motivo ni queda abierta sin próximo contacto', () => {
@@ -1787,6 +1956,7 @@ const UI = (() => {
     proy: { tipo: 'facturacion', vendedor: '', condicion: '' },
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
+    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' },
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -1822,6 +1992,8 @@ const UI = (() => {
     back: '<path d="M15 18l-6-6 6-6"/>',
     alert: '<path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
     file: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
+    users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5z"/><path d="M4 19.5V21h16M9 7h7M9 11h5"/>',
     receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     play: '<path d="M6 4l14 8-14 8z"/>',
     swap: '<path d="M17 3l4 4-4 4M21 7H9M7 21l-4-4 4-4M3 17h12"/>',
@@ -1856,12 +2028,12 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['notificaciones', 'Notificaciones', 'bell']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['notificaciones', 'Notificaciones', 'bell']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['contactos', 'Agenda de contactos', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'proyeccion', 'ranking'], jefatura: ['dashboard', 'oportunidades', 'proyeccion', 'facturado', 'notificaciones'], finanzas: ['proyeccion', 'facturado'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos' };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'contactos'] };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -1903,9 +2075,9 @@ const UI = (() => {
   function renderChrome(ruta) {
     const u = S.user;
     const items = NAV[u.rol];
-    $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
+    $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
       `<div class="nav-sep"></div><div class="nav-foot">Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.</div>`;
-    $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
+    $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
     bell.classList.toggle('hidden', u.rol === 'finanzas');
@@ -1933,13 +2105,17 @@ const UI = (() => {
   function closePopover() { $('#popover-root').innerHTML = ''; S.popover = null; }
   ACTIONS['toggle-bell'] = () => {
     if (S.popover === 'bell') return closePopover();
-    const al = Rules.alertasUsuario(S.db, S.user, hoy());
-    const titulo = S.user.rol === 'jefatura' ? 'Escalados a jefatura' : 'Tus alertas';
+    const al = Rules.alertasUsuario(S.db, S.user, hoy()), jef = S.user.rol === 'jefatura';
+    const titulo = jef ? 'Escalados y cuentas sin cotizar' : 'Tus alertas';
+    const item = x => x.opp ? `<a class="pop-item" href="#/op/${x.opp.id}" style="text-decoration:none;color:inherit">
+        <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(cli(x.opp.clienteId).razonSocial)}</strong>${jef ? vendTag(usr(x.opp.vendedorId)) : ''}</div>
+        <div class="small muted">${E(projName(proj(x.opp.proyectoId)))}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
+      : `<a class="pop-item" href="#/cuenta/${x.cliente.id}" style="text-decoration:none;color:inherit">
+        <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(x.cliente.razonSocial)}</strong>${jef && x.cliente.vendedorId ? vendTag(usr(x.cliente.vendedorId)) : ''}</div>
+        <div class="small muted">Cuenta</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`;
     $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="${titulo}"><header><h3>${titulo} (${al.length})</h3><span class="sim-label">Simulación</span></header>
-      <div class="pop-body">${al.length ? al.slice(0, 15).map(({ opp, alerta }) => `<a class="pop-item" href="#/op/${opp.id}" style="text-decoration:none;color:inherit">
-        <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(cli(opp.clienteId).razonSocial)}</strong>${S.user.rol === 'jefatura' ? vendTag(usr(opp.vendedorId)) : ''}</div>
-        <div class="small muted">${E(projName(proj(opp.proyectoId)))}</div><div style="margin-top:4px">${alertChip(alerta)}</div></a>`).join('') : '<div class="list-empty">Sin alertas pendientes.</div>'}</div>
-      <footer><a class="btn sm" href="#/notificaciones">${I('mail')} Ver correo de resumen y eventos de Outlook</a></footer></div>`;
+      <div class="pop-body">${al.length ? al.slice(0, 20).map(item).join('') : '<div class="list-empty">Sin alertas pendientes.</div>'}</div>
+      <footer><a class="btn sm" href="#/notificaciones">${I('mail')} Ver todas, correo de resumen y eventos de Outlook</a></footer></div>`;
     S.popover = 'bell';
   };
   ACTIONS['toggle-user'] = () => {
@@ -1959,7 +2135,7 @@ const UI = (() => {
     await Repo.reset();
     S.db = await Repo.snapshot();
     S.user = S.db.users.find(u => u.id === id) || null;
-    S.nueva = null; S.filtros = filtrosIniciales();
+    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' };
     toast('Datos de demo restablecidos.');
     render();
   };
@@ -2123,6 +2299,7 @@ const UI = (() => {
   ACTIONS['completar'] = el => abrirCompletar(el.dataset.id);
   ACTIONS['reactivar'] = el => abrirCambioEtapa(el.dataset.id, null);
 
+  const resultadoChips = sel => `<div class="radio-chips" role="radiogroup" aria-label="Resultado">${Config.RESULTADOS_CONTACTO.map(([v, l]) => `<label><input type="radio" name="resultado" value="${v}"${v === sel ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>`;
   const canalesHTML = (sel) => `<div class="radio-chips" role="radiogroup" aria-label="Canal">${Config.CANALES.map(c => `<label><input type="radio" name="canal" value="${c}"${c === sel ? ' checked' : ''}><span>${c}</span></label>`).join('')}</div>`;
   const proxChips = () => fechaRapida('prox', [['Mañana', Util.addBizDays(hoy(), 1)], ['+3 días', Util.addBizDays(hoy(), 3)], ['+1 semana', Util.nextBizDay(Util.addDays(hoy(), 7))], ['+2 semanas', Util.nextBizDay(Util.addDays(hoy(), 14))]]);
 
@@ -2135,12 +2312,13 @@ const UI = (() => {
       body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · ${E(projName(proj(o.proyectoId)))}</p>
         <div class="stack">
           <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Canal</div>${canalesHTML(last ? last.canal : 'WhatsApp')}</div>
+          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">¿Respondió?</div>${resultadoChips('respondio')}</div>
           <label class="field">Nota (opcional)<textarea name="nota" placeholder="Ej.: pide mejorar precio; revisa con el usuario final"></textarea></label>
           <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="prox" min="${hoy()}" value="${Util.addBizDays(hoy(), 3)}"></label>
           ${proxChips()}
         </div>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        await Repo.registrarContacto(id, { canal: val(root, 'canal'), nota: val(root, 'nota').trim(), proxContacto: val(root, 'prox'), usuarioId: S.user.id });
+        await Repo.registrarContacto(id, { canal: val(root, 'canal'), resultado: val(root, 'resultado'), nota: val(root, 'nota').trim(), proxContacto: val(root, 'prox'), usuarioId: S.user.id });
         toast('Contacto registrado.'); refresh();
       } }],
       onOpen: bindFechaRapida,
@@ -2292,7 +2470,7 @@ const UI = (() => {
       </tbody></table>
       <table class="h-tot"><tbody>
         <tr><td>Suma</td><td class="r">${n2(t.suma)}</td></tr>
-        ${t.descuento ? `<tr><td>Descuento**</td><td class="r">− ${n2(t.descuento)}</td></tr><tr><td>Sub Total Descontado</td><td class="r">${n2(t.neto)}</td></tr>` : ''}
+        ${t.descuento ? `<tr><td>Descuento${q.descuentoTipo === 'pct' ? ' (' + (+q.descuentoPct || 0) + '%)' : ''}**</td><td class="r">− ${n2(t.descuento)}</td></tr><tr><td>Sub Total Descontado</td><td class="r">${n2(t.neto)}</td></tr>` : ''}
         <tr><td>IGV 18%</td><td class="r">${n2(t.igv)}</td></tr>
         <tr class="g"><td>Total de la Cotización</td><td class="r">${cur} ${n2(t.total)}</td></tr>
       </tbody></table>
@@ -2344,6 +2522,91 @@ const UI = (() => {
   }
   const funnelToggle = () => `<div class="seg-toggle" role="group" aria-label="Ancho del fúnel según"><button class="${S.funnelMedida !== 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="cantidad">Cantidad</button><button class="${S.funnelMedida === 'monto' ? 'active' : ''}" data-action="funnel-medida" data-v="monto">Monto</button></div>`;
   ACTIONS['funnel-medida'] = el => { S.funnelMedida = el.dataset.v; render(true); };
+
+  /* ---------- Cuentas: componentes y modales ---------- */
+  const contactoLinks = k => (k.telefono ? `<a class="btn sm" href="https://wa.me/${k.telefono.replace(/\D/g, '')}" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp">${I('msg')}</a><a class="btn sm" href="tel:${k.telefono.replace(/\s/g, '')}" title="Llamar" aria-label="Llamar">${I('phone')}</a>` : '') +
+    (k.correo ? `<a class="btn sm" href="mailto:${E(k.correo)}" title="Correo" aria-label="Correo">${I('mail')}</a>` : '');
+  const estadoChip = est => { const e = Config.ESTADOS_CUENTA[est]; return `<span class="chip ${e.cls}" title="${E(e.regla)}">${e.nombre}</span>`; };
+  const resultadoTxt = r => r === 'sin_respuesta' ? 'no respondió' : 'respondió';
+  function cuentaItem(c, alerta, acciones = true) {
+    const r = Rules.cuenta(S.db, c.id, hoy());
+    return `<div class="op-item"><a class="op-main" href="#/cuenta/${c.id}"><div class="op-title">${E(c.razonSocial)} ${segHTML(c.id)}</div>
+      <div class="op-sub">Última cotización: ${r.ultimaCot ? Util.fmtDate(r.ultimaCot) : 'ninguna (alta ' + Util.fmtDate(c.fechaAlta) + ')'} · Último contacto: ${r.ultimoContacto ? Util.fmtDate(r.ultimoContacto.fecha) + ' (' + resultadoTxt(r.ultimoContacto.resultado) + ')' : 'ninguno'}</div>
+      <div class="op-meta">${estadoChip(r.estado)}${alerta ? alertChip(alerta) : ''}</div></a>
+      ${acciones && Rules.puede(S.user, 'gestionar_cuenta', c) ? `<div class="op-actions"><button class="btn sm" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn sm" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Cotizar</button></div>` : ''}</div>`;
+  }
+  function abrirGestionCuenta(clienteId) {
+    const c = cli(clienteId);
+    if (!Rules.puede(S.user, 'gestionar_cuenta', c)) { toast('Solo el vendedor asignado registra gestiones de la cuenta.'); return; }
+    modal({
+      title: 'Registrar gestión de la cuenta',
+      body: `<p class="muted" style="margin-top:0">${E(c.razonSocial)} · contacto sin cotización (actualiza el estado de la cuenta)</p>
+        <div class="stack">
+          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Canal</div>${canalesHTML('WhatsApp')}</div>
+          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">¿Respondió? <span class="req">*</span></div>${resultadoChips('')}<input type="hidden" name="resultadoErr"></div>
+          <label class="field">Nota (opcional)<textarea name="nota" placeholder="Ej.: sin proyectos por ahora; volver a llamar el próximo mes"></textarea></label>
+        </div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        await Repo.registrarGestionCuenta(clienteId, { canal: val(root, 'canal'), resultado: val(root, 'resultado'), nota: val(root, 'nota') }, S.user.id);
+        toast(`Gestión registrada. Estado de la cuenta: ${Config.ESTADOS_CUENTA[Rules.cuenta(S.db, clienteId, hoy()).estado].nombre}.`); refresh();
+      } }],
+    });
+  }
+  function abrirEditarContacto(clienteId, contactoId) {
+    const editables = S.db.clients.filter(c => Rules.puede(S.user, 'editar_contactos', c)).sort((a, b) => a.razonSocial.localeCompare(b.razonSocial));
+    const c = clienteId ? cli(clienteId) : null;
+    if (c && !Rules.puede(S.user, 'editar_contactos', c)) { toast('Solo el vendedor asignado o jefatura pueden editar estos contactos.'); return; }
+    const k = c && contactoId ? c.contactos.find(x => x.id === contactoId) : {};
+    modal({
+      title: contactoId ? 'Editar contacto' : 'Agregar contacto',
+      body: `<div class="stack">
+        ${c ? `<p class="muted" style="margin:0">${E(c.razonSocial)}</p>` : `<label class="field"><span>Empresa <span class="req">*</span></span><select name="clienteId">${options(editables.map(x => [x.id, x.razonSocial]), '', 'Selecciona…')}</select></label>`}
+        <label class="field"><span>Nombre <span class="req">*</span></span><input type="text" name="nombre" value="${E(k.nombre || '')}"></label>
+        <label class="field">Cargo (opcional)<input type="text" name="cargo" value="${E(k.cargo || '')}" placeholder="Ej.: Jefe de compras"></label>
+        <div class="form-grid"><label class="field">Correo (opcional)<input type="email" name="correo" value="${E(k.correo || '')}"></label>
+        <label class="field">Teléfono (opcional)<input type="text" name="telefono" value="${E(k.telefono || '')}" placeholder="+51 9xx xxx xxx"></label></div>
+        <p class="small muted" style="margin:0">La agenda es común: el contacto queda visible para todo el equipo.</p></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        const cid = clienteId || val(root, 'clienteId');
+        if (!cid) { const e = new Error('Selecciona la empresa.'); e.campos = { clienteId: 'Obligatorio' }; throw e; }
+        await Repo.guardarContacto(cid, { id: contactoId || null, nombre: val(root, 'nombre'), cargo: val(root, 'cargo'), correo: val(root, 'correo'), telefono: val(root, 'telefono') });
+        toast(contactoId ? 'Contacto actualizado.' : 'Contacto agregado a la agenda.'); refresh();
+      } }],
+    });
+  }
+  function abrirNuevaCuenta() {
+    const jef = S.user.rol === 'jefatura';
+    modal({
+      title: 'Nueva cuenta',
+      wide: true,
+      body: `<div class="stack">
+        <div class="form-grid">
+          <label class="field"><span>Razón social <span class="req">*</span></span><input type="text" name="razonSocial"></label>
+          <label class="field"><span>RUC (11 dígitos) <span class="req">*</span></span><input type="text" name="ruc" inputmode="numeric" maxlength="11"></label>
+          <label class="field">Tipo<select name="tipo">${options(Config.TIPOS_CUENTA.map(t => [t, t]), 'Integrador')}</select></label>
+          <label class="field">Ciudad<select name="ciudad">${options(Config.CIUDADES.map(t => [t, t]), 'Lima')}</select></label>
+          ${jef ? `<label class="field">Asignar a<select name="vendedorId">${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), '', 'Sin asignar (por ahora)')}</select></label>` : ''}
+        </div>
+        ${jef ? '' : '<div class="alert info"><div>La cuenta quedará asignada a ti. Jefatura podrá reasignarla.</div></div>'}
+        <h3 style="margin:4px 0 0">Contacto principal <span class="muted small" style="font-weight:400">(opcional)</span></h3>
+        <div class="form-grid">
+          <label class="field">Nombre<input type="text" name="contactoNombre"></label>
+          <label class="field">Cargo<input type="text" name="contactoCargo"></label>
+          <label class="field">Correo<input type="email" name="contactoCorreo"></label>
+          <label class="field">Teléfono<input type="text" name="contactoTelefono"></label>
+        </div></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Crear cuenta`, cls: 'primary', onClick: async root => {
+        const c = await Repo.crearCliente({ razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), tipo: val(root, 'tipo'), ciudad: val(root, 'ciudad'),
+          vendedorId: jef ? val(root, 'vendedorId') || null : S.user.id,
+          contacto: { nombre: val(root, 'contactoNombre'), cargo: val(root, 'contactoCargo'), correo: val(root, 'contactoCorreo'), telefono: val(root, 'contactoTelefono') } }, S.user.id);
+        toast('Cuenta creada.'); go('cuenta/' + c.id);
+      } }],
+    });
+  }
+  ACTIONS['gestion-cuenta'] = el => abrirGestionCuenta(el.dataset.id);
+  ACTIONS['contacto-nuevo'] = el => abrirEditarContacto(el.dataset.cliente || null, null);
+  ACTIONS['contacto-editar'] = el => abrirEditarContacto(el.dataset.cliente, el.dataset.k);
+  ACTIONS['cuenta-nueva'] = () => abrirNuevaCuenta();
 
   /* ---------- Componentes de lista ---------- */
   function quickInline(o) {
@@ -2397,6 +2660,7 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' };
       go(Rules.INICIO[S.user.rol]);
     } catch (e) { toast(e.message); }
   }
@@ -2416,13 +2680,14 @@ const UI = (() => {
       if (L[k]) L[k].push({ o, a });
     }));
     L.atrasado.sort((x, y) => (y.a.dias || 0) - (x.a.dias || 0));
+    const ctas = Rules.alertasUsuario(db, u, h).filter(x => x.cliente);
     const total = new Set(Object.values(L).flat().map(x => x.o.id)).size;
     const cob = av.cobertura;
     const cobChip = cob == null ? '<span class="chip ok">Meta cumplida</span>' : cob >= 1 ? '<span class="chip ok">Cubierta</span>' : cob >= 0.5 ? '<span class="chip warn">Parcial</span>' : '<span class="chip bad">Baja</span>';
     const sec = (key, titulo, hint, cls) => `<section class="list-card"><header><h2>${titulo}</h2><span class="count ${cls || ''}">${L[key].length}</span><span class="hint">${hint}</span></header>
       ${L[key].length ? L[key].map(x => opItem(x.o, x.a)).join('') : '<div class="list-empty">Nada pendiente aquí.</div>'}</section>`;
     view().innerHTML = `
-      <div class="page-head"><div><h1>Hola, ${E(firstName(u))}</h1><p class="muted">${cap(Util.dayName(h))} ${Util.fmtDate(h)} · ${total} oportunidad${total === 1 ? '' : 'es'} requieren tu atención</p></div>
+      <div class="page-head"><div><h1>Hola, ${E(firstName(u))}</h1><p class="muted">${cap(Util.dayName(h))} ${Util.fmtDate(h)} · ${total} oportunidad${total === 1 ? '' : 'es'} requieren tu atención${ctas.length ? ` · ${ctas.length} cuenta${ctas.length === 1 ? '' : 's'} sin cotizar` : ''}</p></div>
         <a class="btn primary" href="#/nueva">${I('plus')} Nueva cotización</a></div>
       <section class="card">
         <div class="hero-progress">
@@ -2452,6 +2717,8 @@ const UI = (() => {
           ${sec('por_vencer', 'Cotizaciones por vencer', 'Emisión + validez', 'warn')}
           ${sec('oc_vencida', 'Fecha de OC vencida', 'Sin OC recibida', 'warn')}
           ${L.reactivar.length ? sec('reactivar', 'Pausas por reactivar', 'Fecha de reactivación cumplida') : ''}
+          <section class="list-card"><header><h2>Cuentas sin cotizar (2+ meses)</h2><span class="count warn">${ctas.length}</span><span class="hint">También avisa a jefatura</span></header>
+            ${ctas.length ? ctas.map(x => cuentaItem(x.cliente, x.alerta)).join('') : '<div class="list-empty">Todas tus cuentas están activas.</div>'}</section>
         </div>
       </div>`;
   };
@@ -2660,7 +2927,7 @@ const UI = (() => {
         <div class="stack">
           <section class="card"><div class="card-head"><h2>Bitácora de seguimientos</h2><span class="sub">${contactosReales(o).filter(f => !f.auto).length} contactos</span></div>
             <ul class="timeline">${Rules.followupsOf(db, o).slice().reverse().map(f => `<li><div class="t-date">${Util.fmtDate(f.fecha)}</div>
-              <div><span class="chip ${f.canal === 'Sistema' ? '' : 'info'}">${E(f.canal)}</span> <span class="small muted">${f.usuarioId === 'sistema' ? 'Automático' : E((usr(f.usuarioId) || {}).iniciales || '')}</span>
+              <div><span class="chip ${f.canal === 'Sistema' ? '' : 'info'}">${E(f.canal)}</span> <span class="small muted">${f.usuarioId === 'sistema' ? 'Automático' : E((usr(f.usuarioId) || {}).iniciales || '')}</span>${f.resultado === 'sin_respuesta' ? ' <span class="chip warn">No respondió</span>' : ''}
               <div style="margin-top:4px">${E(f.nota) || '<span class="muted">Sin nota</span>'}</div>
               ${f.proxContacto && f.canal !== 'Sistema' ? `<div class="small muted">Próximo contacto definido: ${Util.fmtDate(f.proxContacto)}</div>` : ''}</div></li>`).join('')}</ul></section>
           ${her.length ? `<section class="card"><div class="card-head"><h2>Otros integradores del proyecto</h2><span class="sub">${E(p.usuarioFinal)}</span></div>
@@ -2668,11 +2935,12 @@ const UI = (() => {
             ${her.map(x => { const vis = Rules.puede(S.user, 'ver_opp', x); return `<tr${vis ? ` class="clickable" data-action="abrir" data-id="${x.id}"` : ''}><td>${E(cli(x.clienteId).razonSocial)}${vis ? `<div class="cell-sub">${money(Rules.montoUSD(db, x))}</div>` : ''}</td><td>${vendTag(usr(x.vendedorId))}</td>
               <td>${etapaHTML(x.etapa)}${x.motivoPerdida ? `<div class="cell-sub">${E(Rules.motivo(x.motivoPerdida).nombre)}</div>` : ''}</td></tr>`; }).join('')}
             </tbody></table></div><p class="small muted" style="margin-bottom:0">Cada integrador es una oportunidad independiente. Si uno gana, el sistema ofrece cerrar los demás con “ganó otro integrador”.</p></section>` : ''}
-          <section class="card"><div class="card-head"><h2>Cliente</h2><span class="seg ${seg.seg}">${seg.seg}</span></div>
+          <section class="card"><div class="card-head"><h2>Cliente</h2><div class="btn-row">${estadoChip(Rules.cuenta(db, c.id, h).estado)}<span class="seg ${seg.seg}">${seg.seg}</span></div></div>
+            <div class="btn-row" style="margin-bottom:8px">${Rules.puede(S.user, 'ver_cuenta', c) ? `<a class="btn sm" href="#/cuenta/${c.id}">${I('users')} Ver cuenta</a>` : ''}${Rules.puede(S.user, 'editar_contactos', c) ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Agregar contacto</button>` : ''}</div>
             <div class="small">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)} · Facturado 12 meses: <strong>${money(seg.total)}</strong></div>
             <div class="stack" style="margin-top:10px">${c.contactos.map(k => `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-              <div><strong>${E(k.nombre)}</strong><div class="small muted">${E(k.correo)} · ${E(k.telefono)}</div></div>
-              <div class="btn-row"><a class="btn sm" href="https://wa.me/${k.telefono.replace(/\D/g, '')}" target="_blank" rel="noopener" title="WhatsApp">${I('msg')}</a><a class="btn sm" href="tel:${k.telefono.replace(/\s/g, '')}" title="Llamar">${I('phone')}</a><a class="btn sm" href="mailto:${E(k.correo)}" title="Correo">${I('mail')}</a></div></div>`).join('')}</div>
+              <div><strong>${E(k.nombre)}</strong>${k.cargo ? ` <span class="small muted">· ${E(k.cargo)}</span>` : ''}<div class="small muted">${E(k.correo || 'sin correo')} · ${E(k.telefono || 'sin teléfono')}</div></div>
+              <div class="btn-row">${contactoLinks(k)}</div></div>`).join('')}</div>
           </section>
         </div>
       </div>`;
@@ -2705,7 +2973,7 @@ const UI = (() => {
         </tbody></table></div>
         <div class="totals">
           <span class="t">Suma</span><span class="num right">${Util.money(t.suma, cur)}</span>
-          ${t.descuento ? `<span class="t">Descuento</span><span class="num right">− ${Util.money(t.descuento, cur)}</span>` : ''}
+          ${t.descuento ? `<span class="t">Descuento${q.descuentoTipo === 'pct' ? ' (' + q.descuentoPct + '%)' : ''}</span><span class="num right">− ${Util.money(t.descuento, cur)}</span>` : ''}
           <span class="t">Neto sin IGV</span><span class="num right">${Util.money(t.neto, cur)}</span>
           <span class="t">IGV 18%</span><span class="num right">${Util.money(t.igv, cur)}</span>
           <span class="t grand">Total</span><span class="num right grand">${Util.money(t.total, cur)}</span>
@@ -2771,7 +3039,7 @@ const UI = (() => {
   }
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
-      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' },
+      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' },
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
@@ -2819,7 +3087,7 @@ const UI = (() => {
     return cands;
   }
   function totalesDraft(d) {
-    const q = { items: d.items.map(it => ({ cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })), descuento: +d.descuento || 0, moneda: d.moneda, tc: +d.tc || Config.TC_REFERENCIA };
+    const q = { items: d.items.map(it => ({ cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })), descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, moneda: d.moneda, tc: +d.tc || Config.TC_REFERENCIA };
     return { t: Rules.totales(q), usd: Rules.quoteNetoUSD(q) };
   }
   PAGES['nueva'] = async () => {
@@ -2956,7 +3224,10 @@ const UI = (() => {
   function totalesHTML(d, t, usd) {
     const cur = d.moneda;
     return `<span class="t">Suma</span><span class="num right">${Util.money(t.suma, cur)}</span>
-      <span class="t">Descuento</span><span><input type="number" min="0" step="0.01" data-nq="descuento" value="${E(d.descuento)}" style="width:120px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento"></span>
+      <span class="t">Descuento</span><span style="display:flex;gap:4px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
+        <select data-nq="descuentoTipo" aria-label="Tipo de descuento" style="width:76px;min-height:30px;padding:3px 6px">${options([['pct', '%'], ['monto', cur]], d.descuentoTipo)}</select>
+        <input type="number" min="0" step="${d.descuentoTipo === 'pct' ? '0.5' : '0.01'}" name="descuento" data-nq="${d.descuentoTipo === 'pct' ? 'descuentoPct' : 'descuento'}" value="${E(d.descuentoTipo === 'pct' ? d.descuentoPct : d.descuento)}" style="width:96px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento">
+        <span class="small muted" id="nq-desc-monto" style="width:100%;text-align:right">${d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, cur) : '≈ ' + t.descuentoPct + '%'}</span></span>
       <span class="t">Neto sin IGV</span><span class="num right">${Util.money(t.neto, cur)}</span>
       <span class="t">IGV 18%</span><span class="num right">${Util.money(t.igv, cur)}</span>
       <span class="t grand">Total</span><span class="num right grand">${Util.money(t.total, cur)}</span>
@@ -2973,6 +3244,7 @@ const UI = (() => {
       spans[2].textContent = Util.money(t.igv, d.moneda); spans[3].textContent = Util.money(t.total, d.moneda);
       if (spans[4]) spans[4].textContent = money(usd);
     }
+    const dm = $('#nq-desc-monto'); if (dm) dm.textContent = d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, d.moneda) : '≈ ' + t.descuentoPct + '%';
     const dp = $('#nq-dup'); if (dp) dp.innerHTML = dupHTML(Rules.numeroDuplicado(S.db, d.numero));
     const g = $('#nq-grande'); if (g) g.innerHTML = grandeHTML(d, usd);
   }
@@ -3015,15 +3287,24 @@ const UI = (() => {
     const c = d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : { razonSocial: d.clienteNuevo.razonSocial || '(cliente nuevo)', ruc: d.clienteNuevo.ruc || '—', ciudad: 'Lima', contactos: [] };
     const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
     const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
-      descuento: +d.descuento || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
+      descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
+  };
+  /** Cuenta → "Cotizar": abre la plataforma con el cliente ya elegido */
+  ACTIONS['cotizar-cuenta'] = el => {
+    const c = cli(el.dataset.id);
+    if (!Rules.puede(S.user, 'gestionar_cuenta', c)) { toast('Solo el vendedor asignado puede cotizar a esta cuenta.'); return; }
+    const d = draftVacio();
+    Object.assign(d, { clienteId: c.id, contacto: c.contactos[0] ? c.contactos[0].nombre : '', numAuto: true, numero: numeroSugerido(S.user) });
+    S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
+    go('nueva');
   };
   /** Ficha → "Crear revisión desde la vigente": copia la cotización vigente a la plataforma para ajustarla */
   ACTIONS['crear-rev'] = el => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({}, it)), descuento: q.descuento || 0, proyectoSel: o.proyectoId,
+      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({}, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
@@ -3035,7 +3316,7 @@ const UI = (() => {
       vendedorId: S.user.id, clienteId: d.clienteId && d.clienteId !== '__nuevo' ? d.clienteId : '',
       clienteNuevo: d.clienteId === '__nuevo' ? { razonSocial: d.clienteNuevo.razonSocial, ruc: String(d.clienteNuevo.ruc || '').trim() } : null,
       contacto: d.contacto, numero: d.numero, fechaEmision: d.fechaEmision, moneda: d.moneda, tc: d.tc, condicionPago: d.condicionPago,
-      validezDias: d.validezDias, plazo: d.plazo, items: d.items, descuento: d.descuento,
+      validezDias: d.validezDias, plazo: d.plazo, items: d.items, descuento: d.descuento, descuentoTipo: d.descuentoTipo, descuentoPct: d.descuentoPct,
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
       modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma' };
@@ -3151,6 +3432,14 @@ const UI = (() => {
         ${vid ? '' : `<div class="table-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Vendedor</th><th class="r">Abiertas</th><th class="r">% vigente</th><th class="r">Atrasados</th><th class="r">Escalados</th><th class="r">Sin próximo</th></tr></thead><tbody>
           ${vendedores().map(v => { const s = Rules.saludSeguimiento(db, { vendedorId: v.id, hoy: h }); return `<tr><td>${vendTag(v)} ${E(v.nombre)}</td><td class="r">${s.abiertas}</td><td class="r">${Util.pct(s.pctVigente)}</td><td class="r">${s.atrasados ? `<span class="chip warn">${s.atrasados}</span>` : 0}</td><td class="r">${s.escalados ? `<span class="chip bad">${s.escalados}</span>` : 0}</td><td class="r">${s.sinProx ? `<span class="chip bad">${s.sinProx}</span>` : 0}</td></tr>`; }).join('')}
         </tbody></table></div>`}
+      </section>
+      <section class="card" style="margin-top:14px"><div class="card-head"><h2>Cartera de cuentas</h2><a class="btn sm" href="#/cuentas">${I('users')} Ver cuentas</a></div>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Vendedor</th><th class="r">Cuentas</th><th class="r">Activas</th><th class="r">No responde</th><th class="r">Sin contacto</th><th class="r">% activas</th></tr></thead><tbody>
+          ${(() => { const inf = Rules.cuentas(db, h); const fila = (lbl, cs) => { const n = k => cs.filter(c => inf[c.id].estado === k).length; return `<tr><td>${lbl}</td><td class="r">${cs.length}</td><td class="r">${n('activo')}</td><td class="r">${n('no_responde') ? `<span class="chip warn">${n('no_responde')}</span>` : 0}</td><td class="r">${n('sin_contacto') ? `<span class="chip bad">${n('sin_contacto')}</span>` : 0}</td><td class="r">${cs.length ? Util.pct(n('activo') / cs.length) : '—'}</td></tr>`; };
+            const vs = vid ? [usr(vid)] : vendedores(); const sinAsig = db.clients.filter(c => !c.vendedorId);
+            return vs.map(v => fila(`${vendTag(v)} ${E(v.nombre)}`, db.clients.filter(c => c.vendedorId === v.id))).join('') + (!vid && sinAsig.length ? fila('<span class="chip info">Sin asignar</span>', sinAsig) : ''); })()}
+        </tbody></table></div>
+        <p class="small muted" style="margin-bottom:0">Estado automático: activa si se cotizó en los últimos ${Config.CUENTA_INACTIVA_DIAS} días o respondió a un contacto; si no, “No responde” (hubo intentos sin respuesta) o “Sin contacto”. Las dos últimas generan alerta al vendedor y a jefatura.</p>
       </section>
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Proyectos con varios integradores</h2><span class="sub">Cada integrador es una oportunidad independiente</span></div>
         ${multi.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Proyecto / usuario final</th><th>Integradores cotizados</th><th>Estado</th></tr></thead><tbody>
@@ -3277,6 +3566,7 @@ const UI = (() => {
   }
   function correoDiario(v) {
     const h = hoy(), L = listasVendedor(v, h), av = Rules.avanceMeta(S.db, v.id, h);
+    const ctas = Rules.alertasUsuario(S.db, v, h).filter(x => x.cliente);
     const base = [['Cliente', x => `<strong>${E(cli(x.o.clienteId).razonSocial)}</strong><br><span class="muted">${E(projName(proj(x.o.proyectoId)))}</span>`], ['Monto', x => Util.money0(Rules.montoUSD(S.db, x.o))], ['Detalle', x => E(x.a.texto)]];
     const n = L.hoy.length + L.atrasado.length;
     return `<div class="mail"><div class="mail-head">
@@ -3291,6 +3581,7 @@ const UI = (() => {
         <h4>Cotizaciones por vencer</h4>${tablaMail(L.por_vencer, [['Cliente', x => E(cli(x.o.clienteId).razonSocial)], ['N°', x => E(Rules.vigente(S.db, x.o).numero)], ['Vence', x => Util.fmtDate(x.a.fecha)]])}
         <h4>Sin próximo contacto</h4>${tablaMail(L.sin_proximo, base)}
         <h4>Fecha estimada de OC vencida</h4>${tablaMail(L.oc_vencida, base)}
+        <h4>Cuentas sin cotizar hace más de 2 meses</h4>${tablaMail(ctas, [['Cuenta', x => `<strong>${E(x.cliente.razonSocial)}</strong>`], ['Estado', x => Config.ESTADOS_CUENTA[x.alerta.estado].nombre], ['Sin cotizar', x => x.alerta.dias + ' días']])}
         <p style="margin-top:16px"><a class="btn primary sm" href="#/mi-dia">Abrir Mi día</a></p>
         <p class="small muted">Correo simulado. En la versión final se enviará por Microsoft 365 a cada vendedor.</p>
       </div></div>`;
@@ -3298,7 +3589,8 @@ const UI = (() => {
   function correoSemanal() {
     const db = S.db, h = hoy(), ini = Util.addDays(h, -6), rk = Rules.ranking(db, h);
     const metaEmp = Util.sum(vendedores(), v => v.meta), fact = Util.sum(rk, r => r.facturado);
-    const esc = Rules.alertasUsuario(db, S.db.users.find(u => u.rol === 'jefatura'), h);
+    const todas = Rules.alertasUsuario(db, S.db.users.find(u => u.rol === 'jefatura'), h);
+    const esc = todas.filter(x => x.opp), ctas = todas.filter(x => x.cliente);
     const proy = Rules.proyeccion(db, { tipo: 'facturacion', hoy: h }).tot.total.mes;
     const semana = vid => {
       const t = Rules.tasaCierre(db, { vendedorId: vid, desde: ini, hasta: h });
@@ -3316,6 +3608,8 @@ const UI = (() => {
         </tbody></table>
         <h4>Seguimientos escalados (atraso &gt; ${Config.ESCALAR_ATRASO_DH} días hábiles)</h4>
         ${tablaMail(esc, [['Vendedor', x => E(usr(x.opp.vendedorId).nombre)], ['Cliente', x => E(cli(x.opp.clienteId).razonSocial)], ['Monto', x => Util.money0(Rules.montoUSD(db, x.opp))], ['Atraso', x => E(x.alerta.texto)]])}
+        <h4>Cuentas sin cotizar hace más de 2 meses (${ctas.length})</h4>
+        ${tablaMail(ctas, [['Vendedor', x => x.cliente.vendedorId ? E(usr(x.cliente.vendedorId).nombre) : 'Sin asignar'], ['Cuenta', x => E(x.cliente.razonSocial)], ['Estado', x => Config.ESTADOS_CUENTA[x.alerta.estado].nombre], ['Sin cotizar', x => x.alerta.dias + ' días']])}
         <p class="small muted" style="margin-top:14px">Correo simulado. En la versión final se enviará por Microsoft 365.</p>
       </div></div>`;
   }
@@ -3341,15 +3635,15 @@ const UI = (() => {
   }
   PAGES['notificaciones'] = async () => {
     const u = S.user, jef = u.rol === 'jefatura', h = hoy();
-    const tabs = jef ? [['alertas', 'Escalados'], ['semanal', 'Resumen semanal'], ['diario', 'Correo diario por vendedor'], ['outlook', 'Eventos de Outlook']] : [['alertas', 'Mis alertas'], ['diario', 'Correo diario'], ['outlook', 'Eventos de Outlook']];
+    const tabs = jef ? [['alertas', 'Escalados y cuentas'], ['semanal', 'Resumen semanal'], ['diario', 'Correo diario por vendedor'], ['outlook', 'Eventos de Outlook']] : [['alertas', 'Mis alertas'], ['diario', 'Correo diario'], ['outlook', 'Eventos de Outlook']];
     if (!tabs.some(t => t[0] === S.notif.tab)) S.notif.tab = 'alertas';
     const v = jef ? usr(S.notif.vendedor || 'u1') : u;
     const selV = jef && ['diario', 'outlook'].includes(S.notif.tab) ? `<label class="field" style="max-width:280px;margin-bottom:12px">Vendedor<select data-change="notif-v">${options(vendedores().map(x => [x.id, x.iniciales + ' · ' + x.nombre]), v.id)}</select></label>` : '';
     let cuerpo = '';
     if (S.notif.tab === 'alertas') {
       const al = Rules.alertasUsuario(S.db, u, h);
-      cuerpo = `<div class="list-card"><header><h2>${jef ? 'Seguimientos escalados a jefatura' : 'Alertas activas'}</h2><span class="count ${al.length ? 'bad' : ''}">${al.length}</span><span class="hint">Lo mismo que muestra la campana</span></header>
-        ${al.length ? al.map(x => jef ? `<div class="op-item"><a class="op-main" href="#/op/${x.opp.id}"><div class="op-title">${E(cli(x.opp.clienteId).razonSocial)} ${vendTag(usr(x.opp.vendedorId))}</div><div class="op-sub">${E(projName(proj(x.opp.proyectoId)))} · ${E(usr(x.opp.vendedorId).nombre)}</div><div class="op-meta">${etapaHTML(x.opp.etapa)} <span class="chip">${money(Rules.montoUSD(S.db, x.opp))}</span>${alertChip(x.alerta)}</div></a></div>` : opItem(x.opp, x.alerta)).join('') : '<div class="list-empty">Sin alertas.</div>'}</div>`;
+      cuerpo = `<div class="list-card"><header><h2>${jef ? 'Escalados y cuentas sin cotizar' : 'Alertas activas'}</h2><span class="count ${al.length ? 'bad' : ''}">${al.length}</span><span class="hint">Lo mismo que muestra la campana</span></header>
+        ${al.length ? al.map(x => x.cliente ? cuentaItem(x.cliente, x.alerta, !jef) : jef ? `<div class="op-item"><a class="op-main" href="#/op/${x.opp.id}"><div class="op-title">${E(cli(x.opp.clienteId).razonSocial)} ${vendTag(usr(x.opp.vendedorId))}</div><div class="op-sub">${E(projName(proj(x.opp.proyectoId)))} · ${E(usr(x.opp.vendedorId).nombre)}</div><div class="op-meta">${etapaHTML(x.opp.etapa)} <span class="chip">${money(Rules.montoUSD(S.db, x.opp))}</span>${alertChip(x.alerta)}</div></a></div>` : opItem(x.opp, x.alerta)).join('') : '<div class="list-empty">Sin alertas.</div>'}</div>`;
     } else if (S.notif.tab === 'diario') {
       cuerpo = selV + correoDiario(v);
     } else if (S.notif.tab === 'semanal') {
@@ -3366,6 +3660,150 @@ const UI = (() => {
   };
   ACTIONS['notif-tab'] = el => { S.notif.tab = el.dataset.tab; render(true); };
   CHANGES['notif-v'] = el => { S.notif.vendedor = el.value; render(true); };
+
+  /* =====================================================================
+     CUENTAS — cartera, estado automático y asignación (jefatura)
+     ===================================================================== */
+  const ORDEN_ESTADO = { sin_contacto: 0, no_responde: 1, activo: 2 };
+  PAGES['cuentas'] = async () => {
+    const db = S.db, u = S.user, h = hoy(), jef = u.rol === 'jefatura', F = S.ctaF;
+    const inf = Rules.cuentas(db, h);
+    const base = jef ? db.clients.slice() : db.clients.filter(c => c.vendedorId === u.id);
+    let cs = base;
+    if (F.estado) cs = cs.filter(c => inf[c.id].estado === F.estado);
+    if (jef && F.vendedor) cs = cs.filter(c => F.vendedor === '__sin' ? !c.vendedorId : c.vendedorId === F.vendedor);
+    if (F.q.trim()) { const t = F.q.trim().toLowerCase(); cs = cs.filter(c => (c.razonSocial + ' ' + c.ruc + ' ' + c.contactos.map(k => k.nombre).join(' ')).toLowerCase().includes(t)); }
+    cs = cs.slice().sort((a, b) => (jef ? (!a.vendedorId ? -1 : 0) - (!b.vendedorId ? -1 : 0) : 0) || ORDEN_ESTADO[inf[a.id].estado] - ORDEN_ESTADO[inf[b.id].estado] || inf[b.id].diasSinCotizar - inf[a.id].diasSinCotizar);
+    const cnt = k => base.filter(c => inf[c.id].estado === k).length;
+    const sinAsig = base.filter(c => !c.vendedorId).length;
+    view().innerHTML = `
+      <div class="page-head"><div><h1>${jef ? 'Cuentas' : 'Mis cuentas'}</h1><p class="muted">${jef ? 'Asigna cuentas a los vendedores y revisa su estado' : 'Tu cartera de clientes y su estado'} · alerta tras ${Config.CUENTA_INACTIVA_DIAS} días sin cotizar</p></div>
+        <div class="btn-row"><a class="btn" href="#/contactos">${I('book')} Agenda de contactos</a><button class="btn primary" data-action="cuenta-nueva">${I('plus')} Nueva cuenta</button></div></div>
+      <div class="grid ${jef ? 'g5' : 'g4'}">
+        ${kpi('Cuentas', String(base.length), jef ? 'toda la empresa' : 'asignadas a ti')}
+        ${kpi('Activas', String(cnt('activo')), 'cotizadas o con respuesta en 60 días')}
+        ${kpi('No responde', String(cnt('no_responde')), 'intentos de contacto sin respuesta')}
+        ${kpi('Sin contacto', String(cnt('sin_contacto')), 'ni cotización ni contacto en 60 días')}
+        ${jef ? kpi('Sin asignar', String(sinAsig), 'por asignar a un vendedor') : ''}
+      </div>
+      <div class="card" style="padding:12px;margin-top:14px"><div class="filters" style="margin:0">
+        <label class="field">Buscar<input type="text" data-input="ctaf" name="q" value="${E(F.q)}" placeholder="Razón social, RUC o contacto"></label>
+        <label class="field">Estado<select data-change="ctaf" name="estado">${options(Object.entries(Config.ESTADOS_CUENTA).map(([k, e]) => [k, e.nombre]), F.estado, 'Todos')}</select></label>
+        ${jef ? `<label class="field">Vendedor<select data-change="ctaf" name="vendedor">${options([['__sin', 'Sin asignar'], ...vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre])], F.vendedor, 'Todos')}</select></label>` : ''}
+      </div><div class="small muted" id="cta-count" style="margin-top:8px">${cs.length} cuentas</div></div>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:${jef ? 1100 : 960}px"><thead><tr><th>Cuenta</th><th>Estado</th><th>Última cotización</th><th>Último contacto</th><th class="r">Abiertas</th><th class="r">Contactos</th>${jef ? '<th>Vendedor asignado</th>' : '<th></th>'}</tr></thead><tbody>
+        ${cs.map(c => { const r = inf[c.id]; return `<tr>
+          <td><a href="#/cuenta/${c.id}" class="cell-main" style="color:inherit">${E(c.razonSocial)}</a> ${segHTML(c.id)}<div class="cell-sub">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)}</div></td>
+          <td>${estadoChip(r.estado)}</td>
+          <td class="nowrap">${r.ultimaCot ? Util.fmtDate(r.ultimaCot) : '<span class="muted">Ninguna</span>'}<div class="cell-sub">${r.alerta ? `<span style="color:var(--bad);font-weight:700">${r.ultimaCot ? 'hace' : 'alta hace'} ${r.diasSinCotizar} días</span>` : `${r.ultimaCot ? 'hace' : 'alta hace'} ${r.diasSinCotizar} días`}</div></td>
+          <td class="nowrap">${r.ultimoContacto ? `${Util.fmtDate(r.ultimoContacto.fecha)}<div class="cell-sub">${E(r.ultimoContacto.canal)} · ${resultadoTxt(r.ultimoContacto.resultado)}</div>` : '<span class="muted">—</span>'}</td>
+          <td class="r">${r.abiertas}</td><td class="r">${c.contactos.length}</td>
+          ${jef ? `<td><select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" style="min-width:170px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), c.vendedorId)}</select></td>`
+            : `<td class="nowrap"><button class="btn sm" data-action="gestion-cuenta" data-id="${c.id}">Gestión</button> <button class="btn sm" data-action="cotizar-cuenta" data-id="${c.id}">Cotizar</button></td>`}
+        </tr>`; }).join('') || `<tr><td colspan="7" class="center muted" style="padding:20px">No hay cuentas con estos filtros.</td></tr>`}
+      </tbody></table></div>
+      <p class="small muted">${Object.values(Config.ESTADOS_CUENTA).map(e => `<strong>${e.nombre}:</strong> ${E(e.regla)}`).join(' · ')}</p>`;
+  };
+  CHANGES['ctaf'] = el => { S.ctaF[el.name] = el.value; render(true); };
+  let tCta = null;
+  INPUTS['ctaf'] = el => { S.ctaF[el.name] = el.value; clearTimeout(tCta); tCta = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="ctaf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  CHANGES['asignar-cuenta'] = async el => {
+    if (!Rules.puede(S.user, 'asignar_cuenta')) return;
+    const c = cli(el.dataset.id), to = el.value;
+    if (!to || to === c.vendedorId) return;
+    const n = await Repo.reasignarCliente(c.id, to, S.user.id);
+    toast(`${c.razonSocial} asignada a ${usr(to).nombre}${n ? ` junto con ${n} oportunidad(es) abiertas` : ''}.`);
+    refresh();
+  };
+
+  PAGES['cuenta'] = async id => {
+    const db = S.db, h = hoy(), c = cli(id);
+    if (!c) { view().innerHTML = `<div class="alert bad"><div>No se encontró la cuenta. <a href="#/cuentas">Volver</a></div></div>`; return; }
+    if (!Rules.puede(S.user, 'ver_cuenta', c)) { view().innerHTML = `<div class="alert bad"><div>Esta cuenta está asignada a otro vendedor. <a href="#/cuentas">Volver a tus cuentas</a></div></div>`; return; }
+    const r = Rules.cuenta(db, id, h), al = Rules.alertaCuenta(db, c, h), seg = Rules.segmento(db, id, h);
+    const gest = Rules.puede(S.user, 'gestionar_cuenta', c), editK = Rules.puede(S.user, 'editar_contactos', c), jef = S.user.rol === 'jefatura';
+    const opps = db.opps.filter(o => o.clienteId === id).sort((a, b) => a.fechaInicio < b.fechaInicio ? 1 : -1);
+    const reg = usr(c.registradoPor);
+    view().innerHTML = `
+      <a href="#/cuentas" class="btn ghost sm" style="margin-bottom:8px">${I('back')} Cuentas</a>
+      <section class="card">
+        <div class="op-header"><div>
+          <h1>${E(c.razonSocial)} <span class="seg ${seg.seg}" title="Facturado 12 meses: ${money(seg.total)}">${seg.seg}</span> ${estadoChip(r.estado)}</h1>
+          <div class="muted">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)}</div>
+          <div class="small muted" style="margin-top:2px">Alta ${Util.fmtDate(c.fechaAlta)}${reg ? ' · registrada por ' + E(reg.nombre) : ''} · Vendedor: ${c.vendedorId ? E(usr(c.vendedorId).nombre) : '<strong>Sin asignar</strong>'}</div>
+        </div>
+        <div class="btn-row">${gest ? `<button class="btn" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Nueva cotización</button>` : ''}</div></div>
+        ${al ? `<div class="alert ${al.nivel === 'bad' ? 'bad' : 'warn'}" style="margin-top:12px"><div><strong>${E(al.texto)}.</strong> ${E(Config.ESTADOS_CUENTA[r.estado].regla)} La alerta llega al vendedor asignado y a jefatura.</div></div>` : ''}
+        <div class="facts">
+          <div class="fact"><div class="l">Estado</div><div class="v">${Config.ESTADOS_CUENTA[r.estado].nombre}</div></div>
+          <div class="fact"><div class="l">Última cotización</div><div class="v">${r.ultimaCot ? Util.fmtDate(r.ultimaCot) : 'Ninguna'}</div><div class="small muted">${r.ultimaCot ? 'hace' : 'alta hace'} ${r.diasSinCotizar} días</div></div>
+          <div class="fact"><div class="l">Último contacto</div><div class="v">${r.ultimoContacto ? Util.fmtDate(r.ultimoContacto.fecha) : '—'}</div>${r.ultimoContacto ? `<div class="small muted">${E(r.ultimoContacto.canal)} · ${resultadoTxt(r.ultimoContacto.resultado)}</div>` : ''}</div>
+          <div class="fact"><div class="l">Oportunidades abiertas</div><div class="v">${r.abiertas} <span class="small muted">de ${r.opps}</span></div></div>
+          <div class="fact"><div class="l">Facturado 12 meses</div><div class="v">${money(seg.total)}</div></div>
+        </div>
+        ${jef ? `<div class="form-grid" style="margin-top:14px;max-width:560px"><label class="field">Asignar cuenta a<div style="display:flex;gap:6px"><select id="asig-cta">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), c.vendedorId)}</select><button class="btn" data-action="asignar-cuenta-btn" data-id="${c.id}">Asignar</button></div>
+          <span class="field-hint">Mueve también sus oportunidades abiertas y en pausa.</span></label></div>` : ''}
+      </section>
+      <div class="grid" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);margin-top:14px;align-items:start" id="cuenta-grid">
+        <div class="stack">
+          <section class="card"><div class="card-head"><h2>Oportunidades</h2><span class="sub">${opps.length}</span></div>
+            ${opps.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Proyecto</th><th>Etapa</th><th class="r">Monto</th><th>Inicio</th></tr></thead><tbody>
+              ${opps.map(o => `<tr class="clickable" data-action="abrir" data-id="${o.id}"><td>${E(projName(proj(o.proyectoId)))}<div class="cell-sub">${E(Rules.resumenItems(Rules.vigente(db, o)))}</div></td><td class="nowrap">${etapaHTML(o.etapa)}</td><td class="r num">${money(Rules.montoUSD(db, o))}</td><td class="nowrap">${Util.fmtDate(o.fechaInicio)}</td></tr>`).join('')}
+            </tbody></table></div>` : '<p class="muted">Aún no se le ha cotizado.</p>'}</section>
+          <section class="card"><div class="card-head"><h2>Historial de contactos</h2><span class="sub">Seguimientos y gestiones de cuenta</span></div>
+            ${r.contactos.length ? `<ul class="timeline">${r.contactos.slice(0, 15).map(k => `<li><div class="t-date">${Util.fmtDate(k.fecha)}</div><div><span class="chip info">${E(k.canal)}</span> <span class="chip ${k.resultado === 'sin_respuesta' ? 'warn' : 'ok'}">${k.resultado === 'sin_respuesta' ? 'No respondió' : 'Respondió'}</span>
+              <span class="small muted">${k.gestion ? 'Gestión de cuenta' : `<a href="#/op/${k.oppId}">${k.oppId}</a>`}</span><div style="margin-top:4px">${E(k.nota) || '<span class="muted">Sin nota</span>'}</div></div></li>`).join('')}</ul>` : '<p class="muted">Sin contactos registrados.</p>'}
+          </section>
+        </div>
+        <section class="card"><div class="card-head"><h2>Contactos</h2>${editK ? `<button class="btn sm primary" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Agregar</button>` : ''}</div>
+          ${c.contactos.length ? `<div class="stack">${c.contactos.map(k => `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px dashed var(--border);padding-bottom:10px">
+            <div style="min-width:0"><strong>${E(k.nombre)}</strong>${k.cargo ? `<div class="small">${E(k.cargo)}</div>` : ''}<div class="small muted" style="overflow-wrap:anywhere">${E(k.correo || 'sin correo')} · ${E(k.telefono || 'sin teléfono')}</div></div>
+            <div class="btn-row">${contactoLinks(k)}${editK ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></div>`).join('')}</div>`
+            : '<p class="muted">Sin contactos. Registrarlos es opcional, pero quedan en la agenda común.</p>'}
+        </section>
+      </div>`;
+    const g = $('#cuenta-grid');
+    if (g && window.matchMedia('(max-width: 860px)').matches) g.style.gridTemplateColumns = 'minmax(0,1fr)';
+  };
+  ACTIONS['asignar-cuenta-btn'] = async el => {
+    const to = $('#asig-cta').value, c = cli(el.dataset.id);
+    if (!to || to === c.vendedorId) return toast('Elige un vendedor distinto.');
+    const n = await Repo.reasignarCliente(c.id, to, S.user.id);
+    toast(`Cuenta asignada a ${usr(to).nombre}${n ? ` junto con ${n} oportunidad(es) abiertas` : ''}.`); refresh();
+  };
+
+  /* =====================================================================
+     AGENDA DE CONTACTOS — común para todo el equipo
+     ===================================================================== */
+  PAGES['contactos'] = async () => {
+    const db = S.db, u = S.user, F = S.agF;
+    let rows = db.clients.flatMap(c => c.contactos.map(k => ({ k, c })));
+    const total = rows.length, empresas = db.clients.filter(c => c.contactos.length).length;
+    if (F.vendedor) rows = rows.filter(x => F.vendedor === '__mias' ? x.c.vendedorId === u.id : F.vendedor === '__sin' ? !x.c.vendedorId : x.c.vendedorId === F.vendedor);
+    if (F.q.trim()) { const t = F.q.trim().toLowerCase(); rows = rows.filter(x => [x.k.nombre, x.k.cargo, x.k.correo, x.k.telefono, x.c.razonSocial, x.c.ruc].join(' ').toLowerCase().includes(t)); }
+    rows.sort((a, b) => a.c.razonSocial.localeCompare(b.c.razonSocial) || a.k.nombre.localeCompare(b.k.nombre));
+    const puedeAgregar = u.rol !== 'finanzas';
+    const vOpts = [...(u.rol === 'vendedor' ? [['__mias', 'Mis cuentas']] : []), ...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar']];
+    view().innerHTML = `
+      <div class="page-head"><div><h1>Agenda de contactos</h1><p class="muted">Común para todo el equipo · ${total} contactos de ${empresas} empresas</p></div>
+        ${puedeAgregar ? `<button class="btn primary" data-action="contacto-nuevo">${I('plus')} Agregar contacto</button>` : ''}</div>
+      <div class="card" style="padding:12px"><div class="filters" style="margin:0">
+        <label class="field">Buscar<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Nombre, cargo, empresa, correo o teléfono"></label>
+        <label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las cuentas')}</select></label>
+      </div><div class="small muted" id="ag-count" style="margin-top:8px">${rows.length} contactos</div></div>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1120px"><thead><tr><th>Nombre</th><th>Cargo</th><th>Empresa</th><th>Vend.</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
+        ${rows.map(({ k, c }) => `<tr><td class="cell-main nowrap">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td>
+          <td>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)}</td>
+          <td>${c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="muted small">Sin asignar</span>'}</td>
+          <td class="small">${k.correo ? `<a href="mailto:${E(k.correo)}">${E(k.correo)}</a>` : '—'}</td><td class="small nowrap">${E(k.telefono || '—')}</td>
+          <td class="nowrap"><div class="btn-row" style="flex-wrap:nowrap">${contactoLinks(k)}${Rules.puede(u, 'editar_contactos', c) ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></td></tr>`).join('')
+          || `<tr><td colspan="7" class="center muted" style="padding:20px">Sin contactos con estos filtros.</td></tr>`}
+      </tbody></table></div>
+      <p class="small muted">Registrar contactos es opcional. Cada vendedor (o jefatura) puede agregar y editar los contactos de sus cuentas; todos pueden consultarlos.</p>`;
+  };
+  CHANGES['agf'] = el => { S.agF[el.name] = el.value; render(true); };
+  let tAg = null;
+  INPUTS['agf'] = el => { S.agF[el.name] = el.value; clearTimeout(tAg); tAg = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="agf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
 
   /* ---------- Arranque ---------- */
   let tResize = null;
