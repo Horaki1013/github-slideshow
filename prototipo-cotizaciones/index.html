@@ -420,6 +420,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
    ===================================================================== */
 const Config = {
   META_MENSUAL_USD: 40000,            // por vendedor, facturado sin IGV
+  COMISION_PCT: 0.02,                 // 2 % sobre lo facturado (sin IGV) por encima de la meta del mes
   IGV: 0.18,
   PRIMER_SEGUIMIENTO_DH: 3,           // días hábiles después del envío
   ESCALAR_ATRASO_DH: 5,               // atraso (días hábiles) que escala a jefatura
@@ -1509,6 +1510,21 @@ const Rules = (() => {
     return { meta, facturado, avance: facturado / meta, falta, ganadasPorFacturar: Util.round2(ganadasPorFacturar), ponderadoMes: Util.round2(ponderadoMes),
       cobertura: falta > 0 ? (ganadasPorFacturar + ponderadoMes) / falta : null };
   }
+  /** Comisión del mes = (facturado sin IGV − meta) × 2 %, solo si se superó la meta. No es acumulativa entre meses. */
+  function comision(db, vendedorId, mesKey) {
+    const u = ix(db).user[vendedorId];
+    const meta = (u && u.meta) || Config.META_MENSUAL_USD;
+    const facturado = facturadoMes(db, vendedorId, mesKey);
+    const excedente = Math.max(0, Util.round2(facturado - meta));
+    return { mes: mesKey, meta, facturado, excedente, pct: Config.COMISION_PCT, monto: Util.round2(excedente * Config.COMISION_PCT) };
+  }
+  /** Estimación del mes en curso: facturado + ganadas por facturar + ponderado con factura estimada en el mes */
+  function comisionProyectada(db, vendedorId, hoy = Util.today()) {
+    const av = avanceMeta(db, vendedorId, hoy);
+    const base = Util.round2(av.facturado + av.ganadasPorFacturar + av.ponderadoMes);
+    const excedente = Math.max(0, Util.round2(base - av.meta));
+    return { base, excedente, monto: Util.round2(excedente * Config.COMISION_PCT), faltaParaComisionar: av.falta };
+  }
   /** Tasa de cierre = ganadas ÷ (ganadas + perdidas). Excluye "ganó otro integrador" y las pausas. Por cantidad y por monto. */
   function tasaCierre(db, { vendedorId = null, desde, hasta }) {
     const enRango = o => (!vendedorId || o.vendedorId === vendedorId) && o.fechaCierre && o.fechaCierre >= desde && o.fechaCierre <= hasta;
@@ -1764,7 +1780,7 @@ const Rules = (() => {
 
   return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, aUSD, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
-    horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
+    horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles };
 })();
@@ -2157,6 +2173,13 @@ const SelfTest = (() => {
         { name: 'TOSIBOX', rows: [['TOSIBOX PRODUCTS', null, 'Lista 1'], ['TOSIBOX Part Number', 'Product Name', null], ['TBL350', 'Lock 350', '884']] }]);
       const m = r.items.find(i => i.codigo === 'EDS-408A'), z = r.items.find(i => i.codigo === '1001'), t = r.items.find(i => i.codigo === 'TBL350');
       return r.items.length === 4 && m.marca === 'Moxa' && m.precio === 520.5 && z.marca === 'Zenitel' && z.descripcion === 'Estación IP' && t.precio === 884 && r.resumen[0].sinPrecio === 1;
+    }],
+    ['Comisión: 2 % solo sobre lo facturado por encima de la meta', () => {
+      const db = miniDb();
+      addOpp(db, { etapa: 'ganada', fechaCierre: '2026-09-01', postventa: { oc: '2026-09-01', facturado: '2026-10-02', facturaMonto: 41000 } });
+      addOpp(db, { etapa: 'ganada', fechaCierre: '2026-08-01', postventa: { oc: '2026-08-01', facturado: '2026-09-15', facturaMonto: 39000 } });
+      const oct = Rules.comision(db, 't1', '2026-10'), set = Rules.comision(db, 't1', '2026-09');
+      return oct.excedente === 1000 && oct.monto === 20 && set.monto === 0 && set.excedente === 0;
     }],
     ['Días hábiles respetan feriados de Perú (28 y 29 de julio)', () =>
       Util.addBizDays('2026-07-27', 3) === '2026-08-03' && Util.bizDaysBetween('2026-07-24', '2026-07-30') === 2],
@@ -2978,6 +3001,10 @@ const UI = (() => {
           </div>
         </div>
         <p class="small muted" style="margin:10px 0 0">Cobertura = (ganadas por facturar + ponderado de abiertas con factura estimada en el mes) ÷ lo que falta. Factura estimada = fecha de OC + plazo de entrega.</p>
+        ${(() => { const c = Rules.comision(db, u.id, Util.monthKey(h)), p = Rules.comisionProyectada(db, u.id, h);
+          return `<div class="alert ${c.monto > 0 ? 'ok' : 'info'}" style="margin-top:12px"><div><strong>Comisión del mes: ${money(c.monto)}</strong> · ${Util.pct(Config.COMISION_PCT)} de lo facturado sobre tu meta.
+            ${c.monto > 0 ? `Llevas ${money(c.excedente)} por encima de la meta.` : `Empiezas a comisionar cuando facturas más de ${money(c.meta)}: te faltan ${money(p.faltaParaComisionar)}.`}
+            <span class="muted">Estimada si se facturan las ganadas y el ponderado del mes: ${money(p.monto)}.</span> <a href="#/proyeccion">Ver historial</a></div></div>`; })()}
       </section>
       <div class="grid g2" style="margin-top:14px;align-items:start">
         <div class="stack">
@@ -3685,14 +3712,14 @@ const UI = (() => {
   const meterHTML = (p, label) => `<div class="meter${p >= 1 ? ' ok' : ''}" role="progressbar" aria-label="${E(label || 'Avance')}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(p * 100)}"><span style="width:${Math.min(100, p * 100)}%"></span></div>`;
   function rankingTabla(rk, completo) {
     return `<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>Vendedor</th><th class="r">Facturado del mes</th><th style="min-width:130px">% de la meta</th>
-      <th class="r">Tasa de cierre (cant.)</th><th class="r">Tasa de cierre (monto)</th><th class="r">Cotizaciones enviadas</th>${completo ? '<th class="r">Ciclo prom.</th><th class="r">Cobertura</th>' : ''}</tr></thead><tbody>
+      <th class="r">Tasa de cierre (cant.)</th><th class="r">Tasa de cierre (monto)</th><th class="r">Cotizaciones enviadas</th>${completo ? '<th class="r">Ciclo prom.</th><th class="r">Cobertura</th><th class="r">Comisión del mes</th>' : ''}</tr></thead><tbody>
       ${rk.map(r => `<tr class="${S.user.id === r.v.id ? 'me' : ''}"><td><strong>${r.pos}</strong></td>
         <td class="nowrap">${avatarSm(r.v)}${E(r.v.nombre)}${S.user.id === r.v.id ? ' <span class="chip info">Tú</span>' : ''}</td>
         <td class="r num">${money(r.facturado)}</td><td><div class="small num">${Util.pct(r.avance)}</div>${meterHTML(r.avance, 'Meta de ' + r.v.nombre)}</td>
         <td class="r num">${Util.pct(r.tasa.tasaCantidad)}<div class="cell-sub">${r.tasa.ganadas} de ${r.tasa.ganadas + r.tasa.perdidas}</div></td>
         <td class="r num">${Util.pct(r.tasa.tasaMonto)}</td>
         <td class="r num">${r.enviadasMes} <span class="cell-sub">mes</span><div class="cell-sub">${r.enviadas6m} en 6 meses</div></td>
-        ${completo ? `<td class="r num">${r.ciclo == null ? '—' : Math.round(r.ciclo) + ' días'}</td><td class="r num">${r.cobertura == null ? '<span class="chip ok">Cumplida</span>' : Util.pct(r.cobertura)}</td>` : ''}</tr>`).join('')}
+        ${completo ? `<td class="r num">${r.ciclo == null ? '—' : Math.round(r.ciclo) + ' días'}</td><td class="r num">${r.cobertura == null ? '<span class="chip ok">Cumplida</span>' : Util.pct(r.cobertura)}</td><td class="r num">${money(Math.max(0, r.facturado - r.meta) * Config.COMISION_PCT)}</td>` : ''}</tr>`).join('')}
       </tbody></table></div><p class="small muted" style="margin-bottom:0">Facturado sin IGV del mes en curso. Tasa de cierre de los últimos 6 meses: ganadas ÷ (ganadas + perdidas), sin contar “ganó otro integrador” ni las pausas.</p>`;
   }
   function serieMensual(vid) {
@@ -3704,6 +3731,17 @@ const UI = (() => {
     const meta = Util.sum(vs, v => v.meta);
     return { meses, cats, series, meta };
   }
+  /** Comisiones por mes: 2 % de lo facturado (sin IGV) por encima de la meta mensual */
+  function comisionesHTML(vs, meses) {
+    const db = S.db, h = hoy(), mk = Util.monthKey(h);
+    const filas = vs.map(v => ({ v, cs: meses.map(m => Rules.comision(db, v.id, m)) }));
+    return `<div class="table-wrap"><table class="tbl"><thead><tr><th>Vendedor</th>${meses.map(m => `<th class="r">${Util.fmtMonth(m)}${m === mk ? '*' : ''}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+      ${filas.map(f => `<tr><td class="nowrap">${vendTag(f.v)} ${E(f.v.nombre)}</td>${f.cs.map(c => `<td class="r num" title="Facturado ${Util.money(c.facturado)} · meta ${Util.money(c.meta)} · excedente ${Util.money(c.excedente)}">${c.monto ? `<strong>${money(c.monto)}</strong>` : '<span class="muted">—</span>'}<div class="cell-sub">${Util.money0(c.facturado)}</div></td>`).join('')}
+        <td class="r num"><strong>${money(Util.sum(f.cs, c => c.monto))}</strong></td></tr>`).join('')}
+      </tbody>${filas.length > 1 ? `<tfoot><tr><td>Total</td>${meses.map((m, i) => `<td class="r num">${money(Util.sum(filas, f => f.cs[i].monto))}</td>`).join('')}<td class="r num">${money(Util.sum(filas, f => Util.sum(f.cs, c => c.monto)))}</td></tr></tfoot>` : ''}</table></div>
+      <p class="small muted" style="margin-bottom:0">Comisión = (facturado del mes sin IGV − meta de ${Util.money0(Config.META_MENSUAL_USD)}) × ${Util.pct(Config.COMISION_PCT)}, solo si se supera la meta. Bajo cada monto, lo facturado en el mes. *Mes en curso: puede subir hasta el cierre.</p>`;
+  }
+  const ultimos6 = () => [-5, -4, -3, -2, -1, 0].map(m => Util.monthKey(Util.addMonths(hoy(), m)));
   PAGES['dashboard'] = async () => {
     const db = S.db, h = hoy(), vid = S.dash.vendedor || null;
     const mesIni = Util.startOfMonth(h), desde6 = Util.addMonths(h, -5), mk = Util.monthKey(h);
@@ -3832,6 +3870,7 @@ const UI = (() => {
         ${kpi('Seguro (ganadas, 100%)', money(T.ganada.total), fact ? 'ganadas por facturar' : `incluye ${Util.money0(porCobrarFacturado)} ya facturado`)}
         ${kpi('Ponderado (abiertas)', money(T.abierta.total), 'monto × probabilidad')}
       </div>
+      ${u.rol === 'vendedor' ? (() => { const p = Rules.comisionProyectada(db, u.id, h); return `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Mis comisiones</h2><span class="sub">Estimada este mes: ${money(p.monto)}</span></div>${comisionesHTML([u], ultimos6())}</section>`; })() : ''}
       ${u.rol === 'vendedor' ? `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Mi fúnel de oportunidades</h2>${funnelToggle()}</div>${funnelHTML({ vendedorId: u.id })}</section>` : ''}
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>${fact ? 'Facturación proyectada' : 'Cobranza proyectada'} por horizonte</h2><span class="sub">USD ${fact ? 'sin IGV' : 'con IGV'}</span></div>
         <div class="stack" id="proy-grid">
@@ -3886,8 +3925,11 @@ const UI = (() => {
         ${kpi('Por cobrar', money(Util.sum(ests.filter(e => e.cls === 'warn'), e => e.pend)), 'aún no vence')}
         ${kpi('Vencido sin cobrar', money(Util.sum(ests.filter(e => e.cls === 'bad'), e => e.pend)), 'requiere gestión de cobranza')}
       </div>
+      <div class="small muted" style="margin-top:8px">Comisiones del mes en curso: <strong>${money(Util.sum(F.vendedor ? [usr(F.vendedor)] : vendedores(), v => Rules.comision(db, v.id, Util.monthKey(h)).monto))}</strong> · detalle por vendedor más abajo.</div>
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Facturado por mes vs meta</h2><span class="sub">*mes en curso</span></div>
         ${chartSlot('ch-fact', { categories: sm.cats, series: sm.series, line: { name: 'Meta', label: 'Meta ' + kfmt(sm.meta), values: sm.cats.map(() => sm.meta) }, height: 230, totalLabels: true, aria: 'Facturado por mes' })}</section>
+      <section class="card" style="margin-top:14px"><div class="card-head"><h2>Comisiones de vendedores</h2><span class="sub">2 % sobre lo facturado por encima de la meta</span></div>
+        ${comisionesHTML(F.vendedor ? [usr(F.vendedor)] : vendedores(), ultimos6())}</section>
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Detalle de facturas</h2></div>
         <div class="table-wrap" style="max-height:560px"><table class="tbl"><thead><tr><th>Fecha factura</th><th>Cliente</th><th>Vend.</th><th>N° cotización</th><th>Condición de pago</th><th class="r">Neto sin IGV</th><th class="r">Total con IGV</th><th>Cobranza</th></tr></thead><tbody>
           ${rows.map((o, i) => { const q = Rules.vigente(db, o); return `<tr${Rules.puede(S.user, 'ver_opp', o) ? ` class="clickable" data-action="abrir" data-id="${o.id}"` : ''}><td class="nowrap">${Util.fmtDate(o.postventa.facturado)}</td><td>${E(cli(o.clienteId).razonSocial)}</td><td>${vendTag(usr(o.vendedorId))}</td>

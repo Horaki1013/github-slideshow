@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia:** los cambios viven en memoria durante la sesión. No se usa `localStorage` ni otro almacenamiento. El botón **Restablecer datos de demo** (menú de usuario) regenera todo.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 10/10 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 11/11 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -125,6 +125,19 @@ El `Repo` vuelve a validar el rol en cada cambio, como lo haría el backend.
 - **Barrera en el repositorio:** el `.gitignore` bloquea los archivos `*PRIVADO*`, los `.xlsx` y los CSV de listas de precios dentro de esta carpeta.
 - **Producción:** la lista vive en la base de datos y la API la entrega solo a usuarios autenticados. Las búsquedas se hacen en el servidor, de modo que el navegador no recibe la lista completa.
 
+## Comisiones de vendedores
+
+- **Regla** (`Rules.comision`): comisión del mes = (facturado del mes sin IGV − meta mensual) × 2 %, **solo si se supera la meta**. Ejemplo: 41K facturados con meta de 40K → (41,000 − 40,000) × 2 % = **USD 20**.
+- **Parámetro:** el porcentaje está en `Config.COMISION_PCT` (0.02).
+- **Cálculo por mes:** no es acumulativa entre meses; no hay tope; se calcula sobre lo **facturado**, no sobre lo cobrado.
+- **Dónde se ve:**
+  - **Vendedor:**
+    - En Mi día: su comisión del mes, cuánto le falta para empezar a comisionar y una **estimación** si se facturan las ganadas y el ponderado del mes (`Rules.comisionProyectada`).
+    - En "Mi proyección": su historial de 6 meses.
+  - **Jefatura:** columna "Comisión del mes" en el ranking del Dashboard.
+  - **Jefatura y finanzas:** tabla "Comisiones de vendedores" en Facturado, con 6 meses por vendedor y totales.
+  - **El ranking visible para todo el equipo no muestra comisiones:** cada vendedor solo ve la suya.
+
 ## Descuentos
 
 El descuento de una cotización puede ingresarse **en porcentaje o en monto**. En porcentaje se aplica sobre la suma (`descuentoTipo`, `descuentoPct`), y la ficha y el PDF muestran "Descuento (x%)".
@@ -235,10 +248,11 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 6. **Persistencia** de toda la información.
 7. **Importación de los FUP actuales**, con mapeo de columnas que varían entre vendedores. Hay que normalizar las probabilidades intermedias a la etapa más cercana y convertir el motivo de pérdida de texto libre a la lista cerrada.
 8. **Generación del PDF en el servidor**, envío desde el Outlook del vendedor con copia al buzón común, catálogo y lista de precios reales, y aprobación de descuentos especiales o de registro con la marca.
-9. **Lista de precios en el servidor:** búsqueda en la API, permisos por rol, historial de precios por producto, varias listas (Lista 1, 2…) y aprobación de precios por debajo de un margen.
-10. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
-11. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
-12. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
+9. **Comisiones:** confirmar si se calculan sobre lo facturado o lo cobrado, si hay tope o escalas, y cómo tratar notas de crédito o anulaciones; luego integrar con planillas.
+10. **Lista de precios en el servidor:** búsqueda en la API, permisos por rol, historial de precios por producto, varias listas (Lista 1, 2…) y aprobación de precios por debajo de un margen.
+11. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
+12. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
+13. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
 
 ## Decisiones tomadas con el negocio para el prototipo
 
@@ -250,6 +264,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - Una sola factura por oportunidad.
 - Proyecto obligatorio, con la opción "Compra directa".
 - Descuento en porcentaje o en monto.
+- Comisión del 2 % sobre lo facturado (sin IGV) por encima de la meta mensual; mensual, sin tope, sobre lo facturado.
 - Jefatura asigna cuentas; los vendedores registran cuentas nuevas, que quedan asignadas a ellos.
 - Estado de la cuenta automático con umbral de 60 días. Alerta al vendedor y a jefatura cuando el estado es "No responde" o "Sin contacto".
 - Agenda de contactos común y opcional.
