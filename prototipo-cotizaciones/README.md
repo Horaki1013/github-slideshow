@@ -133,7 +133,7 @@ El descuento de una cotización puede ingresarse **en porcentaje o en monto**. E
 
 | Entidad | Campos |
 |---|---|
-| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura o finanzas) |
+| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura, finanzas o admin) |
 | **Cliente** | `id`, `razonSocial`, `ruc` (11 dígitos), `vendedorId`, `ciudad`, `tipo`, `fechaAlta`, `registradoPor`, `contactos[]` (id, nombre, cargo, correo, teléfono; todo opcional salvo el nombre). El **segmento** (T1, T2 o CO) y el **estado** (activo, no responde o sin contacto) se calculan (`Rules.segmento`, `Rules.cuentas`). `vendedorId` puede ser nulo (sin asignar) |
 | **Proyecto** | `id`, `nombre`, `usuarioFinal`, `tipo` (estatal, privado o directa). `PR-DIRECTA` = "Compra directa (sin proyecto)". Un proyecto puede tener oportunidades de varios integradores |
 | **Oportunidad** | `id`, `clienteId`, `proyectoId`, `vendedorId`, `etapa` (la probabilidad se deriva), `fechaInicio`, `fechaOC` (estimada, la define el vendedor), `proxContacto`, `motivoPerdida`, `motivoOtro`, `fechaReactivacion`, `fechaCierre`, `postventa`, `origen` (correo, pdf o manual), `pendiente` (leída del correo y aún sin completar) |
@@ -261,4 +261,4 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - Fuente: Century Gothic, con alternativas sans-serif si no está instalada. Color principal `#015088`.
 - Los campos de fecha usan el selector nativo del navegador, que muestra el formato según el idioma del sistema (dd/mm/aaaa en un Windows o Chrome configurado en español de Perú). En todo el texto de la interfaz las fechas se muestran como dd/mm/aaaa.
 - El CSV exportado usa `;` como separador y UTF-8 con BOM, para que Excel lo abra directamente.
-- Probado en Chromium headless a 1366 px y 375 px de ancho con los tres roles: sin errores en la consola, sin desborde horizontal y con los flujos principales verificados.
+- Probado en Chromium headless a 1366 px y 375 px de ancho con los cuatro roles: sin errores en la consola, sin desborde horizontal y con los flujos principales verificados.
