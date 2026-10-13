@@ -1927,6 +1927,8 @@ const Repo = (() => {
         try { guardado = Almacen.disponible() ? await Almacen.leer('db') : null; } catch (e) { estado.error = 'El navegador no permite guardar datos: ' + e.message; }
         db = guardado ? JSON.parse(guardado) : desdeSeed(seed);
         if (!guardado) programarGuardado();
+        // El archivo trae una versión nueva de los datos iniciales: se avisa y no se pisa lo guardado sin confirmar
+        estado.seedNuevo = guardado && db.seedId !== (seed.id || seed.generado) ? { generado: seed.generado } : null;
         return true;
       }
       db = DemoData.generate(hoy()); cargarListaPrivada(); return true;
@@ -1936,6 +1938,13 @@ const Repo = (() => {
     estadoGuardado: () => Object.assign({ modo }, estado),
     alCambiarEstado: fn => { oyentes.push(fn); },
     /** Respaldo completo (JSON) — en producción lo hará el servidor */
+    /** Reemplaza los datos de este navegador por los datos iniciales que trae el archivo; devuelve el respaldo de lo anterior */
+    async adoptarSeedNuevo() {
+      if (!estado.seedNuevo) fail('No hay una versión nueva de datos iniciales.');
+      const anterior = JSON.stringify(Object.assign({}, db, { respaldo: { fecha: new Date().toISOString(), por: 'cambio-de-version' } }));
+      db = desdeSeed(SEED()); estado.seedNuevo = null; touch();
+      return anterior;
+    },
     async exportarRespaldo(usuarioId) {
       exigir(usuarioId, 'gestionar_usuarios', 'Solo gerencia, jefatura o administración pueden exportar el respaldo completo.');
       return JSON.stringify(Object.assign({}, db, { respaldo: { fecha: new Date().toISOString(), por: usuarioId } }));
@@ -2210,6 +2219,17 @@ const Repo = (() => {
       touch();
     },
     /** PATCH /clientes/:id/vendedor (solo jefatura) — mueve también sus oportunidades abiertas y en pausa */
+    /** POST /verificaciones — gerencia confirma un dato marcado "a verificar" (p. ej. supuestos de una migración) */
+    async marcarVerificado(tipo, id, nota, usuarioId) {
+      exigir(usuarioId, 'asignar_cuenta', 'Solo gerencia o jefatura pueden marcar como verificado.');
+      const lista = tipo === 'cliente' ? db.clients : db.opps;
+      const x = lista.find(r => r.id === id) || fail('Registro no encontrado.');
+      if (!x.verificar) return;
+      x.verificado = { fecha: hoy(), por: usuarioId, texto: x.verificar, nota: String(nota || '').trim() };
+      delete x.verificar;
+      if (tipo !== 'cliente') log(x, `Verificado por gerencia: ${x.verificado.texto}${x.verificado.nota ? ' — ' + x.verificado.nota : ''}`, usuarioId);
+      touch();
+    },
     async reasignarCliente(clienteId, vendedorId, usuarioId) {
       const c = db.clients.find(x => x.id === clienteId) || fail('Cliente no encontrado.');
       c.vendedorId = vendedorId;
@@ -2613,6 +2633,18 @@ const UI = (() => {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 3000);
       toast('Respaldo exportado. Guárdalo en una carpeta interna: contiene información confidencial.');
+    } catch (e) { toast(e.message); }
+  };
+  ACTIONS['adoptar-seed'] = async () => {
+    if (!confirm('Se reemplazarán los datos de este navegador por la versión nueva. Antes se descargará un respaldo de lo actual. ¿Continuar?')) return;
+    try {
+      const txt = await Repo.adoptarSeedNuevo();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
+      a.download = `respaldo-version-anterior-${hoy()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      S.db = await Repo.snapshot(); S.user = null; guardarSesion(null); location.hash = '#/login'; toast('Versión nueva cargada. Ingresa con tu contraseña inicial.'); render();
     } catch (e) { toast(e.message); }
   };
   ACTIONS['respaldo-importar'] = () => { const i = $('#respaldo-file'); if (i) i.click(); };
@@ -3196,6 +3228,7 @@ const UI = (() => {
           <label class="field">Contraseña<input type="password" name="clave" autocomplete="current-password"></label>
           <button class="btn primary" type="submit" style="width:100%">Ingresar</button>
         </form>
+        ${Repo.estadoGuardado().seedNuevo ? `<div class="alert warn" style="margin-top:14px"><div class="small"><strong>Este archivo trae datos iniciales nuevos (${Util.fmtDate(Repo.estadoGuardado().seedNuevo.generado)}).</strong> Este navegador todavía usa la versión anterior. Al cambiar, se descarga primero un respaldo de lo anterior y los usuarios vuelven a sus contraseñas iniciales.</div><button class="btn sm" data-action="adoptar-seed">Usar la versión nueva</button></div>` : ''}
         <div class="alert info" style="margin-top:14px"><div class="small"><strong>Piloto interno.</strong> Los datos se guardan en este navegador. Si olvidaste tu contraseña, pide a gerencia o al administrador que la restablezca.</div></div>
       </div></div>`;
       return;
@@ -3308,7 +3341,8 @@ const UI = (() => {
     Rules.oppsVisibles(db, S.user).forEach(o => {
       if (F.etapa === 'abiertas' && !Rules.esAbierta(o)) return;
       if (F.etapa === 'cerradas' && Rules.esAbierta(o)) return;
-      if (F.etapa && !['abiertas', 'cerradas', 'todas'].includes(F.etapa) && o.etapa !== F.etapa) return;
+      if (F.etapa === 'verificar' && !o.verificar) return;
+      if (F.etapa && !['abiertas', 'cerradas', 'todas', 'verificar'].includes(F.etapa) && o.etapa !== F.etapa) return;
       if (F.cliente && o.clienteId !== F.cliente) return;
       if (F.proyecto && o.proyectoId !== F.proyecto) return;
       if (F.vendedor && o.vendedorId !== F.vendedor) return;
@@ -3349,7 +3383,7 @@ const UI = (() => {
     const clientes = [...new Set(visibles.map(o => o.clienteId))].map(cli).sort((a, b) => a.razonSocial.localeCompare(b.razonSocial));
     const proyectos = [...new Set(visibles.map(o => o.proyectoId))].map(proj).filter(p => p.tipo !== 'directa').sort((a, b) => a.nombre.localeCompare(b.nombre));
     const th = (col, label, cls) => `<th class="sortable ${cls || ''}" data-action="sort" data-col="${col}" aria-sort="${S.orden.col === col ? (S.orden.dir > 0 ? 'ascending' : 'descending') : 'none'}">${label}${S.orden.col === col ? (S.orden.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
-    const etapaOpts = [['abiertas', 'Abiertas (funnel)'], ['todas', 'Todas'], ['cerradas', 'Cerradas y en pausa'], ...Config.ETAPAS.map(e => [e.id, e.nombre])];
+    const etapaOpts = [['abiertas', 'Abiertas (funnel)'], ['todas', 'Todas'], ['cerradas', 'Cerradas y en pausa'], ...Config.ETAPAS.map(e => [e.id, e.nombre]), ...(visibles.some(o => o.verificar) ? [['verificar', 'A verificar por gerencia']] : [])];
     const h = hoy();
     view().innerHTML = `
       <div class="page-head"><div><h1>Oportunidades</h1><p class="muted">${jef ? 'Todo el equipo' : 'Tus oportunidades'} · columnas equivalentes al FUP</p></div>
@@ -3452,7 +3486,7 @@ const UI = (() => {
     const estadoCierre = o.etapa === 'ganada' ? `<div class="alert ok"><div><strong>Ganada</strong> · OC del ${Util.fmtDate(Rules.fechaOCRef(o))}. Avanza la post-venta abajo.</div></div>`
       : o.etapa === 'perdida' ? `<div class="alert ${Rules.motivo(o.motivoPerdida).noCuentaComoPerdida ? 'info' : 'bad'}"><div><strong>Perdida</strong> el ${Util.fmtDate(o.fechaCierre)} · Motivo: ${E(Rules.motivo(o.motivoPerdida).nombre)}${o.motivoOtro ? ' — ' + E(o.motivoOtro) : ''}${Rules.motivo(o.motivoPerdida).noCuentaComoPerdida ? ' (no cuenta como pérdida en los indicadores)' : ''}</div></div>`
       : o.etapa === 'pausa' ? `<div class="alert info"><div><strong>En pausa</strong> · Reactivar el ${Util.fmtDate(o.fechaReactivacion)}. Está fuera del funnel y de la proyección.</div>${ed ? `<button class="btn sm" data-action="reactivar" data-id="${o.id}">${I('play')} Reactivar</button>` : ''}</div>` : '';
-    const pendiente = o.pendiente ? `<div class="alert warn"><div><strong>Cotización leída automáticamente del correo.</strong> Para entrar a tu seguimiento solo falta la etapa, el próximo contacto y la fecha estimada de OC.</div>${ed ? `<button class="btn sm primary" data-action="completar" data-id="${o.id}">Completar ahora</button>` : ''}</div>` : '';
+    const pendiente = o.pendiente ? `<div class="alert warn"><div><strong>${S.db.numeracion ? 'Oportunidad migrada o leída del correo, por completar.' : 'Cotización leída automáticamente del correo.'}</strong> Para entrar a tu seguimiento solo falta la etapa, el próximo contacto y la fecha estimada de OC.</div>${ed ? `<button class="btn sm primary" data-action="completar" data-id="${o.id}">Completar ahora</button>` : ''}</div>` : '';
     const quick = ed && abierta && !o.pendiente ? `<div class="quick" style="margin-top:14px">
         <button class="btn" data-action="contacte" data-id="${o.id}">${I('check')}Contacté</button>
         <button class="btn" data-action="mas3" data-id="${o.id}" title="Contacté hoy; vuelvo en 3 días hábiles">${I('clock')}+3 días</button>
@@ -3479,6 +3513,7 @@ const UI = (() => {
           <div class="btn-row">${alertas.map(alertChip).join('')}</div>
         </div>
         ${pendiente || estadoCierre ? `<div style="margin-top:12px">${pendiente}${estadoCierre}</div>` : ''}
+        ${verificarHTML('opp', o)}
         <div class="facts">
           <div class="fact"><div class="l">Etapa</div>${etapaSel}<div class="small muted" style="margin-top:4px">${E(Rules.etapa(o.etapa).criterio)}</div></div>
           <div class="fact"><div class="l">Probabilidad <span class="muted">derivada</span></div><div class="v">${probTxt(o)}</div></div>
@@ -4061,6 +4096,7 @@ const UI = (() => {
     view().innerHTML = `
       <div class="page-head"><div><h1>Dashboard comercial</h1><p class="muted">${mesTxt(h)} · al ${Util.fmtDate(h)}</p></div>
         <label class="field" style="min-width:220px">Ver<select data-change="dash">${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), S.dash.vendedor, 'Toda la empresa')}</select></label></div>
+      ${(() => { const nc = db.clients.filter(c => c.verificar).length, no = db.opps.filter(o => o.verificar).length; return nc || no ? `<div class="alert warn" style="margin-bottom:14px"><div><strong>Datos a verificar por gerencia.</strong> Supuestos de la migración que necesitan confirmación:${nc ? ` <a href="#/cuentas" data-action="ver-verificar" data-t="cuentas">${nc} cuenta(s)</a>` : ''}${nc && no ? ' y' : ''}${no ? ` <a href="#/oportunidades" data-action="ver-verificar" data-t="opps">${no} oportunidad(es)</a>` : ''}. Cada ficha explica qué revisar.</div></div>` : ''; })()}
       <div class="grid g5">
         ${kpi(vid ? 'Facturado del mes vs meta' : 'Facturado del mes vs meta empresa', Util.money0(facturado), `${Util.pct(facturado / metaEmp)} de ${money(metaEmp)}`, meterHTML(facturado / metaEmp, 'Meta'))}
         ${kpi('Pipeline ponderado', Util.money0(Util.sum(abiertas, o => Rules.ponderado(db, o))), `${abiertas.length} abiertas · ${money(Util.sum(abiertas, o => Rules.montoUSD(db, o)))} sin ponderar`)}
@@ -4342,7 +4378,8 @@ const UI = (() => {
     const inf = Rules.cuentas(db, h);
     const base = jef ? db.clients.slice() : db.clients.filter(c => c.vendedorId === u.id);
     let cs = base;
-    if (F.estado) cs = cs.filter(c => inf[c.id].estado === F.estado);
+    if (F.estado === '__verificar') cs = cs.filter(c => c.verificar);
+    else if (F.estado) cs = cs.filter(c => inf[c.id].estado === F.estado);
     if (jef && F.vendedor) cs = cs.filter(c => F.vendedor === '__sin' ? !c.vendedorId : c.vendedorId === F.vendedor);
     if (F.q.trim()) { const t = F.q.trim().toLowerCase(); cs = cs.filter(c => (c.razonSocial + ' ' + c.ruc + ' ' + c.contactos.map(k => k.nombre).join(' ')).toLowerCase().includes(t)); }
     cs = cs.slice().sort((a, b) => (jef ? (!a.vendedorId ? -1 : 0) - (!b.vendedorId ? -1 : 0) : 0) || ORDEN_ESTADO[inf[a.id].estado] - ORDEN_ESTADO[inf[b.id].estado] || inf[b.id].diasSinCotizar - inf[a.id].diasSinCotizar);
@@ -4360,12 +4397,12 @@ const UI = (() => {
       </div>
       <div class="card" style="padding:12px;margin-top:14px"><div class="filters" style="margin:0">
         <label class="field">Buscar<input type="text" data-input="ctaf" name="q" value="${E(F.q)}" placeholder="Razón social, RUC o contacto"></label>
-        <label class="field">Estado<select data-change="ctaf" name="estado">${options(Object.entries(Config.ESTADOS_CUENTA).map(([k, e]) => [k, e.nombre]), F.estado, 'Todos')}</select></label>
+        <label class="field">Estado<select data-change="ctaf" name="estado">${options([...Object.entries(Config.ESTADOS_CUENTA).map(([k, e]) => [k, e.nombre]), ...(base.some(c => c.verificar) ? [['__verificar', 'A verificar por gerencia']] : [])], F.estado, 'Todos')}</select></label>
         ${jef ? `<label class="field">Vendedor<select data-change="ctaf" name="vendedor">${options([['__sin', 'Sin asignar'], ...vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre])], F.vendedor, 'Todos')}</select></label>` : ''}
       </div><div class="small muted" id="cta-count" style="margin-top:8px">${cs.length} cuentas</div></div>
       <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:${jef ? 1100 : 960}px"><thead><tr><th>Cuenta</th><th>Estado</th><th>Última cotización</th><th>Último contacto</th><th class="r">Abiertas</th><th class="r">Contactos</th>${jef ? '<th>Vendedor asignado</th>' : '<th></th>'}</tr></thead><tbody>
         ${cs.map(c => { const r = inf[c.id]; return `<tr>
-          <td><a href="#/cuenta/${c.id}" class="cell-main" style="color:inherit">${E(c.razonSocial)}</a> ${segHTML(c.id)}<div class="cell-sub">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)}</div></td>
+          <td><a href="#/cuenta/${c.id}" class="cell-main" style="color:inherit">${E(c.razonSocial)}</a> ${segHTML(c.id)}${c.verificar ? ` <span class="chip warn" title="${E(c.verificar)}">A verificar</span>` : ''}<div class="cell-sub">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)}</div></td>
           <td>${estadoChip(r.estado)}</td>
           <td class="nowrap">${r.ultimaCot ? Util.fmtDate(r.ultimaCot) : '<span class="muted">Ninguna</span>'}<div class="cell-sub">${r.alerta ? `<span style="color:var(--bad);font-weight:700">${r.ultimaCot ? 'hace' : 'alta hace'} ${r.diasSinCotizar} días</span>` : `${r.ultimaCot ? 'hace' : 'alta hace'} ${r.diasSinCotizar} días`}</div></td>
           <td class="nowrap">${r.ultimoContacto ? `${Util.fmtDate(r.ultimoContacto.fecha)}<div class="cell-sub">${E(r.ultimoContacto.canal)} · ${resultadoTxt(r.ultimoContacto.resultado)}</div>` : '<span class="muted">—</span>'}</td>
@@ -4375,6 +4412,22 @@ const UI = (() => {
         </tr>`; }).join('') || `<tr><td colspan="7" class="center muted" style="padding:20px">No hay cuentas con estos filtros.</td></tr>`}
       </tbody></table></div>
       <p class="small muted">${Object.values(Config.ESTADOS_CUENTA).map(e => `<strong>${e.nombre}:</strong> ${E(e.regla)}`).join(' · ')}</p>`;
+  };
+  /* Aviso "A verificar por gerencia" en fichas de cuenta y oportunidad */
+  function verificarHTML(tipo, x) {
+    if (x.verificar) return `<div class="alert warn" style="margin-top:12px"><div><strong>A verificar por gerencia:</strong> ${E(x.verificar)}</div>${S.user.rol === 'jefatura' ? `<button class="btn sm" data-action="verificado" data-t="${tipo}" data-id="${x.id}">${I('check')} Marcar como verificado</button>` : ''}</div>`;
+    if (x.verificado) { const u = usr(x.verificado.por); return `<div class="small muted" style="margin-top:8px">✓ Verificado por ${E(u ? u.nombre : 'gerencia')} el ${Util.fmtDate(x.verificado.fecha)}: ${E(x.verificado.texto)}${x.verificado.nota ? ' — ' + E(x.verificado.nota) : ''}</div>`; }
+    return '';
+  }
+  ACTIONS['verificado'] = el => {
+    const { t, id } = el.dataset;
+    modal({ title: 'Marcar como verificado', body: `<p style="margin-top:0">Confirma que gerencia revisó este dato. Si corresponde, corrige primero la asignación, la etapa o la post-venta.</p><label class="field">Nota (opcional)<textarea name="nota" rows="2" placeholder="Ej.: confirmado con finanzas"></textarea></label>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Marcar verificado', cls: 'primary', onClick: async root => { await Repo.marcarVerificado(t, id, val(root, 'nota'), S.user.id); toast('Marcado como verificado.'); refresh(); } }] });
+  };
+  ACTIONS['ver-verificar'] = (el, e) => {
+    if (e) e.preventDefault();
+    if (el.dataset.t === 'cuentas') { S.ctaF = { estado: '__verificar', vendedor: '', q: '' }; location.hash = '#/cuentas'; }
+    else { S.filtros = Object.assign(filtrosIniciales(), { etapa: 'verificar' }); location.hash = '#/oportunidades'; }
   };
   CHANGES['ctaf'] = el => { S.ctaF[el.name] = el.value; render(true); };
   let tCta = null;
@@ -4405,6 +4458,7 @@ const UI = (() => {
           <div class="small muted" style="margin-top:2px">Alta ${Util.fmtDate(c.fechaAlta)}${reg ? ' · registrada por ' + E(reg.nombre) : ''} · Vendedor: ${c.vendedorId ? E(usr(c.vendedorId).nombre) : '<strong>Sin asignar</strong>'}</div>
         </div>
         <div class="btn-row">${gest ? `<button class="btn" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Nueva cotización</button>` : ''}</div></div>
+        ${verificarHTML('cliente', c)}
         ${al ? `<div class="alert ${al.nivel === 'bad' ? 'bad' : 'warn'}" style="margin-top:12px"><div><strong>${E(al.texto)}.</strong> ${E(Config.ESTADOS_CUENTA[r.estado].regla)} La alerta llega al vendedor asignado y a jefatura.</div></div>` : ''}
         <div class="facts">
           <div class="fact"><div class="l">Estado</div><div class="v">${Config.ESTADOS_CUENTA[r.estado].nombre}</div></div>
@@ -4670,7 +4724,7 @@ const UI = (() => {
     SelfTest.run();
     if (Repo.modo() === 'piloto') {
       S.db = await Repo.snapshot();
-      try { const id = sessionStorage.getItem('tv-sesion'); if (id) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
+      try { const id = sessionStorage.getItem('tv-sesion'); if (id && !Repo.estadoGuardado().seedNuevo) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
     }
     window.addEventListener('hashchange', () => render());
     window.addEventListener('resize', () => { clearTimeout(tResize); tResize = setTimeout(drawCharts, 150); });

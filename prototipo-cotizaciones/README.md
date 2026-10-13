@@ -49,6 +49,10 @@ El mismo `index.html` funciona en dos modos:
 | Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
 | Lectura simulada del PDF | Visible | Oculta |
 
+**Datos "a verificar por gerencia".** Una cuenta u oportunidad puede traer el campo `verificar` con un texto que explica qué confirmar. Se usa, por ejemplo, para los supuestos de una migración. El dashboard de gerencia muestra cuántas hay y enlaza a la lista filtrada ("A verificar por gerencia" en Cuentas y en Oportunidades). Cada ficha muestra el aviso, y gerencia o jefatura lo cierra con **Marcar como verificado**, con una nota opcional. Queda registrado quién lo verificó y cuándo (`verificado`).
+
+**Versión nueva de datos iniciales.** Si se abre un HTML del piloto con datos iniciales distintos de los guardados en el navegador, la pantalla de ingreso lo avisa y ofrece **Usar la versión nueva**. Antes de reemplazar, descarga un respaldo de lo anterior. Nunca se pisa lo guardado sin confirmar.
+
 Menú de usuario en el piloto: **Exportar respaldo** (JSON con toda la información), **Restaurar respaldo**, **Cambiar contraseña** y, para gerencia y administración, **Reiniciar con los datos iniciales**.
 
 Limitaciones del piloto, aceptadas por el negocio:
