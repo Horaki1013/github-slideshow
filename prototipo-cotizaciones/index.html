@@ -2391,10 +2391,114 @@ const Almacen = (() => {
   };
 })();
 
+/* =====================================================================
+   CAPA 3b · ALMACÉN COMPARTIDO — carpeta de red de la empresa (recurso
+   compartido de Windows, p. ej. Z:\Ventas\Piloto) elegida por el usuario.
+   Usa la API de acceso a archivos de Edge/Chrome: sin servidor ni nube.
+   Archivos: datos.json (todo menos la lista de precios), lista-precios.json,
+   bloqueo.json (una escritura a la vez) y respaldos/ (una copia por día).
+   En producción se reemplaza por la API del servidor local.
+   ===================================================================== */
+const AlmacenCompartido = (() => {
+  const RESPALDOS = 30;
+  let dir = null, cacheLista = null;
+  const marca = { datos: null, lista: null };
+  const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const esperar = ms => new Promise(r => setTimeout(r, ms));
+  const firma = f => f.lastModified + ':' + f.size;
+  async function archivo(nombre) { try { return await dir.getFileHandle(nombre); } catch (e) { if (e.name === 'NotFoundError' || e.name === 'TypeError') return null; throw e; } }
+  async function leerArchivo(nombre) { const h = await archivo(nombre); if (!h) return null; const f = await h.getFile(); return { texto: await f.text(), firma: firma(f) }; }
+  async function firmaDe(nombre) { const h = await archivo(nombre); return h ? firma(await h.getFile()) : null; }
+  async function escribirArchivo(nombre, texto, carpeta) {
+    const h = await (carpeta || dir).getFileHandle(nombre, { create: true });
+    const w = await h.createWritable(); await w.write(texto); await w.close();   // el archivo se reemplaza completo al cerrar
+    return firma(await h.getFile());
+  }
+  const json = t => { try { return JSON.parse(t); } catch (e) { return null; } };
+  const vacio = () => ({ catalogo: [], catalogoInfo: null, catalogoLog: [] });
+  async function respaldoDelDia() {
+    const actual = await leerArchivo('datos.json'); if (!actual) return;
+    const r = await dir.getDirectoryHandle('respaldos', { create: true });
+    const nombre = `datos-${Util.today()}.json`;
+    try { await r.getFileHandle(nombre); return; } catch (e) { /* aún no hay respaldo de hoy */ }
+    await escribirArchivo(nombre, actual.texto, r);
+    const nombres = []; for await (const [n] of r.entries()) if (/^datos-\d{4}-\d{2}-\d{2}\.json$/.test(n)) nombres.push(n);
+    nombres.sort().slice(0, Math.max(0, nombres.length - RESPALDOS)).forEach(n => r.removeEntry(n).catch(() => {}));
+  }
+  return {
+    soportado: () => typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function',
+    nombre: () => dir ? dir.name : '',
+    /** Abre el selector de carpetas (requiere un clic del usuario) y recuerda la carpeta en este navegador */
+    async elegir() { const h = await window.showDirectoryPicker({ id: 'techvalue-piloto', mode: 'readwrite' }); try { await Almacen.escribir('carpeta', h); } catch (e) { /* no se pudo recordar */ } return h; },
+    async recordada() { try { return await Almacen.leer('carpeta'); } catch (e) { return null; } },
+    async olvidar() { dir = null; try { await Almacen.borrar('carpeta'); } catch (e) { /* sin efecto */ } },
+    async permiso(h, pedir) {
+      const o = { mode: 'readwrite' };
+      if (!h.queryPermission) return true;
+      let p = await h.queryPermission(o);
+      if (p !== 'granted' && pedir) p = await h.requestPermission(o);
+      return p === 'granted';
+    },
+    usar(h) { dir = h; cacheLista = null; marca.datos = marca.lista = null; },
+    async vacia() { return !(await archivo('datos.json')); },
+    /** Lee todo (datos + lista de precios) */
+    async leer() {
+      const d = await leerArchivo('datos.json'); if (!d) return null;
+      const l = await leerArchivo('lista-precios.json');
+      const datos = json(d.texto); if (!datos || !Array.isArray(datos.opps)) throw new Error('datos.json de la carpeta compartida está dañado. Restaura una copia de la carpeta "respaldos".');
+      cacheLista = l ? json(l.texto) : null;
+      marca.datos = d.firma; marca.lista = l ? l.firma : null;
+      return Object.assign(datos, cacheLista || vacio());
+    },
+    /** Devuelve los datos si otro usuario los cambió desde la última lectura o escritura; si no, null */
+    async leerSiCambio() {
+      const fd = await firmaDe('datos.json'), fl = await firmaDe('lista-precios.json');
+      if (fd === marca.datos && fl === marca.lista) return null;
+      if (fl !== marca.lista || !cacheLista) { const l = await leerArchivo('lista-precios.json'); cacheLista = l ? json(l.texto) : null; marca.lista = l ? l.firma : null; }
+      const d = await leerArchivo('datos.json'); if (!d) return null;
+      const datos = json(d.texto); if (!datos || !Array.isArray(datos.opps)) throw new Error('datos.json de la carpeta compartida está dañado.');
+      marca.datos = d.firma;
+      return Object.assign(datos, cacheLista || vacio());
+    },
+    /** Escribe los datos; la lista de precios (unos 4 MB) solo cuando cambió */
+    async escribir(db, quien, listaCambio) {
+      const { catalogo, catalogoInfo, catalogoLog, ...resto } = db;
+      if (listaCambio || !marca.lista) { cacheLista = { catalogo, catalogoInfo, catalogoLog }; marca.lista = await escribirArchivo('lista-precios.json', JSON.stringify(cacheLista)); }
+      await respaldoDelDia();
+      resto._escrito = { por: quien || '', en: new Date().toISOString() };
+      marca.datos = await escribirArchivo('datos.json', JSON.stringify(resto));
+    },
+    /** Una escritura a la vez entre todas las PC. Un bloqueo abandonado (12 s sin cambiar) se toma */
+    async bloquear(quien) {
+      const inicio = Date.now(); let visto = null, desde = 0;
+      for (;;) {
+        const l = await leerArchivo('bloqueo.json'), b = l && json(l.texto);
+        if (b && b.token !== token) {
+          if (visto !== b.token) { visto = b.token; desde = Date.now(); }
+          if (Date.now() - desde < 12000) {
+            if (Date.now() - inicio > 20000) throw new Error(`La carpeta compartida está ocupada${b.quien ? ' por ' + b.quien : ''}. Intenta de nuevo en unos segundos.`);
+            await esperar(200 + Math.random() * 300); continue;
+          }
+        }
+        await escribirArchivo('bloqueo.json', JSON.stringify({ token, quien: quien || '', desde: new Date().toISOString() }));
+        await esperar(60 + Math.random() * 60);
+        const c = await leerArchivo('bloqueo.json'), cb = c && json(c.texto);
+        if (cb && cb.token === token) return true;
+      }
+    },
+    async liberar() {
+      const l = await leerArchivo('bloqueo.json'), b = l && json(l.texto);
+      if (b && b.token === token) await dir.removeEntry('bloqueo.json').catch(() => {});
+    },
+  };
+})();
+
 const Repo = (() => {
   let db = null;
   let modo = 'demo';                       // 'demo' (memoria) | 'piloto' (se guarda en el navegador)
-  const estado = { guardado: null, error: null, pendiente: false };
+  const estado = { guardado: null, error: null, pendiente: false, compartida: false, carpeta: '', remoto: null };
+  let quien = '';                          // nombre del usuario que escribe (para el bloqueo y el registro en la carpeta)
+  const oyentesRemotos = [];
   let tGuardar = null;
   const oyentes = [];
   const avisar = () => oyentes.forEach(f => { try { f(Object.assign({ modo }, estado)); } catch (e) { /* sin efecto */ } });
@@ -2443,7 +2547,37 @@ const Repo = (() => {
   };
   const logCatalogo = (usuarioId, accion) => db.catalogoLog.unshift({ fecha: hoy(), usuarioId, accion });
 
-  return {
+  /* Con carpeta compartida, cada escritura toma el bloqueo, lee lo último de la carpeta, aplica el cambio y lo guarda
+     de inmediato. Si no se puede guardar, se descarta el cambio (se vuelve a leer la carpeta) para no quedar distinto a los demás. */
+  let cola = Promise.resolve();
+  const enCola = fn => { const p = cola.then(fn, fn); cola = p.catch(() => {}); return p; };
+  const CAMBIAN_LISTA = new Set(['guardarProducto', 'quitarProducto', 'importarCatalogo', 'importarRespaldo', 'reiniciarPiloto']);
+  const avisarRemoto = () => oyentesRemotos.forEach(f => { try { f(); } catch (e) { /* sin efecto */ } });
+  async function escrituraCompartida(nombre, fn) {
+    estado.pendiente = true; avisar();
+    try { await AlmacenCompartido.bloquear(quien); }
+    catch (e) { estado.pendiente = false; estado.error = e.message; avisar(); throw e; }
+    try {
+      const n = await AlmacenCompartido.leerSiCambio();
+      if (n) { db = n; db._v = Date.now(); estado.remoto = new Date(); avisarRemoto(); }
+      const v0 = db._v;
+      const r = await fn();
+      if (db._v !== v0) {
+        try { await AlmacenCompartido.escribir(db, quien, CAMBIAN_LISTA.has(nombre)); }
+        catch (e) {
+          try { db = await AlmacenCompartido.leer(); db._v = Date.now(); } catch (e2) { /* queda lo de memoria */ }
+          avisarRemoto();
+          throw new Error('No se pudo guardar en la carpeta compartida (' + e.message + '). El cambio no se aplicó; intenta de nuevo.');
+        }
+        estado.guardado = new Date(); estado.error = null;
+      }
+      return r;
+    } finally {
+      await AlmacenCompartido.liberar().catch(() => {});
+      estado.pendiente = false; avisar();
+    }
+  }
+  const api = {
     /** GET /demo/reset  (en producción: carga inicial desde la API) */
     /** Carga inicial: en el piloto, lo guardado en este navegador; si no hay nada, la data inicial (FUP migrados). En la demo, data ficticia. */
     async init() {
@@ -2454,8 +2588,13 @@ const Repo = (() => {
         try { guardado = Almacen.disponible() ? await Almacen.leer('db') : null; } catch (e) { estado.error = 'El navegador no permite guardar datos: ' + e.message; }
         db = guardado ? JSON.parse(guardado) : desdeSeed(seed);
         if (!guardado) programarGuardado();
+        // Carpeta compartida recordada y con permiso vigente: se conecta sola
+        if (AlmacenCompartido.soportado()) {
+          try { const h = await AlmacenCompartido.recordada(); if (h && await AlmacenCompartido.permiso(h, false)) { const r = await this.revisarCarpeta(h); if (!r.vacia) await this.conectarCarpeta(h); } }
+          catch (e) { estado.error = 'Carpeta compartida: ' + e.message; }
+        }
         // El archivo trae una versión nueva de los datos iniciales: se avisa y no se pisa lo guardado sin confirmar
-        estado.seedNuevo = guardado && db.seedId !== (seed.id || seed.generado) ? { generado: seed.generado } : null;
+        estado.seedNuevo = guardado && !estado.compartida && db.seedId !== (seed.id || seed.generado) ? { generado: seed.generado } : null;
         return true;
       }
       db = DemoData.generate(hoy()); cargarListaPrivada(); return true;
@@ -2499,9 +2638,52 @@ const Repo = (() => {
       const ok = u && (u.claveHash ? Util.sha256(u.salt + clave) === u.claveHash : u.clave === clave);
       if (!ok) fail('Usuario o contraseña incorrectos.');
       if (u.activo === false) fail('Este usuario está desactivado. Consulta con el administrador.');
+      quien = u.nombre;
       return u;
     },
-    sesion(id) { const u = db.users.find(x => x.id === id); return u && u.activo !== false ? u : null; },
+    sesion(id) { const u = db.users.find(x => x.id === id); if (u && u.activo !== false) { quien = u.nombre; return u; } return null; },
+    /* ---- Carpeta compartida (piloto) ---- */
+    compartida: () => estado.compartida,
+    alCambioRemoto: fn => { oyentesRemotos.push(fn); },
+    /** ¿La carpeta está vacía? ¿Este navegador tiene cambios propios que no están en ninguna carpeta? */
+    async revisarCarpeta(h) {
+      AlmacenCompartido.usar(h);
+      return { vacia: await AlmacenCompartido.vacia(), localConCambios: !!(db && db.modo === 'piloto' && !db._compartido && db._v > 1), nombre: h.name };
+    },
+    /** Conecta la carpeta. Vacía: la inicia con los datos de este navegador o con los iniciales. Con datos: los toma */
+    async conectarCarpeta(h, { siVacia = 'local' } = {}) {
+      AlmacenCompartido.usar(h);
+      let anterior = null;
+      const remoto = await AlmacenCompartido.leer();
+      if (remoto) {
+        if (db && db.modo === 'piloto' && !db._compartido && db._v > 1) anterior = JSON.stringify(db);
+        db = remoto; db._v = Date.now();
+      } else {
+        if (siVacia === 'seed' || !db) db = desdeSeed(SEED());
+        db._compartido = true;
+        await AlmacenCompartido.bloquear(quien);
+        try { await AlmacenCompartido.escribir(db, quien, true); } finally { await AlmacenCompartido.liberar(); }
+      }
+      Object.assign(estado, { compartida: true, carpeta: h.name, error: null, seedNuevo: null, guardado: new Date() });
+      programarGuardado(); avisar();
+      return { anterior };
+    },
+    async desconectarCarpeta() { await AlmacenCompartido.olvidar(); Object.assign(estado, { compartida: false, carpeta: '' }); avisar(); },
+    /** Trae los cambios de otros usuarios (la UI lo llama cada pocos segundos) */
+    refrescar() {
+      if (!estado.compartida) return Promise.resolve(false);
+      return enCola(async () => {
+        try {
+          const n = await AlmacenCompartido.leerSiCambio();
+          if (estado.error && /carpeta/i.test(estado.error)) { estado.error = null; avisar(); }
+          if (!n) return false;
+          db = n; db._v = Date.now(); estado.remoto = new Date(); programarGuardado();
+          oyentesRemotos.forEach(f => { try { f(); } catch (e) { /* sin efecto */ } });
+          return true;
+        } catch (e) { estado.error = 'Sin conexión con la carpeta compartida'; avisar(); return false; }
+      });
+    },
+
     async cambiarClave(usuarioId, actual, nueva) {
       const u = usuarioDe(usuarioId) || fail('Usuario no encontrado.');
       if (u.claveHash ? Util.sha256(u.salt + actual) !== u.claveHash : u.clave !== actual) fail('La contraseña actual no es correcta.', { actual: 'Incorrecta' });
@@ -2833,6 +3015,15 @@ const Repo = (() => {
       return { oppId: o.id, quoteId: q.id };
     },
   };
+  // Todo método que no sea de lectura pasa por escrituraCompartida cuando hay carpeta conectada
+  const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'sesion',
+    'compartida', 'alCambioRemoto', 'revisarCarpeta', 'conectarCarpeta', 'desconectarCarpeta', 'refrescar', 'adoptarSeedNuevo']);
+  Object.keys(api).forEach(k => {
+    const f = api[k];
+    if (typeof f !== 'function' || LECTURAS.has(k)) return;
+    api[k] = function (...args) { return estado.compartida ? enCola(() => escrituraCompartida(k, () => f.apply(api, args))) : f.apply(api, args); };
+  });
+  return api;
 })();
 
 /* =====================================================================
@@ -3090,8 +3281,8 @@ const UI = (() => {
     const u = S.user;
     const items = NAV[u.rol];
     $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
-      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? 'Piloto Techvalue Perú. Los datos se guardan en este navegador.' : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
-    $('#mode-badge').textContent = piloto() ? 'Piloto Perú · datos en este navegador' : 'Prototipo · data ficticia';
+      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? (Repo.compartida() ? `Piloto Techvalue Perú. Datos del equipo en la carpeta compartida «${E(Repo.estadoGuardado().carpeta)}».` : 'Piloto Techvalue Perú. Los datos se guardan en este navegador.') : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
+    $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia';
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
@@ -3136,8 +3327,10 @@ const UI = (() => {
   function textoGuardado(e) {
     if (!e || e.modo !== 'piloto') return '';
     if (e.error) return `<span style="color:var(--bad);font-weight:700">⚠ ${E(e.error)}</span>`;
-    if (e.pendiente) return 'Guardando…';
-    return e.guardado ? `✓ Guardado ${Util.pad(e.guardado.getHours())}:${Util.pad(e.guardado.getMinutes())}` : '✓ Datos cargados';
+    if (e.pendiente) return e.compartida ? 'Guardando en la carpeta…' : 'Guardando…';
+    const hh = d => `${Util.pad(d.getHours())}:${Util.pad(d.getMinutes())}`;
+    if (e.compartida) return `✓ ${e.guardado ? 'Guardado ' + hh(e.guardado) : 'Conectado'}${e.remoto ? ` · cambios de otros ${hh(e.remoto)}` : ''}`;
+    return e.guardado ? `✓ Guardado ${hh(e.guardado)}` : '✓ Datos cargados';
   }
   Repo.alCambiarEstado(e => { const el = document.getElementById('save-status'); if (el) el.innerHTML = textoGuardado(e); });
   ACTIONS['toggle-user'] = () => {
@@ -3151,14 +3344,14 @@ const UI = (() => {
           <button class="btn bad" data-action="piloto-reiniciar">${I('refresh')} Reiniciar con los datos iniciales…</button>` : ''}
         ${piloto() ? '' : `<button class="btn" data-action="reset-demo">${I('refresh')} Restablecer datos de demo</button>`}
         <button class="btn" data-action="logout">${I('logout')} Cerrar sesión</button>
-        <p class="small muted" style="margin:4px 0 0">${piloto() ? 'Piloto: los datos se guardan solo en este navegador y equipo. Exporta un respaldo con frecuencia. Más adelante se guardarán en el servidor local de la empresa.' : 'Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.'}</p>
+        <p class="small muted" style="margin:4px 0 0">${piloto() ? (Repo.compartida() ? 'Piloto: los datos del equipo están en la carpeta compartida (con una copia diaria en «respaldos»). Más adelante se guardarán en el servidor local de la empresa.' : 'Piloto: los datos se guardan solo en este navegador y equipo. Conecta la carpeta compartida en la pantalla de ingreso para trabajar en equipo.') : 'Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.'}</p>
       </footer></div>`;
     S.popover = 'user';
     const inp = $('#respaldo-file');
     if (inp) inp.addEventListener('change', async () => {
       const f = inp.files[0]; if (!f) return;
       const texto = await f.text();
-      modal({ title: 'Restaurar respaldo', body: `<div class="alert warn"><div>Se reemplazarán <strong>todos</strong> los datos de este navegador por los de <strong>${E(f.name)}</strong>. Esta acción no se puede deshacer.</div></div>`,
+      modal({ title: 'Restaurar respaldo', body: `<div class="alert warn"><div>Se reemplazarán <strong>todos</strong> los datos ${Repo.compartida() ? 'de todo el equipo (carpeta compartida)' : 'de este navegador'} por los de <strong>${E(f.name)}</strong>. Esta acción no se puede deshacer.</div></div>`,
         actions: [{ label: 'Cancelar' }, { label: 'Restaurar', cls: 'bad', onClick: async () => { await Repo.importarRespaldo(texto, S.user.id); S.db = await Repo.snapshot(); S.user = Repo.sesion(S.user.id); toast('Respaldo restaurado.'); render(); } }] });
     });
   };
@@ -3189,7 +3382,7 @@ const UI = (() => {
   ACTIONS['respaldo-importar'] = () => { const i = $('#respaldo-file'); if (i) i.click(); };
   ACTIONS['piloto-reiniciar'] = () => {
     closePopover();
-    modal({ title: 'Reiniciar con los datos iniciales', body: `<div class="alert bad"><div>Se borrarán todos los cambios hechos en este navegador (contactos, cotizaciones, usuarios, contraseñas) y se volverá a la data migrada de los FUP. <strong>Exporta un respaldo antes.</strong></div></div>
+    modal({ title: 'Reiniciar con los datos iniciales', body: `<div class="alert bad"><div>Se borrarán todos los cambios hechos ${Repo.compartida() ? 'por todo el equipo en la carpeta compartida' : 'en este navegador'} (contactos, cotizaciones, usuarios, contraseñas) y se volverá a la data migrada de los FUP. <strong>Exporta un respaldo antes.</strong></div></div>
       <label class="field" style="margin-top:12px">Escribe REINICIAR para confirmar<input type="text" name="conf"></label>`,
       actions: [{ label: 'Cancelar' }, { label: 'Reiniciar', cls: 'bad', onClick: async root => {
         if (val(root, 'conf').trim().toUpperCase() !== 'REINICIAR') { const e = new Error('Escribe REINICIAR para confirmar.'); e.campos = { conf: 'Requerido' }; throw e; }
@@ -3762,13 +3955,14 @@ const UI = (() => {
       view().innerHTML = `<div class="login-wrap"><div class="card login-card">
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px"><div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>
           <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A. · Piloto Perú</div></div></div>
-        <form data-submit="login" class="stack" autocomplete="on">
+        ${carpetaHTML()}
+        <form data-submit="login" class="stack" autocomplete="on"${S.carpetaRecordada && !Repo.compartida() ? ' inert style="opacity:.5"' : ''}>
           <label class="field">Usuario<input type="text" name="usuario" autocapitalize="none" autocomplete="username"></label>
           <label class="field">Contraseña<input type="password" name="clave" autocomplete="current-password"></label>
           <button class="btn primary" type="submit" style="width:100%">Ingresar</button>
         </form>
         ${Repo.estadoGuardado().seedNuevo ? `<div class="alert warn" style="margin-top:14px"><div class="small"><strong>Este archivo trae datos iniciales nuevos (${Util.fmtDate(Repo.estadoGuardado().seedNuevo.generado)}).</strong> Este navegador todavía usa la versión anterior. Al cambiar, se descarga primero un respaldo de lo anterior y los usuarios vuelven a sus contraseñas iniciales.</div><button class="btn sm" data-action="adoptar-seed">Usar la versión nueva</button></div>` : ''}
-        <div class="alert info" style="margin-top:14px"><div class="small"><strong>Piloto interno.</strong> Los datos se guardan en este navegador. Si olvidaste tu contraseña, pide a gerencia o al administrador que la restablezca.</div></div>
+        <div class="alert info" style="margin-top:14px"><div class="small"><strong>Piloto interno.</strong> ${Repo.compartida() ? 'Los datos se guardan en la carpeta compartida del equipo.' : 'Sin carpeta compartida, los datos se guardan solo en este navegador.'} Si olvidaste tu contraseña, pide a gerencia o al administrador que la restablezca.</div></div>
       </div></div>`;
       return;
     }
@@ -3792,7 +3986,55 @@ const UI = (() => {
         <p class="small muted">Meta de cada vendedor: ${money(Config.META_MENSUAL_USD)} facturados por mes (sin IGV). Meta de la empresa: 5 × 40K.</p>
       </div></div>`;
   }
-  function renderChromeLoggedOut() { $('#sidenav').innerHTML = ''; $('#bottomnav').innerHTML = ''; }
+  /* ---- Carpeta compartida (recurso compartido de red, sin servidor ni nube) ---- */
+  function carpetaHTML() {
+    const e = Repo.estadoGuardado();
+    if (!AlmacenCompartido.soportado()) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Este navegador no puede usar la carpeta compartida.</strong> Abre el archivo en Microsoft Edge o Google Chrome para trabajar con los datos del equipo. Aquí los datos quedan solo en este navegador.</div></div>`;
+    if (e.compartida) return `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ Carpeta compartida: ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos.</div><button class="btn sm ghost" data-action="carpeta-elegir">Cambiar</button></div>`;
+    if (S.carpetaRecordada) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Conecta la carpeta compartida «${E(S.carpetaRecordada.name)}»</strong> para ver los datos del equipo. El navegador te pedirá permiso.
+      <br><a href="#" data-action="carpeta-olvidar">No usar carpeta en esta PC</a></div><button class="btn sm primary" data-action="carpeta-conectar">Conectar</button></div>`;
+    return `<div class="alert info" style="margin-bottom:12px"><div class="small"><strong>Carpeta compartida del equipo.</strong> Elige la carpeta de red acordada (por ejemplo Z:\Ventas\Piloto); todos deben elegir la misma. Sin carpeta, los datos quedan solo en este navegador.</div><button class="btn sm primary" data-action="carpeta-elegir">Elegir carpeta…</button></div>`;
+  }
+  function descargarTexto(txt, nombre) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
+    a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }
+  async function conectarCarpeta(h) {
+    try {
+      const r = await Repo.revisarCarpeta(h);
+      if (r.vacia && r.localConCambios) {
+        modal({ title: 'La carpeta compartida está vacía', body: `<p style="margin-top:0">La carpeta <strong>${E(r.nombre)}</strong> todavía no tiene datos. ¿Con qué datos empieza el equipo?</p>
+          <div class="alert info"><div>Este navegador tiene registros propios (por ejemplo, cotizaciones que ya ingresaste). Si eres quien más ha usado el piloto, empieza con estos datos.</div></div>`,
+          actions: [{ label: 'Cancelar' }, { label: 'Datos iniciales del piloto', onClick: () => terminarConexion(h, 'seed') }, { label: 'Datos de este navegador', cls: 'primary', onClick: () => terminarConexion(h, 'local') }] });
+        return;
+      }
+      await terminarConexion(h, 'local');
+    } catch (e) { toast('No se pudo usar la carpeta: ' + e.message); }
+  }
+  async function terminarConexion(h, siVacia) {
+    const { anterior } = await Repo.conectarCarpeta(h, { siVacia });
+    S.carpetaRecordada = h; S.db = await Repo.snapshot();
+    if (S.user) S.user = Repo.sesion(S.user.id);
+    toast(`Conectado a la carpeta ${h.name}.`);
+    await render();
+    if (anterior) {
+      descargarTexto(anterior, `respaldo-este-navegador-${hoy()}.json`);
+      modal({ title: 'Registros de este navegador', body: `<p style="margin-top:0">Este navegador tenía registros propios que no están en la carpeta compartida. Se descargó un respaldo (<strong>respaldo-este-navegador-${hoy()}.json</strong>).</p><p>Desde ahora se trabaja con los datos de la carpeta. Si esos registros hacen falta, envía el respaldo a gerencia.</p>`, actions: [{ label: 'Entendido', cls: 'primary' }] });
+    }
+  }
+  ACTIONS['carpeta-elegir'] = async () => {
+    let h; try { h = await AlmacenCompartido.elegir(); } catch (e) { if (e.name !== 'AbortError') toast('No se pudo abrir la carpeta: ' + e.message); return; }
+    await conectarCarpeta(h);
+  };
+  ACTIONS['carpeta-conectar'] = async () => {
+    const h = S.carpetaRecordada; if (!h) return;
+    try { if (!(await AlmacenCompartido.permiso(h, true))) { toast('Sin permiso para usar la carpeta.'); return; } } catch (e) { toast('No se pudo acceder a la carpeta: ' + e.message); return; }
+    await conectarCarpeta(h);
+  };
+  ACTIONS['carpeta-olvidar'] = async () => { await Repo.desconectarCarpeta(); S.carpetaRecordada = null; render(); };
+  function renderChromeLoggedOut() { $('#sidenav').innerHTML = ''; $('#bottomnav').innerHTML = ''; $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia'; }
   async function entrar(usuario, clave) {
     try {
       S.user = await Repo.login(usuario, clave);
@@ -5345,7 +5587,17 @@ const UI = (() => {
     SelfTest.run();
     if (Repo.modo() === 'piloto') {
       S.db = await Repo.snapshot();
-      try { const id = sessionStorage.getItem('tv-sesion'); if (id && !Repo.estadoGuardado().seedNuevo) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
+      if (AlmacenCompartido.soportado()) S.carpetaRecordada = await AlmacenCompartido.recordada();
+      // Cambios de otros usuarios en la carpeta compartida: se ven sin recargar (salvo mientras se edita algo)
+      Repo.alCambioRemoto(async () => {
+        S.db = await Repo.snapshot();
+        if (S.user) { const u = Repo.sesion(S.user.id); if (!u) { S.user = null; guardarSesion(null); location.hash = '#/login'; toast('Tu usuario fue desactivado.'); render(); return; } S.user = u; }
+        const ocupado = document.querySelector('#modal-root .modal') || S.ruta === 'nueva' || S.ruta === 'login' || (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
+        if (!ocupado && S.user) refresh();
+      });
+      setInterval(() => Repo.refrescar(), 8000);
+      window.addEventListener('focus', () => Repo.refrescar());
+      try { const id = sessionStorage.getItem('tv-sesion'); if (id && !Repo.estadoGuardado().seedNuevo && !(S.carpetaRecordada && !Repo.compartida())) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
     }
     window.addEventListener('hashchange', () => render());
     window.addEventListener('resize', () => { clearTimeout(tResize); tResize = setTimeout(drawCharts, 150); });

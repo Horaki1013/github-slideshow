@@ -42,7 +42,7 @@ El mismo `index.html` funciona en dos modos:
 | | Demo (este repositorio) | Piloto (archivo privado, no se publica) |
 |---|---|---|
 | Data | Ficticia, generada al cargar | Inicial migrada de los FUP reales, inyectada en el HTML como `window.__PILOTO_SEED` |
-| Persistencia | Ninguna (memoria) | IndexedDB del navegador (`techvalue-piloto`), guardado automático; la sesión dura mientras la pestaña esté abierta |
+| Persistencia | Ninguna (memoria) | **Carpeta compartida de red** (recurso compartido de Windows), común para todo el equipo. Sin carpeta, IndexedDB del navegador (`techvalue-piloto`). La sesión dura mientras la pestaña esté abierta |
 | Login | Usuarios de demo con clave `demo` | Usuario y contraseña propios; la primera vez obliga a cambiar la contraseña temporal |
 | Numeración de cotizaciones | Texto libre | Secuencia general `TV-AAAA-0001`, correlativa para todos |
 | Datos de la empresa en el PDF | Ficticios | Los reales (vienen en la data inicial, no en el código) |
@@ -53,11 +53,38 @@ El mismo `index.html` funciona en dos modos:
 
 **Versión nueva de datos iniciales.** Si se abre un HTML del piloto con datos iniciales distintos de los guardados en el navegador, la pantalla de ingreso lo avisa y ofrece **Usar la versión nueva**. Antes de reemplazar, descarga un respaldo de lo anterior. Nunca se pisa lo guardado sin confirmar.
 
+### Carpeta compartida (sin servidor ni nube)
+
+Durante el piloto, todos trabajan con los mismos datos guardados en una **carpeta de red de la empresa** (por ejemplo `Z:\Ventas\Piloto`). No hay servidor ni nube: cada navegador lee y escribe archivos en esa carpeta con la API de acceso a archivos de **Edge o Chrome** (`showDirectoryPicker`).
+
+- **Conexión:** en la pantalla de ingreso, **Elegir carpeta…** (una vez por PC). El navegador recuerda la carpeta. En cada sesión basta **Conectar** (pide permiso) o se conecta sola si el permiso sigue vigente.
+- **Carpeta vacía:** la primera PC la inicia con los datos iniciales o, si su navegador ya tenía registros propios, con esos datos. Si una PC con registros propios se conecta a una carpeta que ya tiene datos, se descarga un respaldo de lo suyo y pasa a usar los de la carpeta.
+- **Archivos:**
+
+  | Archivo | Contenido |
+  |---|---|
+  | `datos.json` | Todo, menos la lista de precios (unos 2 MB) |
+  | `lista-precios.json` | La lista de precios (unos 4 MB); se reescribe solo cuando cambia |
+  | `bloqueo.json` | Existe solo mientras una PC escribe |
+  | `respaldos/datos-AAAA-MM-DD.json` | Una copia por día; se guardan los últimos 30 días |
+
+- **Escrituras:** cada método de escritura del `Repo` sigue estos pasos:
+  1. Toma el bloqueo.
+  2. Lee lo último de la carpeta.
+  3. Aplica el cambio.
+  4. Guarda de inmediato y suelta el bloqueo.
+
+  Así dos PC que guardan a la vez no se pisan. Si una PC se apaga a mitad, su bloqueo se toma a los 12 s. Si no se puede guardar, el cambio se descarta y se avisa, para no quedar distinto a los demás.
+- **Lecturas:** cada 8 s, y al volver a la ventana, se revisa si otro usuario cambió algo. Si cambió, la pantalla se actualiza sola, salvo mientras el usuario edita un formulario o tiene un modal abierto.
+- **Sin cambiar las reglas ni las pantallas:** todo vive en la capa `AlmacenCompartido` y en un envoltorio de los métodos de escritura al final del `Repo`. Para migrar al servidor local se reemplaza esa capa por llamadas HTTP con la misma firma.
+- **Navegadores sin la API** (Firefox, Safari): la plataforma avisa y trabaja solo en ese navegador.
+
 Menú de usuario en el piloto: **Exportar respaldo** (JSON con toda la información), **Restaurar respaldo**, **Cambiar contraseña** y, para gerencia y administración, **Reiniciar con los datos iniciales**.
 
 Limitaciones del piloto, aceptadas por el negocio:
 
-- **La información vive en cada navegador.** Lo que registra un usuario en su PC no lo ve otro usuario en otra PC. Para compartir, se usa el respaldo JSON. El siguiente paso es guardar en el **servidor local de la empresa** (sin nube): basta con reemplazar `Almacen` (`leer` / `escribir` / `borrar`) por llamadas a una API interna. `Repo` y la UI no cambian.
+- **Carpeta compartida, no servidor.** Funciona bien para un equipo chico (un guardado tarda menos de un segundo en la red local), pero cada guardado reescribe `datos.json` completo. Con más usuarios o más datos conviene el **servidor local de la empresa** (sin nube): se reemplaza `AlmacenCompartido` por una API interna, y `Repo` y la UI no cambian.
+- Quien tenga acceso a la carpeta puede leer los archivos. Los permisos de la carpeta de red son la protección real durante el piloto.
 - Las contraseñas se validan en el navegador. Sirven para separar perfiles, pero no son seguridad real mientras no haya servidor.
 - El contador de inactividad de cuentas (60 días) empieza a correr desde el inicio del piloto (`inicioSeguimiento`), para no marcar como inactivas todas las cuentas migradas el primer día.
 
@@ -71,7 +98,8 @@ El HTML del piloto se arma fuera del repositorio con scripts privados: migració
 | 1b | `LectorPDF`, `LecturaCotizacion` | Extraen el texto de un PDF (objetos, flujos Flate/ASCII85/Hex, fuentes WinAnsi y ToUnicode, posiciones) e interpretan la plantilla de cotización | Lectura en el servidor desde el correo (IA + librería PDF) |
 | 1 | `Util` | Fechas ISO, días hábiles con feriados de Perú, formatos `USD 12,345.67` y `dd/mm/aaaa`, aleatorio con semilla | Se mantiene |
 | 2 | `DemoData` | Generador de la data ficticia | **Se elimina** |
-| 3a | `Almacen` | Guarda y lee el estado del piloto en IndexedDB (no actúa en la demo) | **Se reemplaza por la API del servidor local** |
+| 3a | `Almacen` | Guarda y lee el estado del piloto en IndexedDB (no actúa en la demo) y recuerda la carpeta compartida | Se mantiene como caché local |
+| 3b | `AlmacenCompartido` | Lee y escribe `datos.json`, `lista-precios.json`, el bloqueo y los respaldos en la carpeta de red | **Se reemplaza por la API del servidor local** |
 | 3 | `Repo` | Única puerta de lectura y escritura. Todos sus métodos son `async`; cada uno indica en un comentario el endpoint REST sugerido | **Se reemplaza por llamadas HTTP** con la misma firma |
 | 4 | `Rules` | Reglas de negocio puras: reciben la data y devuelven resultados | Se replica en el backend (la UI puede seguir usándolas para mostrar) |
 | 5 | `SelfTest` | Casos de prueba de las reglas | Se convierte en pruebas unitarias |
@@ -285,7 +313,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 3. **Orquestación** (por ejemplo, n8n o colas) para la ingesta y las alertas programadas: resumen diario a las 8:00 a. m. y semanal los lunes.
 4. **Base de datos y API** que implemente `Repo` con las mismas reglas de `Rules`, más la auditoría de cambios.
 5. **Login corporativo** (Microsoft 365 / Entra ID) y permisos en el servidor.
-6. **Persistencia compartida** en el servidor local de la empresa. El piloto guarda solo en cada navegador.
+6. **Persistencia en el servidor local de la empresa.** El piloto comparte los datos con una carpeta de red, sin servidor.
 7. **Importación de los FUP actuales**, con mapeo de columnas que varían entre vendedores. Hay que normalizar las probabilidades intermedias a la etapa más cercana y convertir el motivo de pérdida de texto libre a la lista cerrada.
 8. **Generación del PDF en el servidor**, envío desde el Outlook del vendedor con copia al buzón común, catálogo y lista de precios reales, y aprobación de descuentos especiales o de registro con la marca.
 9. **Comisiones:** confirmar si se calculan sobre lo facturado o lo cobrado, si hay tope o escalas, y cómo tratar notas de crédito o anulaciones; luego integrar con planillas.
