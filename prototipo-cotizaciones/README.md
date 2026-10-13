@@ -5,7 +5,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Archivo único:** `index.html` (HTML + CSS + JS). Se abre con doble clic en Chrome o Edge. No necesita servidor, build ni internet.
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
-- **Sin persistencia:** los cambios viven en memoria durante la sesión. No se usa `localStorage` ni otro almacenamiento. El botón **Restablecer datos de demo** (menú de usuario) regenera todo.
+- **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
 - **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 11/11 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
@@ -26,11 +26,38 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 | Rol | Pantallas | Puede editar |
 |---|---|---|
 | Vendedor | Mi día, Oportunidades (las suyas), Ficha, Nueva cotización, Mis cuentas, Agenda de contactos, Lista de precios (consulta), Mi proyección (con su fúnel), Ranking, Notificaciones | Solo lo suyo; puede registrar cuentas nuevas (quedan asignadas a él) y contactos de sus cuentas |
-| Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Lista de precios, Proyección, Facturado, Notificaciones | Crear cuentas, asignar o reasignar cuentas y oportunidades, editar contactos, mantener la lista de precios |
-| Finanzas | Proyección de facturación y cobranza, Facturado, Lista de precios, Agenda de contactos | Solo la lista de precios |
-| Administración | Lista de precios, Agenda de contactos | La lista de precios |
+| Gerencia / Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Lista de precios, Proyección, Facturado, Post-venta, Usuarios, Notificaciones | Todo: crear cuentas, asignar o reasignar cuentas y oportunidades entre Account Managers, editar contactos, mantener la lista de precios, marcar cualquier paso de post-venta, crear usuarios y restablecer contraseñas |
+| Finanzas | Proyección de facturación y cobranza, Facturado, Post-venta, Lista de precios, Agenda de contactos | La lista de precios y, en el piloto, los pasos "Facturado" y "Cobrado" |
+| Logística / Soporte (solo piloto) | Post-venta, Lista de precios (consulta), Agenda de contactos | En el piloto, los pasos físicos: pedido al proveedor, en tránsito, recibido y entregado |
+| Administración del sistema | Usuarios, Lista de precios, Agenda de contactos | Usuarios (alta, rol, meta, activar o desactivar, contraseña temporal) y la lista de precios |
+
+En la interfaz, el rol "Vendedor" se muestra como **Account Manager**.
 
 Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario entra por URL a una ruta o a una oportunidad que no le corresponde, el sistema lo redirige o le muestra "Sin acceso".
+
+## Modo piloto (uso interno de prueba)
+
+El mismo `index.html` funciona en dos modos:
+
+| | Demo (este repositorio) | Piloto (archivo privado, no se publica) |
+|---|---|---|
+| Data | Ficticia, generada al cargar | Inicial migrada de los FUP reales, inyectada en el HTML como `window.__PILOTO_SEED` |
+| Persistencia | Ninguna (memoria) | IndexedDB del navegador (`techvalue-piloto`), guardado automático; la sesión dura mientras la pestaña esté abierta |
+| Login | Usuarios de demo con clave `demo` | Usuario y contraseña propios; la primera vez obliga a cambiar la contraseña temporal |
+| Numeración de cotizaciones | Texto libre | Secuencia general `TV-AAAA-0001`, correlativa para todos |
+| Datos de la empresa en el PDF | Ficticios | Los reales (vienen en la data inicial, no en el código) |
+| Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
+| Lectura simulada del PDF | Visible | Oculta |
+
+Menú de usuario en el piloto: **Exportar respaldo** (JSON con toda la información), **Restaurar respaldo**, **Cambiar contraseña** y, para gerencia y administración, **Reiniciar con los datos iniciales**.
+
+Limitaciones del piloto, aceptadas por el negocio:
+
+- **La información vive en cada navegador.** Lo que registra un usuario en su PC no lo ve otro usuario en otra PC. Para compartir, se usa el respaldo JSON. El siguiente paso es guardar en el **servidor local de la empresa** (sin nube): basta con reemplazar `Almacen` (`leer` / `escribir` / `borrar`) por llamadas a una API interna. `Repo` y la UI no cambian.
+- Las contraseñas se validan en el navegador. Sirven para separar perfiles, pero no son seguridad real mientras no haya servidor.
+- El contador de inactividad de cuentas (60 días) empieza a correr desde el inicio del piloto (`inicioSeguimiento`), para no marcar como inactivas todas las cuentas migradas el primer día.
+
+El HTML del piloto se arma fuera del repositorio con scripts privados: migración de los FUP a JSON y armado del HTML con usuarios y contraseñas temporales. Ni la data ni esos archivos se suben aquí; `.gitignore` bloquea `*PRIVADO*` y los `.xlsx`.
 
 ## Estructura del código (capas dentro de `index.html`)
 
@@ -39,6 +66,7 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 | 0 | `Config` | Catálogos y parámetros: etapas, probabilidades, motivos de pérdida, condiciones de pago, plazos, horizontes, feriados, meta | Tabla de parámetros administrable |
 | 1 | `Util` | Fechas ISO, días hábiles con feriados de Perú, formatos `USD 12,345.67` y `dd/mm/aaaa`, aleatorio con semilla | Se mantiene |
 | 2 | `DemoData` | Generador de la data ficticia | **Se elimina** |
+| 3a | `Almacen` | Guarda y lee el estado del piloto en IndexedDB (no actúa en la demo) | **Se reemplaza por la API del servidor local** |
 | 3 | `Repo` | Única puerta de lectura y escritura. Todos sus métodos son `async`; cada uno indica en un comentario el endpoint REST sugerido | **Se reemplaza por llamadas HTTP** con la misma firma |
 | 4 | `Rules` | Reglas de negocio puras: reciben la data y devuelven resultados | Se replica en el backend (la UI puede seguir usándolas para mostrar) |
 | 5 | `SelfTest` | Casos de prueba de las reglas | Se convierte en pruebas unitarias |
@@ -146,7 +174,7 @@ El descuento de una cotización puede ingresarse **en porcentaje o en monto**. E
 
 | Entidad | Campos |
 |---|---|
-| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura, finanzas o admin) |
+| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura, finanzas, logistica o admin), `activo`. En el piloto, además: `usuario`, `salt`, `claveHash` (SHA-256 de sal + contraseña) y `debeCambiar` |
 | **Cliente** | `id`, `razonSocial`, `ruc` (11 dígitos), `vendedorId`, `ciudad`, `tipo`, `fechaAlta`, `registradoPor`, `contactos[]` (id, nombre, cargo, correo, teléfono; todo opcional salvo el nombre). El **segmento** (T1, T2 o CO) y el **estado** (activo, no responde o sin contacto) se calculan (`Rules.segmento`, `Rules.cuentas`). `vendedorId` puede ser nulo (sin asignar) |
 | **Proyecto** | `id`, `nombre`, `usuarioFinal`, `tipo` (estatal, privado o directa). `PR-DIRECTA` = "Compra directa (sin proyecto)". Un proyecto puede tener oportunidades de varios integradores |
 | **Oportunidad** | `id`, `clienteId`, `proyectoId`, `vendedorId`, `etapa` (la probabilidad se deriva), `fechaInicio`, `fechaOC` (estimada, la define el vendedor), `proxContacto`, `motivoPerdida`, `motivoOtro`, `fechaReactivacion`, `fechaCierre`, `postventa`, `origen` (correo, pdf o manual), `pendiente` (leída del correo y aún sin completar) |
@@ -245,14 +273,14 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 3. **Orquestación** (por ejemplo, n8n o colas) para la ingesta y las alertas programadas: resumen diario a las 8:00 a. m. y semanal los lunes.
 4. **Base de datos y API** que implemente `Repo` con las mismas reglas de `Rules`, más la auditoría de cambios.
 5. **Login corporativo** (Microsoft 365 / Entra ID) y permisos en el servidor.
-6. **Persistencia** de toda la información.
+6. **Persistencia compartida** en el servidor local de la empresa. El piloto guarda solo en cada navegador.
 7. **Importación de los FUP actuales**, con mapeo de columnas que varían entre vendedores. Hay que normalizar las probabilidades intermedias a la etapa más cercana y convertir el motivo de pérdida de texto libre a la lista cerrada.
 8. **Generación del PDF en el servidor**, envío desde el Outlook del vendedor con copia al buzón común, catálogo y lista de precios reales, y aprobación de descuentos especiales o de registro con la marca.
 9. **Comisiones:** confirmar si se calculan sobre lo facturado o lo cobrado, si hay tope o escalas, y cómo tratar notas de crédito o anulaciones; luego integrar con planillas.
 10. **Lista de precios en el servidor:** búsqueda en la API, permisos por rol, historial de precios por producto, varias listas (Lista 1, 2…) y aprobación de precios por debajo de un margen.
 11. **Facturación parcial** (varias facturas por oportunidad). El prototipo asume una sola factura.
 12. **Tipo de cambio real** (por ejemplo, SBS o SUNAT) y su histórico.
-13. Parametrización de metas por vendedor y mes, administración de usuarios, catálogo de productos y feriados móviles.
+13. Parametrización de metas por vendedor y mes y de feriados móviles. La administración de usuarios ya existe en el piloto, pero sin seguridad de servidor.
 
 ## Decisiones tomadas con el negocio para el prototipo
 
@@ -276,4 +304,4 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - Fuente: Century Gothic, con alternativas sans-serif si no está instalada. Color principal `#015088`.
 - Los campos de fecha usan el selector nativo del navegador, que muestra el formato según el idioma del sistema (dd/mm/aaaa en un Windows o Chrome configurado en español de Perú). En todo el texto de la interfaz las fechas se muestran como dd/mm/aaaa.
 - El CSV exportado usa `;` como separador y UTF-8 con BOM, para que Excel lo abra directamente.
-- Probado en Chromium headless a 1366 px y 375 px de ancho con los cuatro roles: sin errores en la consola, sin desborde horizontal y con los flujos principales verificados.
+- Probado en Chromium headless a 1366 px y 375 px de ancho con todos los roles, en modo demo y en modo piloto (login, cambio de contraseña, persistencia tras recargar, respaldo, numeración general y post-venta por área): sin errores en la consola, sin desborde horizontal y con los flujos principales verificados.

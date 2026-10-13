@@ -396,7 +396,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 <body class="logged-out">
 <header class="topbar">
   <div class="logo"><div class="logo-mark" aria-hidden="true">tv</div><div class="logo-text">Techvalue<small>Seguimiento de cotizaciones</small></div></div>
-  <span class="demo-badge">Prototipo · data ficticia</span>
+  <span class="demo-badge" id="mode-badge">Prototipo · data ficticia</span>
   <div class="spacer"></div>
   <button class="icon-btn needs-auth" id="bell-btn" data-action="toggle-bell" aria-label="Alertas"></button>
   <button class="user-btn needs-auth" id="user-btn" data-action="toggle-user" aria-label="Menú de usuario"></button>
@@ -429,6 +429,7 @@ const Config = {
   SEGMENTO_T2_USD: 10000,
   OFERTA_GRANDE_USD: 200000,
   TC_REFERENCIA: 3.75,
+  ROLES: { vendedor: 'Account Manager', jefatura: 'Gerencia / Jefatura', finanzas: 'Finanzas', logistica: 'Logística / Soporte', admin: 'Administración del sistema' },
   CUENTA_INACTIVA_DIAS: 60,           // ~2 meses sin cotizar → alerta al vendedor y a jefatura
 
   // Estado de la cuenta (se calcula; ver Rules.cuentas)
@@ -625,10 +626,40 @@ const Util = (() => {
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const sum = (arr, f = x => x) => arr.reduce((a, x) => a + (f(x) || 0), 0);
   const groupBy = (arr, f) => arr.reduce((m, x) => { const k = f(x); (m[k] = m[k] || []).push(x); return m; }, {});
+  /** SHA-256 (hex) sin dependencias, para no guardar contraseñas en claro */
+  function sha256(str) {
+    const K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+    const bytes = new TextEncoder().encode(str), l = bytes.length, total = ((l + 9 + 63) >> 6) << 6;
+    const buf = new Uint8Array(total); buf.set(bytes); buf[l] = 0x80;
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(total - 4, (l * 8) >>> 0); dv.setUint32(total - 8, Math.floor(l / 0x20000000));
+    let H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const W = new Uint32Array(64), rot = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let i = 0; i < total; i += 64) {
+      for (let t = 0; t < 16; t++) W[t] = dv.getUint32(i + t * 4);
+      for (let t = 16; t < 64; t++) {
+        const s0 = rot(W[t - 15], 7) ^ rot(W[t - 15], 18) ^ (W[t - 15] >>> 3), s1 = rot(W[t - 2], 17) ^ rot(W[t - 2], 19) ^ (W[t - 2] >>> 10);
+        W[t] = (W[t - 16] + s0 + W[t - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let t = 0; t < 64; t++) {
+        const t1 = (h + (rot(e, 6) ^ rot(e, 11) ^ rot(e, 25)) + ((e & f) ^ (~e & g)) + K[t] + W[t]) | 0;
+        const t2 = ((rot(a, 2) ^ rot(a, 13) ^ rot(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H = [H[0] + a, H[1] + b, H[2] + c, H[3] + d, H[4] + e, H[5] + f, H[6] + g, H[7] + h].map(x => x | 0);
+    }
+    return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+  }
   const normNum = s => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/N[°º]/g, '');
   return { rng, iso, parse, today, setToday, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
     endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, moneyK, pct,
-    round2, esc, sum, groupBy, normNum, pad, nf2 };
+    round2, esc, sum, groupBy, normNum, pad, nf2, sha256 };
 })();
 
 /* =====================================================================
@@ -1544,7 +1575,7 @@ const Rules = (() => {
   }).length;
   function ranking(db, hoy = Util.today()) {
     const desde6 = Util.addMonths(hoy, -5), mesIni = Util.startOfMonth(hoy);
-    const filas = db.users.filter(u => u.rol === 'vendedor').map(v => Object.assign({ v },
+    const filas = db.users.filter(u => u.rol === 'vendedor' && u.activo !== false).map(v => Object.assign({ v },
       avanceMeta(db, v.id, hoy),
       { tasa: tasaCierre(db, { vendedorId: v.id, desde: desde6, hasta: hoy }),
         enviadasMes: cotizacionesEnviadas(db, { vendedorId: v.id, desde: mesIni, hasta: hoy }),
@@ -1565,6 +1596,8 @@ const Rules = (() => {
       m.seg = tot; m.segHoy = hoy;
     }
     const total = m.seg[clienteId] || 0;
+    const c = m.client[clienteId];
+    if (c && c.segmentoDeclarado) return { seg: c.segmentoDeclarado, total, declarado: true };   // segmento declarado en la lista de clientes
     return { seg: total > Config.SEGMENTO_T1_USD ? 'T1' : total >= Config.SEGMENTO_T2_USD ? 'T2' : 'CO', total };
   }
 
@@ -1590,8 +1623,11 @@ const Rules = (() => {
       r.contactos.sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0);
       r.ultimoContacto = r.contactos[0] || null;
       r.diasSinCotizar = Util.diffDays(r.ultimaCot || c.fechaAlta || hoy, hoy);
+      // el reloj de 60 días empieza, como muy temprano, el día en que la empresa inicia el seguimiento en la plataforma
+      const base = [r.ultimaCot || c.fechaAlta || hoy, db.inicioSeguimiento || '0000-00-00'].sort().pop();
+      const diasControl = Util.diffDays(base, hoy);
       const rec = r.contactos.filter(k => k.fecha >= lim && k.fecha <= hoy);
-      r.estado = r.diasSinCotizar < Config.CUENTA_INACTIVA_DIAS || rec.some(k => k.resultado === 'respondio') ? 'activo' : rec.length ? 'no_responde' : 'sin_contacto';
+      r.estado = diasControl < Config.CUENTA_INACTIVA_DIAS || rec.some(k => k.resultado === 'respondio') ? 'activo' : rec.length ? 'no_responde' : 'sin_contacto';
       r.alerta = r.estado !== 'activo';
     });
     m.cta = res; m.ctaHoy = hoy;
@@ -1750,11 +1786,12 @@ const Rules = (() => {
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
     vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado', 'contactos', 'catalogo'],
-    admin: ['catalogo', 'contactos'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'notificaciones'],
+    finanzas: ['proyeccion', 'facturado', 'postventa', 'contactos', 'catalogo'],
+    logistica: ['postventa', 'contactos', 'catalogo'],
+    admin: ['usuarios', 'catalogo', 'contactos'],
   };
-  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'catalogo' };
+  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa' };
   function puede(user, accion, opp) {
     if (!user) return false;
     switch (accion) {
@@ -1771,10 +1808,25 @@ const Rules = (() => {
       case 'asignar_cuenta': return user.rol === 'jefatura';
       // Lista de precios: todos la consultan; solo jefatura, finanzas y administración la modifican
       case 'ver_catalogo': return true;
+      case 'gestionar_usuarios': return ['jefatura', 'admin'].includes(user.rol);
+      case 'ver_postventa': return ['jefatura', 'finanzas', 'logistica'].includes(user.rol);
       case 'editar_catalogo': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);
       default: return false;
     }
   }
+  /** Quién marca cada paso de post-venta. Con "post-venta por área" (piloto): logística los pasos físicos y finanzas factura y cobro. */
+  function puedePaso(user, paso, opp, db) {
+    if (!user || !opp || opp.etapa !== 'ganada') return false;
+    if (user.rol === 'jefatura') return true;
+    const duenio = user.rol === 'vendedor' && opp.vendedorId === user.id;
+    if (!(db && db.config && db.config.postventaPorArea)) return duenio;
+    if (paso === 'oc') return duenio;
+    if (['pedido', 'transito', 'recibido', 'entregado'].includes(paso)) return user.rol === 'logistica';
+    return user.rol === 'finanzas';
+  }
+  /** Numeración general de la empresa (piloto): PREFIJO-AAAA-0001, correlativa para todos */
+  const numeroGeneral = (db, fecha) => db.numeracion ? `${db.numeracion.prefijo}-${String(fecha || Util.today()).slice(0, 4)}-${Util.pad(db.numeracion.siguiente, 4)}` : null;
+  const rolNombre = u => (u && Config.ROLES[u.rol]) || (u && u.rol) || '';
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
@@ -1782,7 +1834,7 @@ const Rules = (() => {
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
-    siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles };
+    siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroGeneral, rolNombre };
 })();
 
 /* =====================================================================
@@ -1791,10 +1843,58 @@ const Rules = (() => {
    los reemplace por llamadas HTTP a la API sin tocar la interfaz.
    Hoy guarda todo en memoria; no usa localStorage ni ningún almacenamiento.
    ===================================================================== */
+/* Almacenamiento del piloto: IndexedDB del navegador. Cuando exista el servidor local de la empresa,
+   este objeto se reemplaza por llamadas HTTP (misma interfaz: leer / escribir / borrar). */
+const Almacen = (() => {
+  const NOMBRE = 'techvalue-piloto', TABLA = 'estado';
+  const abrir = () => new Promise((res, rej) => {
+    const r = indexedDB.open(NOMBRE, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(TABLA);
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const op = (modo, fn) => abrir().then(b => new Promise((res, rej) => {
+    const tx = b.transaction(TABLA, modo), req = fn(tx.objectStore(TABLA));
+    tx.oncomplete = () => res(req && req.result); tx.onerror = () => rej(tx.error);
+  }));
+  return {
+    disponible: () => typeof indexedDB !== 'undefined',
+    leer: clave => op('readonly', st => st.get(clave)).then(v => v == null ? null : v),
+    escribir: (clave, valor) => op('readwrite', st => st.put(valor, clave)),
+    borrar: clave => op('readwrite', st => st.delete(clave)),
+  };
+})();
+
 const Repo = (() => {
   let db = null;
+  let modo = 'demo';                       // 'demo' (memoria) | 'piloto' (se guarda en el navegador)
+  const estado = { guardado: null, error: null, pendiente: false };
+  let tGuardar = null;
+  const oyentes = [];
+  const avisar = () => oyentes.forEach(f => { try { f(Object.assign({ modo }, estado)); } catch (e) { /* sin efecto */ } });
+  function programarGuardado() {
+    if (modo !== 'piloto') return;
+    estado.pendiente = true; avisar();
+    clearTimeout(tGuardar);
+    tGuardar = setTimeout(async () => {
+      try { await Almacen.escribir('db', JSON.stringify(db)); estado.guardado = new Date(); estado.error = null; }
+      catch (e) { estado.error = e.message || 'No se pudo guardar'; }
+      estado.pendiente = false; avisar();
+    }, 400);
+  }
+  const SEED = () => typeof window !== 'undefined' ? window.__PILOTO_SEED : null;
+  function desdeSeed(seed) {
+    const d = JSON.parse(JSON.stringify(seed));
+    return { _v: 1, modo: 'piloto', seedId: seed.id || seed.generado, generado: seed.generado, inicioSeguimiento: seed.inicioSeguimiento,
+      users: d.usuarios.map(u => Object.assign({ activo: true, debeCambiar: true }, u)), clients: d.clients, projects: d.projects, opps: d.opps, quotes: d.quotes,
+      followups: d.followups, gestiones: d.gestiones || [], historico: d.historico || [], fx: {}, catalogo: d.catalogo, catalogoInfo: d.catalogoInfo,
+      catalogoLog: d.catalogoLog || [], empresa: d.empresa, numeracion: d.numeracion, seq: d.seq, config: { postventaPorArea: true }, auditoria: [] };
+  }
+  const usuarioDe = id => db.users.find(u => u.id === id);
+  const exigir = (usuarioId, accion, msg) => { if (!Rules.puede(usuarioDe(usuarioId), accion)) fail(msg || 'No tienes permiso para esta acción.'); };
+  const claveTemporal = () => { const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; const r = new Uint32Array(10); (typeof crypto !== 'undefined' ? crypto : { getRandomValues: x => x.map(() => Math.random() * 1e9) }).getRandomValues(r); r.forEach(n => { s += a[n % a.length]; }); return s; };
+  const ponerClave = (u, clave) => { u.salt = claveTemporal(); u.claveHash = Util.sha256(u.salt + clave); delete u.clave; };
   const hoy = () => Util.today();
-  const touch = () => { db._v++; };
+  const touch = () => { db._v++; programarGuardado(); };
   const fail = (msg, campos) => { const e = new Error(msg); e.campos = campos || {}; throw e; };
   const opp = id => db.opps.find(o => o.id === id) || fail('Oportunidad no encontrada.');
   const log = (o, nota, usuarioId) => db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Sistema', nota, proxContacto: o.proxContacto || null, usuarioId, auto: true });
@@ -1818,15 +1918,98 @@ const Repo = (() => {
 
   return {
     /** GET /demo/reset  (en producción: carga inicial desde la API) */
-    async init() { db = DemoData.generate(hoy()); cargarListaPrivada(); return true; },
-    async reset() { db = DemoData.generate(hoy()); cargarListaPrivada(); return true; },
+    /** Carga inicial: en el piloto, lo guardado en este navegador; si no hay nada, la data inicial (FUP migrados). En la demo, data ficticia. */
+    async init() {
+      const seed = SEED();
+      if (seed) {
+        modo = 'piloto';
+        let guardado = null;
+        try { guardado = Almacen.disponible() ? await Almacen.leer('db') : null; } catch (e) { estado.error = 'El navegador no permite guardar datos: ' + e.message; }
+        db = guardado ? JSON.parse(guardado) : desdeSeed(seed);
+        if (!guardado) programarGuardado();
+        return true;
+      }
+      db = DemoData.generate(hoy()); cargarListaPrivada(); return true;
+    },
+    async reset() { if (modo === 'piloto') fail('En el piloto usa "Reiniciar con los datos iniciales".'); db = DemoData.generate(hoy()); cargarListaPrivada(); return true; },
+    modo: () => modo,
+    estadoGuardado: () => Object.assign({ modo }, estado),
+    alCambiarEstado: fn => { oyentes.push(fn); },
+    /** Respaldo completo (JSON) — en producción lo hará el servidor */
+    async exportarRespaldo(usuarioId) {
+      exigir(usuarioId, 'gestionar_usuarios', 'Solo gerencia, jefatura o administración pueden exportar el respaldo completo.');
+      return JSON.stringify(Object.assign({}, db, { respaldo: { fecha: new Date().toISOString(), por: usuarioId } }));
+    },
+    async importarRespaldo(texto, usuarioId) {
+      exigir(usuarioId, 'gestionar_usuarios', 'Solo gerencia, jefatura o administración pueden restaurar un respaldo.');
+      let d;
+      try { d = JSON.parse(texto); } catch (e) { fail('El archivo no es un respaldo válido.'); }
+      if (!d || !Array.isArray(d.users) || !Array.isArray(d.opps) || !Array.isArray(d.clients)) fail('El archivo no es un respaldo de esta plataforma.');
+      delete d.respaldo; d._v = (d._v || 1) + 1;
+      db = d; touch();
+      return true;
+    },
+    async reiniciarPiloto(usuarioId) {
+      exigir(usuarioId, 'gestionar_usuarios');
+      if (!SEED()) fail('No hay datos iniciales en este archivo.');
+      db = desdeSeed(SEED()); touch();
+      return true;
+    },
     /** GET /snapshot — la UI solo lee de aquí; nunca modifica el objeto directamente */
     async snapshot() { return db; },
     /** POST /auth/login (simulado: no es seguridad real) */
     async login(usuario, clave) {
-      const u = db.users.find(x => x.usuario === String(usuario || '').trim().toLowerCase() && x.clave === clave);
-      if (!u) fail('Usuario o contraseña incorrectos.');
+      const u = db.users.find(x => x.usuario.toLowerCase() === String(usuario || '').trim().toLowerCase());
+      const ok = u && (u.claveHash ? Util.sha256(u.salt + clave) === u.claveHash : u.clave === clave);
+      if (!ok) fail('Usuario o contraseña incorrectos.');
+      if (u.activo === false) fail('Este usuario está desactivado. Consulta con el administrador.');
       return u;
+    },
+    sesion(id) { const u = db.users.find(x => x.id === id); return u && u.activo !== false ? u : null; },
+    async cambiarClave(usuarioId, actual, nueva) {
+      const u = usuarioDe(usuarioId) || fail('Usuario no encontrado.');
+      if (u.claveHash ? Util.sha256(u.salt + actual) !== u.claveHash : u.clave !== actual) fail('La contraseña actual no es correcta.', { actual: 'Incorrecta' });
+      if (String(nueva || '').length < 8) fail('La nueva contraseña debe tener al menos 8 caracteres.', { nueva: 'Mínimo 8 caracteres' });
+      if (nueva === actual) fail('La nueva contraseña debe ser distinta.', { nueva: 'Debe ser distinta' });
+      ponerClave(u, nueva); u.debeCambiar = false; touch();
+    },
+    /** Administración de usuarios: gerencia, jefatura y administración */
+    async guardarUsuario(d, porId) {
+      exigir(porId, 'gestionar_usuarios', 'Solo gerencia, jefatura o administración pueden administrar usuarios.');
+      const e = {};
+      const usuario = String(d.usuario || '').trim().toLowerCase(), ini = String(d.iniciales || '').trim().toUpperCase();
+      if (!String(d.nombre || '').trim()) e.nombre = 'El nombre es obligatorio.';
+      if (!/^[a-z0-9._-]{3,}$/.test(usuario)) e.usuario = 'Usuario de al menos 3 caracteres (letras, números, punto o guion).';
+      else if (db.users.some(u => u.id !== d.id && u.usuario.toLowerCase() === usuario)) e.usuario = 'Ese usuario ya existe.';
+      if (!/^[A-Z]{2,3}$/.test(ini)) e.iniciales = 'Iniciales de 2 o 3 letras.';
+      else if (db.users.some(u => u.id !== d.id && u.iniciales === ini)) e.iniciales = 'Esas iniciales ya están en uso.';
+      if (!Config.ROLES[d.rol]) e.rol = 'Rol no válido.';
+      if (d.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.correo)) e.correo = 'Correo no válido.';
+      if (Object.keys(e).length) fail(Object.values(e)[0], e);
+      const datos = { nombre: d.nombre.trim(), usuario, iniciales: ini, correo: (d.correo || '').trim(), cargo: (d.cargo || '').trim(), telefono: (d.telefono || '').trim(),
+        rol: d.rol, meta: d.rol === 'vendedor' ? (+d.meta > 0 ? +d.meta : Config.META_MENSUAL_USD) : null, activo: d.activo !== false };
+      if (d.id) {
+        const u = usuarioDe(d.id) || fail('Usuario no encontrado.');
+        if (d.id === porId && (!datos.activo || datos.rol !== u.rol)) fail('No puedes desactivarte ni cambiar tu propio rol.');
+        Object.assign(u, datos);
+        touch();
+        return { usuario: u };
+      }
+      let id = ini, k = 2;
+      while (db.users.some(u => u.id === id)) id = ini + (k++);
+      const u = Object.assign({ id, debeCambiar: true }, datos);
+      const temporal = claveTemporal();
+      ponerClave(u, temporal);
+      db.users.push(u);
+      touch();
+      return { usuario: u, temporal };
+    },
+    async restablecerClave(id, porId) {
+      exigir(porId, 'gestionar_usuarios');
+      const u = usuarioDe(id) || fail('Usuario no encontrado.');
+      const temporal = claveTemporal();
+      ponerClave(u, temporal); u.debeCambiar = true; touch();
+      return temporal;
     },
     /** POST /oportunidades/:id/seguimientos */
     async registrarContacto(oppId, { canal, nota, proxContacto, usuarioId, resultado }) {
@@ -2006,6 +2189,7 @@ const Repo = (() => {
     async actualizarPostventa(oppId, paso, fecha, usuarioId) {
       const o = opp(oppId);
       if (o.etapa !== 'ganada') fail('Solo las oportunidades ganadas tienen post-venta.');
+      if (!Rules.puedePaso(usuarioDe(usuarioId), paso, o, db)) fail('Este paso de post-venta lo marca otra área.');
       if (paso === 'oc' && !fecha) fail('La fecha de OC es obligatoria.');
       if (fecha && fecha > hoy()) fail('No se puede registrar un paso con fecha futura.');
       o.postventa = o.postventa || {};
@@ -2057,6 +2241,7 @@ const Repo = (() => {
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
         vigente: true, contacto: p.contacto || '', origen: p.origen };
       q.descuento = Rules.totales(q).descuento;
+      if (db.numeracion && Util.normNum(q.numero) === Util.normNum(Rules.numeroGeneral(db, p.fechaEmision))) db.numeracion.siguiente++;
       let o;
       if ((p.modo === 'revision' || p.modo === 'alternativa') && p.oppDestinoId) {
         o = opp(p.oppDestinoId);
@@ -2219,6 +2404,7 @@ const UI = (() => {
     proy: { tipo: 'facturacion', vendedor: '', condicion: '' },
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
+    expand: {}, pvF: { estado: 'pendientes', vendedor: '' },
     ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
@@ -2256,6 +2442,8 @@ const UI = (() => {
     alert: '<path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
     file: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
     tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L2 12V2h10l8.6 8.6a2 2 0 010 2.8z"/><circle cx="7" cy="7" r="1.5"/>',
+    key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2M16 7l3 3M18 5l2 2"/>',
+    box: '<path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/>',
     users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8"/>',
     book: '<path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5z"/><path d="M4 19.5V21h16M9 7h7M9 11h5"/>',
     receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 1V2l-1 1-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
@@ -2272,7 +2460,7 @@ const UI = (() => {
   const oppById = id => ix().opp[id];
   const projName = p => !p ? '—' : p.tipo === 'directa' ? 'Compra directa' : p.nombre;
   const usuarioFinal = o => { const p = proj(o.proyectoId); return !p || p.tipo === 'directa' ? '(el mismo cliente)' : p.usuarioFinal; };
-  const vendColor = vid => Config.COLORES_VENDEDOR[(+String(vid).slice(1)) - 1] || 'var(--brand)';
+  const vendColor = vid => { const i = (S.db ? S.db.users.filter(u => u.rol === 'vendedor') : []).findIndex(u => u.id === vid); return i >= 0 ? Config.COLORES_VENDEDOR[i % Config.COLORES_VENDEDOR.length] : 'var(--brand)'; };
   const avatar = u => `<span class="avatar" style="background:${u.rol === 'vendedor' ? vendColor(u.id) : '#fff'};color:${u.rol === 'vendedor' ? '#fff' : 'var(--brand)'}" aria-hidden="true">${E(u.iniciales)}</span>`;
   const avatarSm = u => `<span class="avatar sm" style="background:${u.rol === 'vendedor' ? vendColor(u.id) : 'var(--brand)'};color:#fff" aria-hidden="true">${E(u.iniciales)}</span>`;
   const vendTag = u => `<span class="vt" title="${E(u.nombre)}"><i style="background:${vendColor(u.id)}"></i>${E(u.iniciales)}</span>`;
@@ -2286,19 +2474,21 @@ const UI = (() => {
   const firstName = u => u.nombre.split(' ')[0];
   const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
   const options = (list, sel, ph) => (ph != null ? `<option value="">${E(ph)}</option>` : '') + list.map(([v, l]) => `<option value="${E(v)}"${String(v) === String(sel) ? ' selected' : ''}>${E(l)}</option>`).join('');
-  const vendedores = () => S.db.users.filter(u => u.rol === 'vendedor');
+  const vendedores = () => S.db.users.filter(u => u.rol === 'vendedor' && u.activo !== false);
+  const piloto = () => Repo.modo() === 'piloto';
   const mesTxt = s => cap(Util.monthName(s)) + ' ' + s.slice(0, 4);
 
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
     vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['notificaciones', 'Notificaciones', 'bell']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
-    admin: [['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'catalogo', 'contactos'], admin: ['catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios' };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'catalogo', 'contactos'] };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -2341,11 +2531,12 @@ const UI = (() => {
     const u = S.user;
     const items = NAV[u.rol];
     $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
-      `<div class="nav-sep"></div><div class="nav-foot">Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.</div>`;
+      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? 'Piloto Techvalue Perú. Los datos se guardan en este navegador.' : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
+    $('#mode-badge').textContent = piloto() ? 'Piloto Perú · datos en este navegador' : 'Prototipo · data ficticia';
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
-    bell.classList.toggle('hidden', !['vendedor', 'jefatura'].includes(u.rol));
+    bell.classList.toggle('hidden', u.debeCambiar || !['vendedor', 'jefatura'].includes(u.rol));
     bell.innerHTML = I('bell') + (n ? `<span class="badge-count">${n > 99 ? '99+' : n}</span>` : '');
     bell.setAttribute('aria-label', `Alertas (${n})`);
     $('#user-btn').innerHTML = avatar(u) + `<span class="uname">${E(u.nombre)}</span>`;
@@ -2364,7 +2555,7 @@ const UI = (() => {
   document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (el && !el.closest('#modal-root') && CHANGES[el.dataset.change]) CHANGES[el.dataset.change](el, e); });
   document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (el && !el.closest('#modal-root') && INPUTS[el.dataset.input]) INPUTS[el.dataset.input](el, e); });
   document.addEventListener('submit', e => { const f = e.target; if (f.dataset.submit && SUBMITS[f.dataset.submit]) { e.preventDefault(); SUBMITS[f.dataset.submit](f); } });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#print-root').firstChild) { $('#print-root').innerHTML = ''; S.pdf = null; } else if ($('#modal-root').firstChild) closeModal(); else closePopover(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#print-root').firstChild) { $('#print-root').innerHTML = ''; S.pdf = null; } else if ($('#modal-root').firstChild && $('#modal-root [data-modal-close]')) closeModal(); else closePopover(); } });
 
   /* ---------- Popovers (campana y usuario) ---------- */
   function closePopover() { $('#popover-root').innerHTML = ''; S.popover = null; }
@@ -2383,17 +2574,75 @@ const UI = (() => {
       <footer><a class="btn sm" href="#/notificaciones">${I('mail')} Ver todas, correo de resumen y eventos de Outlook</a></footer></div>`;
     S.popover = 'bell';
   };
+  function textoGuardado(e) {
+    if (!e || e.modo !== 'piloto') return '';
+    if (e.error) return `<span style="color:var(--bad);font-weight:700">⚠ ${E(e.error)}</span>`;
+    if (e.pendiente) return 'Guardando…';
+    return e.guardado ? `✓ Guardado ${Util.pad(e.guardado.getHours())}:${Util.pad(e.guardado.getMinutes())}` : '✓ Datos cargados';
+  }
+  Repo.alCambiarEstado(e => { const el = document.getElementById('save-status'); if (el) el.innerHTML = textoGuardado(e); });
   ACTIONS['toggle-user'] = () => {
     if (S.popover === 'user') return closePopover();
-    const u = S.user;
-    $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="Usuario"><header><div style="display:flex;gap:10px;align-items:center">${avatar(u)}<div><strong>${E(u.nombre)}</strong><div class="small muted">${E(cap(u.rol))} · ${E(u.correo)}</div></div></div></header>
+    const u = S.user, adm = Rules.puede(u, 'gestionar_usuarios');
+    $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="Usuario"><header><div style="display:flex;gap:10px;align-items:center">${avatar(u)}<div><strong>${E(u.nombre)}</strong><div class="small muted">${E(Rules.rolNombre(u))}${u.cargo ? ' · ' + E(u.cargo) : ''}${u.correo ? ' · ' + E(u.correo) : ''}</div></div></div></header>
       <footer style="flex-direction:column;align-items:stretch">
-        <button class="btn" data-action="reset-demo">${I('refresh')} Restablecer datos de demo</button>
+        ${piloto() ? `<button class="btn" data-action="cambiar-clave">${I('key')} Cambiar contraseña</button>` : ''}
+        ${piloto() && adm ? `<button class="btn" data-action="respaldo-exportar">${I('download')} Exportar respaldo (JSON)</button>
+          <button class="btn" data-action="respaldo-importar">${I('upload')} Restaurar respaldo…</button><input type="file" id="respaldo-file" accept=".json" class="hidden">
+          <button class="btn bad" data-action="piloto-reiniciar">${I('refresh')} Reiniciar con los datos iniciales…</button>` : ''}
+        ${piloto() ? '' : `<button class="btn" data-action="reset-demo">${I('refresh')} Restablecer datos de demo</button>`}
         <button class="btn" data-action="logout">${I('logout')} Cerrar sesión</button>
-        <p class="small muted" style="margin:4px 0 0">Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.</p>
+        <p class="small muted" style="margin:4px 0 0">${piloto() ? 'Piloto: los datos se guardan solo en este navegador y equipo. Exporta un respaldo con frecuencia. Más adelante se guardarán en el servidor local de la empresa.' : 'Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.'}</p>
       </footer></div>`;
     S.popover = 'user';
+    const inp = $('#respaldo-file');
+    if (inp) inp.addEventListener('change', async () => {
+      const f = inp.files[0]; if (!f) return;
+      const texto = await f.text();
+      modal({ title: 'Restaurar respaldo', body: `<div class="alert warn"><div>Se reemplazarán <strong>todos</strong> los datos de este navegador por los de <strong>${E(f.name)}</strong>. Esta acción no se puede deshacer.</div></div>`,
+        actions: [{ label: 'Cancelar' }, { label: 'Restaurar', cls: 'bad', onClick: async () => { await Repo.importarRespaldo(texto, S.user.id); S.db = await Repo.snapshot(); S.user = Repo.sesion(S.user.id); toast('Respaldo restaurado.'); render(); } }] });
+    });
   };
+  ACTIONS['respaldo-exportar'] = async () => {
+    closePopover();
+    try {
+      const txt = await Repo.exportarRespaldo(S.user.id);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
+      a.download = `respaldo-techvalue-${hoy()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      toast('Respaldo exportado. Guárdalo en una carpeta interna: contiene información confidencial.');
+    } catch (e) { toast(e.message); }
+  };
+  ACTIONS['respaldo-importar'] = () => { const i = $('#respaldo-file'); if (i) i.click(); };
+  ACTIONS['piloto-reiniciar'] = () => {
+    closePopover();
+    modal({ title: 'Reiniciar con los datos iniciales', body: `<div class="alert bad"><div>Se borrarán todos los cambios hechos en este navegador (contactos, cotizaciones, usuarios, contraseñas) y se volverá a la data migrada de los FUP. <strong>Exporta un respaldo antes.</strong></div></div>
+      <label class="field" style="margin-top:12px">Escribe REINICIAR para confirmar<input type="text" name="conf"></label>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Reiniciar', cls: 'bad', onClick: async root => {
+        if (val(root, 'conf').trim().toUpperCase() !== 'REINICIAR') { const e = new Error('Escribe REINICIAR para confirmar.'); e.campos = { conf: 'Requerido' }; throw e; }
+        await Repo.reiniciarPiloto(S.user.id); S.db = await Repo.snapshot(); S.user = null; guardarSesion(null); toast('Datos reiniciados. Ingresa nuevamente.'); location.hash = '#/login'; render();
+      } }] });
+  };
+  ACTIONS['cambiar-clave'] = () => { closePopover(); abrirCambioClave(false); };
+  function abrirCambioClave(obligatorio) {
+    modal({
+      title: obligatorio ? 'Crea tu contraseña personal' : 'Cambiar contraseña',
+      body: `${obligatorio ? '<div class="alert info" style="margin-bottom:12px"><div>Es tu primer ingreso (o tu contraseña fue restablecida). Cambia la contraseña temporal por una personal de al menos 8 caracteres.</div></div>' : ''}
+        <div class="stack"><label class="field">Contraseña actual<input type="password" name="actual" autocomplete="current-password"></label>
+        <label class="field">Nueva contraseña<input type="password" name="nueva" autocomplete="new-password"></label>
+        <label class="field">Repite la nueva contraseña<input type="password" name="nueva2" autocomplete="new-password"></label></div>`,
+      actions: (obligatorio ? [] : [{ label: 'Cancelar' }]).concat([{ label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        if (val(root, 'nueva') !== val(root, 'nueva2')) { const e = new Error('Las contraseñas nuevas no coinciden.'); e.campos = { nueva2: 'No coincide' }; throw e; }
+        await Repo.cambiarClave(S.user.id, val(root, 'actual'), val(root, 'nueva'));
+        toast('Contraseña actualizada.');
+        if (obligatorio) go(Rules.INICIO[S.user.rol]); else refresh();
+      } }]),
+    });
+    if (obligatorio) { const x = $('#modal-root [data-modal-close]'); if (x) x.remove(); const back = $('#modal-root .modal-back'); if (back) back.addEventListener('click', ev => { if (ev.target === back) ev.stopImmediatePropagation(); }, true); }
+  }
+  function guardarSesion(id) { try { if (id) sessionStorage.setItem('tv-sesion', id); else sessionStorage.removeItem('tv-sesion'); } catch (e) { /* navegador sin almacenamiento de sesión */ } }
   ACTIONS['reset-demo'] = async () => {
     closePopover();
     const id = S.user && S.user.id;
@@ -2404,7 +2653,7 @@ const UI = (() => {
     toast('Datos de demo restablecidos.');
     render();
   };
-  ACTIONS['logout'] = () => { closePopover(); S.user = null; S.nueva = null; location.hash = '#/login'; render(); };
+  ACTIONS['logout'] = () => { closePopover(); S.user = null; S.nueva = null; guardarSesion(null); location.hash = '#/login'; render(); };
 
   /* ---------- Modal y toast ---------- */
   function modal({ title, body, actions = [], wide = false, onOpen }) {
@@ -2712,22 +2961,28 @@ const UI = (() => {
   }
 
   /* ---------- Cotización en PDF con la plantilla (generada por la plataforma) ---------- */
+  const EMPRESA_DEMO = { razonSocial: 'TECHVALUE S.A.', ruc: '20000000000 (dato de ejemplo)', direccion: 'dirección de ejemplo', central: 'central de ejemplo', web: 'www.techvalue.com.pe',
+    area: 'Depto. de Ventas (PE)', formaPago: 'Abono en cuenta a nombre de TECHVALUE S.A. (datos bancarios de ejemplo)', entrega: 'Según el procedimiento de atención vigente (texto de ejemplo).',
+    despacho: '', terminos: 'La aceptación de la propuesta económica por parte del cliente da conformidad a nuestros términos y condiciones de venta.' };
   function pdfHTML({ q, cliente, contacto, proyecto, vendedor }) {
+    const emp = S.db.empresa || EMPRESA_DEMO;
     const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
     const k = (cliente.contactos || []).find(x => x.nombre === contacto);
     const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '';
     const n2 = v => Util.nf2.format(v || 0);
+    const fila = (k1, v1, k2, v2) => `<tr><td class="k">${k1}</td><td>${v1}</td><td class="k">${k2}</td><td>${v2}</td></tr>`;
     return `<div class="hoja">
-      <div class="h-wm">PROTOTIPO · DATOS FICTICIOS</div>
-      <div class="h-top"><div class="h-logo">TECHVALUE<small>Redes y conectividad industrial</small></div><div class="h-ruc">TECHVALUE S.A.<br>R.U.C. 20000000000 <span style="font-weight:400">(dato de ejemplo)</span></div></div>
+      ${S.db.empresa ? '' : '<div class="h-wm">PROTOTIPO · DATOS FICTICIOS</div>'}
+      <div class="h-top"><div class="h-logo">TECHVALUE<small>Redes y conectividad industrial</small></div><div class="h-ruc">${E(emp.razonSocial)}<br>R.U.C. ${E(emp.ruc)}</div></div>
       <h2 class="h-title">COTIZACIÓN Nº ${E(q.numero)}</h2>
       <table class="h-datos"><tbody>
-        <tr><td class="k">Dirigido a</td><td>${E(cliente.razonSocial)}</td><td class="k">Emitido por</td><td>${E(vendedor.nombre)}</td></tr>
-        <tr><td class="k">RUC</td><td>${E(cliente.ruc)}</td><td class="k">Cargo</td><td>Ejecutivo(a) de cuentas</td></tr>
-        <tr><td class="k">Ciudad/País</td><td>${E(cliente.ciudad || 'Lima')}, Perú</td><td class="k">Área</td><td>Depto. de Ventas (PE)</td></tr>
-        <tr><td class="k">Contacto</td><td>${E(contacto || '—')}</td><td class="k">Correo</td><td>${E(vendedor.correo)}</td></tr>
-        <tr><td class="k">Email</td><td>${E(k ? k.correo : '—')}</td><td class="k">Fecha de emisión</td><td>${Util.fmtDate(q.fechaEmision)}</td></tr>
-        <tr><td class="k">Teléfono</td><td>${E(k ? k.telefono : '—')}</td><td class="k">Referencia</td><td>${E(ref || '—')}</td></tr>
+        ${fila('Dirigido a', E(cliente.razonSocial), 'Emitido por', E(vendedor.nombre))}
+        ${fila('RUC', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
+        ${fila('Ciudad/País', `${E(cliente.ciudad || 'Lima')}, Perú`, 'Área', E(emp.area))}
+        ${fila('Teléfono', E(k ? k.telefono || '—' : '—'), 'Teléfono', E(vendedor.telefono || emp.central))}
+        ${fila('Contacto', E(contacto || '—'), 'Correo', E(vendedor.correo || '—'))}
+        ${fila('Email', E(k ? k.correo || '—' : '—'), 'Fecha de emisión', Util.fmtDate(q.fechaEmision))}
+        <tr><td class="k">Referencia</td><td colspan="3">${E(ref || '—')}</td></tr>
       </tbody></table>
       <p style="margin:12px 0 4px">Tenemos el agrado de cotizar lo siguiente:</p>
       <table class="h-items"><thead><tr><th>Item</th><th class="r">Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead><tbody>
@@ -2743,12 +2998,14 @@ const UI = (() => {
       <h3 style="margin:14px 0 4px;color:var(--brand)">Condiciones comerciales</h3>
       <table class="h-cond"><tbody>
         <tr><td class="k">Condición de pago</td><td>${E(cp ? cp.nombre : '—')}</td></tr>
-        <tr><td class="k">Forma de pago</td><td>Abono en cuenta a nombre de TECHVALUE S.A. (datos bancarios de ejemplo)</td></tr>
+        <tr><td class="k">Forma de pago</td><td>${E(emp.formaPago)}</td></tr>
         <tr><td class="k">Validez cotización</td><td>${E(q.validezDias)} días</td></tr>
-        <tr><td class="k">Plazo de entrega</td><td>${E(pl ? pl.nombre : '—')}</td></tr>
-        <tr><td class="k">Entrega y despacho</td><td>Según el procedimiento de atención vigente (texto de ejemplo).</td></tr>
+        <tr><td class="k">Plazo de Entrega</td><td>${E(pl ? pl.nombre : '—')}</td></tr>
+        <tr><td class="k">Entrega</td><td>${E(emp.entrega)}</td></tr>
+        ${emp.despacho ? `<tr><td class="k">Despacho</td><td>${E(emp.despacho)}</td></tr>` : ''}
+        ${emp.terminos ? `<tr><td class="k">Términos de venta</td><td>${E(emp.terminos)}</td></tr>` : ''}
       </tbody></table>
-      <div class="h-foot"><span>TECHVALUE S.A. · dirección y central de ejemplo</span><span>Generado por la plataforma de seguimiento · ${Util.fmtDate(hoy())}</span></div>
+      <div class="h-foot"><span>${E(emp.razonSocial)} · ${E(emp.direccion)} · Central: ${E(emp.central)}</span><span>${E(emp.web || '')}</span></div>
     </div>`;
   }
   function mostrarPDF(ctx, borrador) {
@@ -2898,6 +3155,7 @@ const UI = (() => {
       } }],
     });
   }
+  ACTIONS['expandir'] = el => { S.expand[el.dataset.k] = !S.expand[el.dataset.k]; refresh(); };
   ACTIONS['gestion-cuenta'] = el => abrirGestionCuenta(el.dataset.id);
   ACTIONS['contacto-nuevo'] = el => abrirEditarContacto(el.dataset.cliente || null, null);
   ACTIONS['contacto-editar'] = el => abrirEditarContacto(el.dataset.cliente, el.dataset.k);
@@ -2929,6 +3187,19 @@ const UI = (() => {
   function renderLogin() {
     renderChromeLoggedOut();
     const us = S.db.users;
+    if (piloto()) {
+      view().innerHTML = `<div class="login-wrap"><div class="card login-card">
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px"><div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>
+          <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A. · Piloto Perú</div></div></div>
+        <form data-submit="login" class="stack" autocomplete="on">
+          <label class="field">Usuario<input type="text" name="usuario" autocapitalize="none" autocomplete="username"></label>
+          <label class="field">Contraseña<input type="password" name="clave" autocomplete="current-password"></label>
+          <button class="btn primary" type="submit" style="width:100%">Ingresar</button>
+        </form>
+        <div class="alert info" style="margin-top:14px"><div class="small"><strong>Piloto interno.</strong> Los datos se guardan en este navegador. Si olvidaste tu contraseña, pide a gerencia o al administrador que la restablezca.</div></div>
+      </div></div>`;
+      return;
+    }
     view().innerHTML = `<div class="login-wrap">
       <div class="card login-card">
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px"><div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>
@@ -2944,7 +3215,7 @@ const UI = (() => {
         <div class="card-head"><h2>Usuarios de demo</h2><span class="sim-label">Data ficticia</span></div>
         <div class="table-wrap"><table class="tbl"><thead><tr><th>Usuario</th><th>Contraseña</th><th>Nombre</th><th>Rol</th><th>Perfil</th><th></th></tr></thead><tbody>
         ${us.map(u => `<tr><td><code>${E(u.usuario)}</code></td><td><code>${E(u.clave)}</code></td><td class="nowrap">${avatarSm(u)}${E(u.nombre)}</td>
-          <td>${E(cap(u.rol))}</td><td class="small muted">${E(u.perfil)}</td><td><button class="btn sm" data-action="login-as" data-u="${E(u.usuario)}">Entrar</button></td></tr>`).join('')}
+          <td>${E(Rules.rolNombre(u))}</td><td class="small muted">${E(u.perfil)}</td><td><button class="btn sm" data-action="login-as" data-u="${E(u.usuario)}">Entrar</button></td></tr>`).join('')}
         </tbody></table></div>
         <p class="small muted">Meta de cada vendedor: ${money(Config.META_MENSUAL_USD)} facturados por mes (sin IGV). Meta de la empresa: 5 × 40K.</p>
       </div></div>`;
@@ -2955,7 +3226,9 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.catF = { q: '', marca: '' };
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.catF = { q: '', marca: '' }; S.expand = {};
+      if (piloto()) guardarSesion(S.user.id);
+      if (S.user.debeCambiar && piloto()) { location.hash = '#/' + Rules.INICIO[S.user.rol]; await render(); abrirCambioClave(true); return; }
       go(Rules.INICIO[S.user.rol]);
     } catch (e) { toast(e.message); }
   }
@@ -2979,8 +3252,11 @@ const UI = (() => {
     const total = new Set(Object.values(L).flat().map(x => x.o.id)).size;
     const cob = av.cobertura;
     const cobChip = cob == null ? '<span class="chip ok">Meta cumplida</span>' : cob >= 1 ? '<span class="chip ok">Cubierta</span>' : cob >= 0.5 ? '<span class="chip warn">Parcial</span>' : '<span class="chip bad">Baja</span>';
+    const LIM = 8;
+    const mas = (key, n) => n > LIM ? `<div style="padding:10px 14px"><button class="btn sm" data-action="expandir" data-k="${key}">${S.expand[key] ? 'Mostrar menos' : `Ver todas (${n})`}</button></div>` : '';
+    const corta = (key, arr) => S.expand[key] ? arr : arr.slice(0, LIM);
     const sec = (key, titulo, hint, cls) => `<section class="list-card"><header><h2>${titulo}</h2><span class="count ${cls || ''}">${L[key].length}</span><span class="hint">${hint}</span></header>
-      ${L[key].length ? L[key].map(x => opItem(x.o, x.a)).join('') : '<div class="list-empty">Nada pendiente aquí.</div>'}</section>`;
+      ${L[key].length ? corta(key, L[key]).map(x => opItem(x.o, x.a)).join('') + mas(key, L[key].length) : '<div class="list-empty">Nada pendiente aquí.</div>'}</section>`;
     view().innerHTML = `
       <div class="page-head"><div><h1>Hola, ${E(firstName(u))}</h1><p class="muted">${cap(Util.dayName(h))} ${Util.fmtDate(h)} · ${total} oportunidad${total === 1 ? '' : 'es'} requieren tu atención${ctas.length ? ` · ${ctas.length} cuenta${ctas.length === 1 ? '' : 's'} sin cotizar` : ''}</p></div>
         <a class="btn primary" href="#/nueva">${I('plus')} Nueva cotización</a></div>
@@ -3017,7 +3293,7 @@ const UI = (() => {
           ${sec('oc_vencida', 'Fecha de OC vencida', 'Sin OC recibida', 'warn')}
           ${L.reactivar.length ? sec('reactivar', 'Pausas por reactivar', 'Fecha de reactivación cumplida') : ''}
           <section class="list-card"><header><h2>Cuentas sin cotizar (2+ meses)</h2><span class="count warn">${ctas.length}</span><span class="hint">También avisa a jefatura</span></header>
-            ${ctas.length ? ctas.map(x => cuentaItem(x.cliente, x.alerta)).join('') : '<div class="list-empty">Todas tus cuentas están activas.</div>'}</section>
+            ${ctas.length ? corta('ctas', ctas).map(x => cuentaItem(x.cliente, x.alerta)).join('') + mas('ctas', ctas.length) : '<div class="list-empty">Todas tus cuentas están activas.</div>'}</section>
         </div>
       </div>`;
   };
@@ -3218,7 +3494,7 @@ const UI = (() => {
       ${reasignar}
       <div class="grid" style="grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);margin-top:14px;align-items:start" id="ficha-grid">
         <div class="stack">
-          ${o.etapa === 'ganada' ? postventaHTML(o, ed) : ''}
+          ${o.etapa === 'ganada' ? postventaHTML(o) : ''}
           <section class="card"><div class="card-head"><h2>Cotizaciones y revisiones</h2><span class="sub">${Rules.quotesOf(db, o).length} documento(s) · solo una vigente</span>
             ${ed && (abierta || o.etapa === 'pausa') ? `<button class="btn sm primary" data-action="crear-rev" data-id="${o.id}">${I('plus')} Crear revisión desde la vigente</button>` : ''}</div>
             ${Rules.quotesOf(db, o).slice().reverse().map(x => quoteHTML(x, ed)).join('')}</section>
@@ -3280,15 +3556,16 @@ const UI = (() => {
         </div>
       </div></article>`;
   }
-  function postventaHTML(o, ed) {
+  function postventaHTML(o) {
     const pv = o.postventa || {};
+    const puedeP = paso => Rules.puedePaso(S.user, paso, o, S.db), ed = Config.POSTVENTA.some(p => puedeP(p.id));
     const idxNext = Config.POSTVENTA.findIndex(s => !pv[s.id]);
     const cobro = Rules.eventosCobro(S.db, o);
     const q = Rules.vigente(S.db, o);
-    return `<section class="card"><div class="card-head"><h2>Post-venta</h2><span class="sub">${ed ? 'Marca la fecha de cada paso' : 'Solo lectura'}</span></div>
+    return `<section class="card"><div class="card-head"><h2>Post-venta</h2><span class="sub">${ed ? (S.db.config && S.db.config.postventaPorArea ? 'Cada área marca sus pasos' : 'Marca la fecha de cada paso') : 'Solo lectura'}</span></div>
       <div class="steps">${Config.POSTVENTA.map((s, i) => `<div class="step ${pv[s.id] ? 'done' : i === idxNext ? 'next' : ''}">
         <div class="s-n">${pv[s.id] ? '✓' : i + 1}</div><div class="s-t">${E(s.nombre)}</div>
-        ${ed ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${s.id}" value="${pv[s.id] || ''}" max="${hoy()}" aria-label="${E(s.nombre)}">` : `<div class="small">${Util.fmtDate(pv[s.id])}</div>`}
+        ${puedeP(s.id) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${s.id}" value="${pv[s.id] || ''}" max="${hoy()}" aria-label="${E(s.nombre)}">` : `<div class="small">${Util.fmtDate(pv[s.id])}</div>`}
         ${s.id === 'facturado' && pv.facturaMonto ? `<div class="small muted" style="margin-top:4px">${money(pv.facturaMonto)}</div>` : ''}
         ${s.id === 'cobrado' && !pv.cobrado ? `<div class="small muted" style="margin-top:4px">Estimado: ${cobro.filter(c => !c.cobrado).map(c => Util.fmtDate(c.fecha)).join(' y ') || '—'}</div>` : ''}
       </div>`).join('')}</div>
@@ -3307,7 +3584,6 @@ const UI = (() => {
     refresh();
   };
   CHANGES['pv'] = async el => {
-    if (!oppEditable(el.dataset.id)) return;
     try { await Repo.actualizarPostventa(el.dataset.id, el.dataset.paso, el.value || null, S.user.id); toast('Post-venta actualizada.'); } catch (e) { toast(e.message); }
     refresh();
   };
@@ -3345,16 +3621,24 @@ const UI = (() => {
   /* Lista desplegable de coincidencias bajo el campo de código */
   let acEstado = null;
   const cerrarAc = () => { const l = document.getElementById('ac-list'); if (l) l.remove(); acEstado = null; };
+  /* Ubica la lista bajo el campo; si el campo salió de la vista, la cierra */
+  function ubicarAc() {
+    const l = document.getElementById('ac-list'); if (!l || !acEstado) return;
+    const el = acEstado.el;
+    if (!el || !el.isConnected) { cerrarAc(); return; }
+    const r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight) { cerrarAc(); return; }
+    l.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 448)) + 'px';
+    l.style.top = Math.min(r.bottom + 4, window.innerHeight - 200) + 'px';
+  }
   function mostrarAc(el) {
     const q = el.value.trim();
     if (q.length < 2) { cerrarAc(); return; }
     const res = buscarProductos(q, null, 12);
     let l = document.getElementById('ac-list');
     if (!l) { l = document.createElement('div'); l.id = 'ac-list'; l.className = 'ac-list'; l.setAttribute('role', 'listbox'); document.body.appendChild(l); }
-    const r = el.getBoundingClientRect();
-    l.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 448)) + 'px';
-    l.style.top = Math.min(r.bottom + 4, window.innerHeight - 200) + 'px';
-    acEstado = { i: +el.dataset.ac, res, act: 0 };
+    acEstado = { i: +el.dataset.ac, res, act: 0, el };
+    ubicarAc();
     l.innerHTML = res.length ? res.map((p, k) => `<button type="button" role="option" data-ac-pick="${k}" class="${k === 0 ? 'act' : ''}"><strong>${E(p.codigo)}</strong> · ${E(p.marca)} <span style="float:right" class="num">${Util.money(p.precio)}</span><div class="ac-meta">${E(p.descripcion)}</div></button>`).join('') +
       (res.total > res.length ? `<div class="ac-empty">${res.total - res.length} coincidencias más: sigue escribiendo para afinar.</div>` : '')
       : '<div class="ac-empty">Sin coincidencias en la lista de precios. Puedes escribir el ítem a mano.</div>';
@@ -3372,7 +3656,7 @@ const UI = (() => {
     else if (e.key === 'Enter') { if (n) { e.preventDefault(); const { i, res, act } = acEstado; aplicarProducto(i, res[act]); cerrarAc(); render(true); } }
     else if (e.key === 'Escape') cerrarAc();
   });
-  window.addEventListener('scroll', () => cerrarAc(), true);
+  window.addEventListener('scroll', e => { if (!(e.target.id === 'ac-list')) ubicarAc(); }, true);
   function tcDelDia(f) {
     let d = f;
     for (let i = 0; i < 10; i++) { if (S.db.fx[d]) return S.db.fx[d]; d = Util.addDays(d, -1); }
@@ -3384,6 +3668,7 @@ const UI = (() => {
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
+    if (S.db.numeracion) return Rules.numeroGeneral(S.db, hoy());
     const f = hoy(), n = (S.db.contadores && S.db.contadores[u.id] || 0) + 1;
     const yymmdd = f.slice(2, 4) + f.slice(5, 7) + f.slice(8, 10), ddmmyy = f.slice(8, 10) + f.slice(5, 7) + f.slice(2, 4);
     return { u1: `CM${yymmdd}-${Util.pad(n, 4)}`, u2: `COT-${f.slice(0, 4)}-${Util.pad(n, 4)}`, u3: `LP-${n}`, u4: `DH${ddmmyy}-${n}`, u5: `VC${yymmdd}-${Util.pad(n, 5)}` }[u.id] || `COT-${n}`;
@@ -3453,7 +3738,7 @@ const UI = (() => {
     }
     view().innerHTML = `<div class="page-head"><div><h1>Nueva cotización</h1><p class="muted">Cotiza aquí y el PDF se genera solo, o registra un PDF que ya enviaste.</p></div></div>
       <div class="tabs" role="tablist"><button role="tab" class="${N.tab === 'plataforma' ? 'active' : ''}" data-action="nq-tab" data-tab="plataforma">${I('file').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Cotizar en la plataforma</button>
-        <button role="tab" class="${N.tab === 'pdf' ? 'active' : ''}" data-action="nq-tab" data-tab="pdf">${I('upload').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Leer PDF ya enviado (simulado)</button></div>${cuerpo}`;
+        ${piloto() ? '' : `<button role="tab" class="${N.tab === 'pdf' ? 'active' : ''}" data-action="nq-tab" data-tab="pdf">${I('upload').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Leer PDF ya enviado (simulado)</button>`}</div>${cuerpo}`;
     const dz = $('#dropzone');
     if (dz) {
       dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
@@ -4042,7 +4327,7 @@ const UI = (() => {
         ${ev.map(e => `<tr><td class="nowrap">${cap(Util.dayName(e.fecha)).slice(0, 3)} ${Util.fmtDate(e.fecha)}</td><td class="nowrap">${e.todoDia ? 'Todo el día' : e.hora}</td><td><span class="chip ${e.tipo === 'Seguimiento' ? 'info' : e.tipo === 'Vencimiento' ? 'warn' : ''}">${e.tipo}</span></td><td>${E(e.titulo)}</td><td class="small">${E(e.desc)}</td><td class="nowrap small">${e.todoDia ? '1 día antes' : '15 min antes'}</td></tr>`).join('') || '<tr><td colspan="6" class="center muted">Sin eventos.</td></tr>'}
         </tbody></table></div><p class="small muted" style="margin-bottom:0">En la versión final se crearán con Microsoft Graph en el calendario de Outlook del vendedor y se actualizarán cuando cambie el próximo contacto.</p></div>`;
     }
-    view().innerHTML = `<div class="page-head"><div><h1>Notificaciones</h1><p class="muted">Vista previa de lo que el sistema enviaría</p></div><span class="sim-label">Simulación: no se envía nada</span></div>
+    view().innerHTML = `<div class="page-head"><div><h1>Notificaciones</h1><p class="muted">Vista previa de lo que el sistema enviaría</p></div><span class="sim-label">${piloto() ? 'Vista previa: en el piloto no se envían correos' : 'Simulación: no se envía nada'}</span></div>
       <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" class="${S.notif.tab === k ? 'active' : ''}" data-action="notif-tab" data-tab="${k}">${l}</button>`).join('')}</div>${cuerpo}`;
   };
   ACTIONS['notif-tab'] = el => { S.notif.tab = el.dataset.tab; render(true); };
@@ -4294,14 +4579,103 @@ const UI = (() => {
   let tCat = null;
   INPUTS['catf'] = el => { S.catF[el.name] = el.value; clearTimeout(tCat); tCat = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="catf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
 
+  /* =====================================================================
+     USUARIOS — gerencia, jefatura y administración del sistema
+     ===================================================================== */
+  PAGES['usuarios'] = async () => {
+    const us = S.db.users.slice().sort((a, b) => (a.activo === false) - (b.activo === false) || Object.keys(Config.ROLES).indexOf(a.rol) - Object.keys(Config.ROLES).indexOf(b.rol) || a.nombre.localeCompare(b.nombre));
+    view().innerHTML = `<div class="page-head"><div><h1>Usuarios</h1><p class="muted">${us.filter(u => u.activo !== false).length} activos · alta, roles y contraseñas</p></div>
+        <button class="btn primary" data-action="usuario-editar">${I('plus')} Nuevo usuario</button></div>
+      ${piloto() ? '' : '<div class="alert info" style="margin-bottom:12px"><div>En la demo los cambios de usuarios no se guardan.</div></div>'}
+      <div class="table-wrap"><table class="tbl" style="min-width:1000px"><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Cargo</th><th>Correo</th><th>Teléfono</th><th class="r">Meta mensual</th><th>Estado</th><th></th></tr></thead><tbody>
+        ${us.map(u => `<tr${u.activo === false ? ' style="opacity:.6"' : ''}><td class="nowrap">${avatarSm(u)}<strong>${E(u.nombre)}</strong> <span class="muted small">${E(u.iniciales)}</span></td>
+          <td><code>${E(u.usuario)}</code></td><td class="nowrap">${E(Rules.rolNombre(u))}</td><td class="small">${E(u.cargo || '—')}</td><td class="small">${E(u.correo || '—')}</td><td class="small nowrap">${E(u.telefono || '—')}</td>
+          <td class="r num">${u.rol === 'vendedor' ? Util.money0(u.meta || Config.META_MENSUAL_USD) : '—'}</td>
+          <td>${u.activo === false ? '<span class="chip">Inactivo</span>' : '<span class="chip ok">Activo</span>'}${u.debeCambiar && piloto() ? ' <span class="chip warn">Contraseña temporal</span>' : ''}</td>
+          <td class="nowrap"><button class="btn sm" data-action="usuario-editar" data-id="${u.id}">Editar</button>${piloto() ? ` <button class="btn sm" data-action="usuario-clave" data-id="${u.id}">Restablecer contraseña</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="small muted">Roles: ${Object.values(Config.ROLES).map(E).join(' · ')}. Gerencia y jefatura tienen todos los permisos comerciales; administración gestiona usuarios y lista de precios. Para desactivar a un Account Manager, primero reasigna sus cuentas desde Cuentas.</p>`;
+  };
+  function mostrarTemporal(u, temporal, titulo) {
+    modal({ title: titulo, body: `<p style="margin-top:0">Entrega esta contraseña temporal a <strong>${E(u.nombre)}</strong> (usuario <code>${E(u.usuario)}</code>). Al ingresar deberá cambiarla.</p>
+      <div style="font-size:22px;font-weight:800;letter-spacing:.08em;text-align:center;padding:14px;border:1px dashed var(--border-2);border-radius:8px;font-family:monospace">${E(temporal)}</div>
+      <p class="small muted">No se volverá a mostrar. Entrégala por un canal interno.</p>`, actions: [{ label: 'Listo', cls: 'primary' }] });
+  }
+  ACTIONS['usuario-editar'] = el => {
+    const u = el.dataset.id ? S.db.users.find(x => x.id === el.dataset.id) : { rol: 'vendedor', meta: Config.META_MENSUAL_USD, activo: true };
+    const root = modal({
+      title: el.dataset.id ? `Editar usuario · ${u.nombre}` : 'Nuevo usuario', wide: true,
+      body: `<div class="form-grid">
+        <label class="field"><span>Nombre completo <span class="req">*</span></span><input type="text" name="nombre" value="${E(u.nombre || '')}"></label>
+        <label class="field"><span>Iniciales <span class="req">*</span></span><input type="text" name="iniciales" maxlength="3" value="${E(u.iniciales || '')}" style="text-transform:uppercase"></label>
+        <label class="field"><span>Usuario de ingreso <span class="req">*</span></span><input type="text" name="usuario" value="${E(u.usuario || '')}" autocapitalize="none"></label>
+        <label class="field"><span>Rol <span class="req">*</span></span><select name="rol">${options(Object.entries(Config.ROLES), u.rol)}</select></label>
+        <label class="field">Cargo<input type="text" name="cargo" value="${E(u.cargo || '')}" placeholder="Ej.: Account Manager"></label>
+        <label class="field">Correo<input type="email" name="correo" value="${E(u.correo || '')}"></label>
+        <label class="field">Teléfono (sale en el PDF)<input type="text" name="telefono" value="${E(u.telefono || '')}"></label>
+        <label class="field" id="campo-meta">Meta mensual USD (Account Manager)<input type="number" min="0" step="1000" name="meta" value="${E(u.meta || Config.META_MENSUAL_USD)}"></label>
+      </div>
+      ${el.dataset.id ? `<label style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer"><input type="checkbox" name="activo"${u.activo !== false ? ' checked' : ''}> Usuario activo (puede ingresar)</label>` : ''}
+      ${el.dataset.id ? '' : `<p class="small muted">${piloto() ? 'Se generará una contraseña temporal que se mostrará una sola vez.' : 'En la demo la contraseña del nuevo usuario es la temporal que se muestra.'}</p>`}`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
+        const act = r.querySelector('[name=activo]');
+        const res = await Repo.guardarUsuario({ id: el.dataset.id || null, nombre: val(r, 'nombre'), iniciales: val(r, 'iniciales'), usuario: val(r, 'usuario'), rol: val(r, 'rol'),
+          cargo: val(r, 'cargo'), correo: val(r, 'correo'), telefono: val(r, 'telefono'), meta: val(r, 'meta'), activo: act ? act.checked : true }, S.user.id);
+        S.user = S.db.users.find(x => x.id === S.user.id);
+        toast('Usuario guardado.'); refresh();
+        if (res.temporal) setTimeout(() => mostrarTemporal(res.usuario, res.temporal, 'Usuario creado'), 60);
+      } }],
+    });
+    const sel = root.querySelector('[name=rol]'), cm = root.querySelector('#campo-meta');
+    const upd = () => cm.classList.toggle('hidden', sel.value !== 'vendedor');
+    sel.addEventListener('change', upd); upd();
+  };
+  ACTIONS['usuario-clave'] = el => {
+    const u = S.db.users.find(x => x.id === el.dataset.id);
+    modal({ title: 'Restablecer contraseña', body: `<p style="margin-top:0">Se generará una contraseña temporal para <strong>${E(u.nombre)}</strong>. Su contraseña actual dejará de funcionar.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Restablecer', cls: 'primary', onClick: async () => {
+        const t = await Repo.restablecerClave(u.id, S.user.id); refresh(); setTimeout(() => mostrarTemporal(u, t, 'Contraseña restablecida'), 60);
+      } }] });
+  };
+
+  /* =====================================================================
+     POST-VENTA — cada área marca sus pasos (logística: físicos; finanzas: factura y cobro)
+     ===================================================================== */
+  PAGES['postventa'] = async () => {
+    const db = S.db, u = S.user, F = S.pvF;
+    let rows = db.opps.filter(o => o.etapa === 'ganada' && (!F.vendedor || o.vendedorId === F.vendedor));
+    if (F.estado === 'pendientes') rows = rows.filter(o => !(o.postventa && o.postventa.cobrado));
+    if (F.estado === 'logistica') rows = rows.filter(o => !(o.postventa && o.postventa.entregado));
+    if (F.estado === 'facturar') rows = rows.filter(o => o.postventa && o.postventa.entregado && !o.postventa.facturado);
+    rows.sort((a, b) => (Rules.fechaOCRef(b) || '') < (Rules.fechaOCRef(a) || '') ? -1 : 1);
+    const total = rows.length; rows = rows.slice(0, 150);
+    const porArea = db.config && db.config.postventaPorArea;
+    view().innerHTML = `<div class="page-head"><div><h1>Post-venta</h1><p class="muted">${porArea ? 'Logística marca pedido, tránsito, recepción y entrega; finanzas marca facturado y cobrado.' : 'Avance de las oportunidades ganadas.'}</p></div></div>
+      <div class="card" style="padding:12px"><div class="filters" style="margin:0">
+        <label class="field">Mostrar<select data-change="pvf" name="estado">${options([['pendientes', 'Pendientes de cobro'], ['logistica', 'Pendientes de entrega'], ['facturar', 'Entregadas sin facturar'], ['todas', 'Todas las ganadas']], F.estado)}</select></label>
+        <label class="field">Account Manager<select data-change="pvf" name="vendedor">${options(db.users.filter(x => x.rol === 'vendedor').map(v => [v.id, v.iniciales + ' · ' + v.nombre]), F.vendedor, 'Todos')}</select></label>
+      </div><div class="small muted" style="margin-top:8px">${total} oportunidades${total > rows.length ? ' · mostrando 150' : ''}</div></div>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1250px"><thead><tr><th>Cliente / cotización</th><th>AM</th><th class="r">Monto</th>${Config.POSTVENTA.map(p => `<th>${E(p.nombre)}</th>`).join('')}</tr></thead><tbody>
+        ${rows.map(o => { const pv = o.postventa || {}, q = Rules.vigente(db, o); return `<tr><td><div class="cell-main">${Rules.puede(u, 'ver_opp', o) ? `<a href="#/op/${o.id}" style="color:inherit">${E(cli(o.clienteId).razonSocial)}</a>` : E(cli(o.clienteId).razonSocial)}</div><div class="cell-sub">${E(q ? q.numero : '')}</div></td>
+          <td>${vendTag(usr(o.vendedorId))}</td><td class="r num">${Util.money0(Rules.montoUSD(db, o))}</td>
+          ${Config.POSTVENTA.map(p => `<td>${Rules.puedePaso(u, p.id, o, db) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${p.id}" value="${pv[p.id] || ''}" max="${hoy()}" aria-label="${E(p.nombre)}" style="min-width:130px">` : (pv[p.id] ? `<span class="chip ok">${Util.fmtDate(pv[p.id])}</span>` : '<span class="muted">—</span>')}</td>`).join('')}</tr>`; }).join('') || '<tr><td colspan="10" class="center muted" style="padding:20px">Nada pendiente.</td></tr>'}
+      </tbody></table></div>`;
+  };
+  CHANGES['pvf'] = el => { S.pvF[el.name] = el.value; render(true); };
+
   /* ---------- Arranque ---------- */
   let tResize = null;
   async function boot() {
     await Repo.init();
     SelfTest.run();
+    if (Repo.modo() === 'piloto') {
+      S.db = await Repo.snapshot();
+      try { const id = sessionStorage.getItem('tv-sesion'); if (id) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
+    }
     window.addEventListener('hashchange', () => render());
     window.addEventListener('resize', () => { clearTimeout(tResize); tResize = setTimeout(drawCharts, 150); });
     await render();
+    if (S.user && S.user.debeCambiar && Repo.modo() === 'piloto') abrirCambioClave(true);
   }
   return { boot, render, _state: S };
 })();
