@@ -348,8 +348,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .f-lbl small{color:var(--muted);font-weight:400}
 .f-track{display:flex;justify-content:center}
 .f-bar{height:32px;min-width:6px;clip-path:polygon(0 0,100% 0,calc(100% - 7px) 100%,7px 100%);transition:width .25s}
-.f-val{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.f-val small{color:var(--muted)}
+.f-val{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:0;line-height:1.25}
+.f-val small{color:var(--muted);display:block}
 @media (max-width: 640px){
   .f-row{grid-template-columns:1fr auto;grid-template-areas:"lbl val" "bar bar";gap:2px 8px}
   .f-lbl{grid-area:lbl;text-align:left} .f-val{grid-area:val;text-align:right} .f-track{grid-area:bar}
@@ -4094,7 +4094,7 @@ const UI = (() => {
           ${kpi('Con próximo contacto vigente', Util.pct(salud.pctVigente), `${salud.vigentes} de ${salud.abiertas}`, meterHTML(salud.pctVigente || 0))}
           ${kpi('Atrasados', String(salud.atrasados), 'próximo contacto vencido')}
           ${kpi('Escalados a jefatura', String(salud.escalados), `atraso > ${Config.ESCALAR_ATRASO_DH} días hábiles`)}
-          ${kpi('Sin próximo contacto', String(salud.sinProx), 'leídas del correo, por completar')}
+          ${kpi('Sin próximo contacto', String(salud.sinProx), (S.db.numeracion ? 'migradas o nuevas, por completar' : 'leídas del correo, por completar'))}
           ${kpi('Ciclo de venta promedio', ciclo == null ? '—' : Math.round(ciclo) + ' días', 'del envío a la OC · 6 meses')}
         </div>
         ${vid ? '' : `<div class="table-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Vendedor</th><th class="r">Abiertas</th><th class="r">% vigente</th><th class="r">Atrasados</th><th class="r">Escalados</th><th class="r">Sin próximo</th></tr></thead><tbody>
