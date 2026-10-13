@@ -47,7 +47,7 @@ El mismo `index.html` funciona en dos modos:
 | Numeración de cotizaciones | Texto libre | Secuencia general `TV-AAAA-0001`, correlativa para todos |
 | Datos de la empresa en el PDF | Ficticios | Los reales (vienen en la data inicial, no en el código) |
 | Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
-| Lectura simulada del PDF | Visible | Oculta |
+| Ejemplo simulado de PDF | Visible | Oculto (solo PDF reales) |
 
 **Datos "a verificar por gerencia".** Una cuenta u oportunidad puede traer el campo `verificar` con un texto que explica qué confirmar. Se usa, por ejemplo, para los supuestos de una migración. El dashboard de gerencia muestra cuántas hay y enlaza a la lista filtrada ("A verificar por gerencia" en Cuentas y en Oportunidades). Cada ficha muestra el aviso, y gerencia o jefatura lo cierra con **Marcar como verificado**, con una nota opcional. Queda registrado quién lo verificó y cuándo (`verificado`).
 
@@ -68,6 +68,7 @@ El HTML del piloto se arma fuera del repositorio con scripts privados: migració
 | Capa | Objeto | Responsabilidad | En producción |
 |---|---|---|---|
 | 0 | `Config` | Catálogos y parámetros: etapas, probabilidades, motivos de pérdida, condiciones de pago, plazos, horizontes, feriados, meta | Tabla de parámetros administrable |
+| 1b | `LectorPDF`, `LecturaCotizacion` | Extraen el texto de un PDF (objetos, flujos Flate/ASCII85/Hex, fuentes WinAnsi y ToUnicode, posiciones) e interpretan la plantilla de cotización | Lectura en el servidor desde el correo (IA + librería PDF) |
 | 1 | `Util` | Fechas ISO, días hábiles con feriados de Perú, formatos `USD 12,345.67` y `dd/mm/aaaa`, aleatorio con semilla | Se mantiene |
 | 2 | `DemoData` | Generador de la data ficticia | **Se elimina** |
 | 3a | `Almacen` | Guarda y lee el estado del piloto en IndexedDB (no actúa en la demo) | **Se reemplaza por la API del servidor local** |
@@ -86,7 +87,14 @@ La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe c
    - **"Vista previa PDF"** antes de registrar. Al registrar se abre el PDF generado, con los botones "Descargar PDF" (diálogo de impresión → "Guardar como PDF") y "Enviar por correo" (simulado).
    - **Cada cotización de la ficha tiene su botón "PDF"**, y la ficha permite **"Crear revisión desde la vigente"**: copia ítems y condiciones para ajustarlos y emitir la R siguiente.
    - **Datos de ejemplo en la plantilla:** el RUC, los datos bancarios, la dirección y la central de Techvalue son marcadores, no copias del archivo real.
-2. **Leer un PDF ya enviado** (respaldo para quien siga usando el Excel): lectura simulada en el prototipo; con IA desde el correo en la versión final.
+2. **Registrar un PDF ya enviado** (para cotizaciones hechas con la plantilla Excel). El PDF **se lee de verdad en el navegador**, sin internet y sin subirlo a ningún lado (`LectorPDF` + `LecturaCotizacion`), y llena el formulario para revisar y confirmar.
+   - **Lee:** número, cliente y RUC, contacto con correo y teléfono, referencia (se propone como proyecto), fecha, moneda, ítems (cantidad, unidad, código, marca, descripción en varias líneas, valor unitario), suma, IGV, total, condición de pago, validez y plazo.
+   - **Descuento:** la plantilla oculta la fila de descuento, así que se deduce de la suma y el IGV. El formulario compara el total del PDF con el calculado y avisa si no coinciden.
+   - **Varios PDF a la vez:** se registran uno por uno, con "PDF 2 de 5" y "Saltar este PDF".
+   - **Cliente:** se busca por RUC (o por razón social si la cuenta no tenía RUC, y lo completa). Si no existe, se propone como cliente nuevo. Si está sin asignar, pasa a la cartera del vendedor. Si es de otro vendedor, queda el aviso "A verificar por gerencia".
+   - **Revisión:** solo se propone si el número del PDF es el mismo base con `-REV1`, `-R1` o `-ALT`. Otra cotización para el mismo cliente es una oportunidad nueva.
+   - **Probado con PDF exportados desde Excel, LibreOffice, Chrome y ReportLab**, de una y de varias páginas. Un PDF escaneado (solo imagen) o protegido muestra un mensaje claro y la opción "Ingresar a mano".
+   - En la demo sigue el botón "Usar un PDF de ejemplo (simulado)". En la versión final, la cotización se leerá directamente del correo enviado.
 
 ## Fúnel vertical
 
@@ -263,7 +271,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 ## Qué está simulado en el prototipo
 
 - **PDF de la plataforma:** se genera en el navegador como vista imprimible; en producción, en el servidor (HTML → PDF), guardado en SharePoint y adjuntado al correo.
-- **Lectura del PDF con IA:** la pantalla "Subir PDF" no lee el archivo. Muestra "Leyendo cotización…" durante 1.5 s y luego datos ficticios coherentes con la cartera del vendedor (incluye un caso que dispara la detección de revisión).
+- **Lectura desde el correo:** no existe. El vendedor elige los PDF en "Registrar PDF ya enviado" y se leen en el navegador. Solo el botón "Usar un PDF de ejemplo (simulado)" de la demo muestra datos ficticios.
 - **Cotizaciones leídas del correo:** aparecen en la data como oportunidades `pendiente` ("Completar").
 - **Correo de resumen diario** (vendedor), **resumen semanal** (jefatura) y **eventos de Outlook:** solo vista previa en **Notificaciones**. No se envía nada.
 - **Tipo de cambio diario:** ficticio.
