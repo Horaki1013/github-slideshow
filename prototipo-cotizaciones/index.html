@@ -138,7 +138,7 @@ body.logged-out main#view{max-width:none;padding:0}
 /* Formularios */
 label.field{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--text-2);min-width:0}
 label.field .req{color:var(--bad)}
-input[type=text],input[type=number],input[type=date],input[type=password],input[type=email],select,textarea{width:100%;border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;background:#fff;min-height:38px;font-weight:400;color:var(--text)}
+input[type=text],input[type=number],input[type=date],input[type=password],input[type=email],input[type=tel],input[type=url],select,textarea{width:100%;border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;background:#fff;min-height:38px;font-weight:400;color:var(--text)}
 textarea{min-height:64px;resize:vertical}
 input.invalid,select.invalid,textarea.invalid{border-color:var(--bad);background:#fff8f7}
 .field-hint{font-weight:400;color:var(--muted);font-size:11px}
@@ -380,6 +380,24 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .hoja .h-cond td{padding:3px 6px;vertical-align:top}
 .hoja .h-cond td.k{font-weight:700;width:24%}
 .hoja .h-foot{margin-top:18px;border-top:2px solid var(--brand);padding-top:6px;color:#555;font-size:9.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+/* Formulario de cotización: grilla de 12 columnas y subgrupos */
+.fg{display:grid;gap:12px 14px;grid-template-columns:repeat(12,minmax(0,1fr))}
+.fg>.field{min-width:0}
+.fg .c2{grid-column:span 2}.fg .c3{grid-column:span 3}.fg .c4{grid-column:span 4}.fg .c6{grid-column:span 6}.fg .c12{grid-column:1 / -1}
+.fg-sub{grid-column:1 / -1;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-top:1px solid var(--border);padding-top:12px;margin-top:2px}
+.fg-sub.fg-first{border-top:0;padding-top:0;margin-top:0}
+.fg-sub span{text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
+@media (max-width: 900px){ .fg .c2,.fg .c3,.fg .c4{grid-column:span 6} .fg .c6{grid-column:1 / -1} }
+@media (max-width: 560px){ .fg .c2,.fg .c3,.fg .c4,.fg .c6{grid-column:1 / -1} }
+.items-edit{table-layout:fixed;min-width:860px}
+.items-edit td{vertical-align:top}
+.items-edit td.nq-total{padding-top:13px;font-weight:600}
+.items-edit th{white-space:nowrap}
+.opc-head{margin:16px 0 6px;font-weight:700;color:var(--text)}
+.opc-head span{font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+.items-pie{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;align-items:flex-start}
+.tot-box{border:1px solid var(--border);border-radius:10px;padding:10px 14px;background:var(--surface-2);min-width:min(320px,100%)}
+.tot-box .totals{margin-top:0}
 .items-edit tr.fila-opc td{background:#fff8e6}
 .items-edit td.center{text-align:center}
 .hoja .h-items td.d{background:#c5d9f1}
@@ -2854,6 +2872,7 @@ const Repo = (() => {
       if (!(Rules.puede(u, 'editar_opp', o) || (u && u.rol === 'jefatura'))) fail('Solo el Account Manager de la oportunidad o gerencia pueden corregir estos datos.');
       const t = v => String(v == null ? '' : v).trim();
       if (datos.contactoCorreo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(datos.contactoCorreo))) fail('Correo no válido.', { contactoCorreo: 'Correo no válido.' });
+      if (datos.referencia !== undefined) q.referencia = t(datos.referencia);
       Object.assign(q, { clienteDireccion: t(datos.direccion), clienteCiudad: t(datos.ciudad), clientePais: t(datos.pais) || 'Perú', contacto: t(datos.contacto), contactoCorreo: t(datos.contactoCorreo), contactoTelefono: t(datos.contactoTelefono) });
       log(o, `Datos del cliente en la cotización N° ${q.numero} corregidos: ${[q.clienteDireccion, q.clienteCiudad, q.clientePais].filter(Boolean).join(', ')}.`, usuarioId);
       touch();
@@ -3183,7 +3202,7 @@ const Repo = (() => {
         descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit), listaUSD: +it.listaUSD > 0 ? +it.listaUSD : null, ...(it.opcional ? { opcional: true } : {}) }));
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
-        condicionEspecial: String(p.condicionEspecial || '').trim(),
+        condicionEspecial: String(p.condicionEspecial || '').trim(), referencia: String(p.referencia || '').trim(),
         // Dónde lo piden (puede variar entre cotizaciones del mismo cliente)
         clienteDireccion: String(p.direccion || (cta && cta.direccion) || '').trim(), clienteCiudad: String(p.ciudad || (cta && cta.ciudad) || '').trim(), clientePais: String(p.pais || (cta && cta.pais) || 'Perú').trim(),
         // Copia de las condiciones vigentes al emitir: si luego cambian los datos de la empresa, esta cotización no cambia
@@ -3949,7 +3968,7 @@ const UI = (() => {
     const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td><td>${E(it.unidad)}</td><td><strong>${E(it.codigo)}</strong></td><td><strong>${E(it.marca)}</strong></td><td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2((+it.cant || 0) * (+it.valorUnit || 0))}</td></tr>`;
     const princ = q.items.filter(it => !it.opcional), opc = q.items.filter(it => it.opcional);
-    const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '';
+    const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '');
     const n2 = v => Util.nf2.format(v || 0);
     const fila = (k1, v1, k2, v2) => `<tr><td class="k">${k1}</td><td>${v1}</td><td class="k">${k2}</td><td>${v2}</td></tr>`;
     return `<div class="hoja">
@@ -4020,7 +4039,7 @@ const UI = (() => {
     const cur = q.moneda, n2 = v => Util.nf2.format(v || 0);
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
     const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
-    const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre}${proyecto.usuarioFinal ? ' — ' + proyecto.usuarioFinal : ''}` : '';
+    const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre}${proyecto.usuarioFinal ? ' — ' + proyecto.usuarioFinal : ''}` : '');
     let y = 0;
     const pie = () => {
       const yb = doc.H - 44;
@@ -4729,10 +4748,10 @@ const UI = (() => {
   ACTIONS['q-datos'] = el => {
     const q = S.db.quotes.find(x => x.id === el.dataset.q), o = oppById(q.oppId), c = cli(o.clienteId);
     const k = (c.contactos || []).find(x => x.nombre === q.contacto) || {};
-    const v = { direccion: q.clienteDireccion || c.direccion || '', ciudad: q.clienteCiudad || c.ciudad || '', pais: q.clientePais || c.pais || 'Perú', contacto: q.contacto || '', contactoCorreo: q.contactoCorreo || k.correo || '', contactoTelefono: q.contactoTelefono || k.telefono || '' };
+    const v = { referencia: q.referencia || '', direccion: q.clienteDireccion || c.direccion || '', ciudad: q.clienteCiudad || c.ciudad || '', pais: q.clientePais || c.pais || 'Perú', contacto: q.contacto || '', contactoCorreo: q.contactoCorreo || k.correo || '', contactoTelefono: q.contactoTelefono || k.telefono || '' };
     const f = (n, l, span) => `<label class="field"${span ? ' style="grid-column:1 / -1"' : ''}>${l}<input type="text" name="${n}" value="${E(v[n])}"></label>`;
-    modal({ title: `Datos del cliente · N° ${q.numero}`, body: `<p class="small muted" style="margin-top:0">Corrige lo que sale en el PDF de esta cotización (no cambia los ítems ni el número). Para otro precio o producto, crea una revisión.</p>
-      <div class="form-grid">${f('direccion', 'Dirección', true)}${f('ciudad', 'Ciudad')}${f('pais', 'País')}${f('contacto', 'Contacto')}${f('contactoCorreo', 'Correo del contacto')}${f('contactoTelefono', 'Teléfono del contacto')}</div>`,
+    modal({ title: `Datos del cliente · N° ${q.numero}`, body: `<p class="small muted" style="margin-top:0">Corrige la referencia y los datos del cliente que salen en el PDF de esta cotización (no cambia los ítems ni el número). Para otro precio o producto, crea una revisión.</p>
+      <div class="form-grid">${f('referencia', 'Referencia (vacía: sale el proyecto)', true)}${f('direccion', 'Dirección', true)}${f('ciudad', 'Ciudad')}${f('pais', 'País')}${f('contacto', 'Contacto')}${f('contactoCorreo', 'Correo del contacto')}${f('contactoTelefono', 'Teléfono del contacto')}</div>`,
       actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { const d = {}; Object.keys(v).forEach(n => { d[n] = val(root, n); }); await Repo.actualizarDatosCotizacion(q.id, d, S.user.id); toast('Datos de la cotización actualizados.'); refresh(); } }] });
   };
   function quoteHTML(q, ed) {
@@ -4744,7 +4763,7 @@ const UI = (() => {
       <header><strong>N° ${E(q.numero)}</strong><span class="chip ${q.tipo === 'alternativa' ? 'warn' : 'info'}">${q.tipo === 'alternativa' ? 'Alternativa (otra marca)' : q.revision}</span>
         ${q.vigente ? '<span class="chip dark">Vigente</span>' : ed ? `<button class="btn sm" data-action="vigente" data-q="${q.id}">Marcar como vigente</button>` : ''}
         <button class="btn sm" data-action="ver-pdf" data-q="${q.id}" title="Ver o descargar el PDF con la plantilla">${I('file')} PDF</button>
-        ${ed || S.user.rol === 'jefatura' ? `<button class="btn sm ghost" data-action="q-datos" data-q="${q.id}" title="Corregir dirección, ciudad, país y contacto del PDF">Datos del cliente</button>` : ''}
+        ${ed || S.user.rol === 'jefatura' ? `<button class="btn sm ghost" data-action="q-datos" data-q="${q.id}" title="Corregir referencia, dirección, ciudad, país y contacto del PDF">Referencia y datos del cliente</button>` : ''}
         ${dup.length ? `<span class="chip bad" title="Mismo número en ${dup.map(d => d.oppId).join(', ')}">${I('alert').replace('<svg', '<svg width="13" height="13"')} N° duplicado (${dup.map(d => d.oppId).join(', ')})</span>` : ''}
         <span class="small muted" style="margin-left:auto">${Util.fmtDate(q.fechaEmision)}</span></header>
       <div class="q-body">
@@ -5073,56 +5092,65 @@ const UI = (() => {
       ${plat ? `<div class="alert info"><div><strong>Cotizar en la plataforma.</strong> El número es correlativo, el código completa marca, descripción y precio de lista, y al registrar se genera el PDF con la plantilla de Techvalue. Queda en tu seguimiento sin doble registro y se puede enviar con copia al buzón común.</div></div>` : ''}
       ${N.tab === 'pdf' && N.lectura ? lecturaHTML(N) : N.tab === 'pdf' && N.manual ? `<div class="alert info"><div><strong>Registro manual.</strong> Copia los datos de la cotización que enviaste.</div></div>` : N.tab === 'pdf' ? `<div class="alert info"><div><span class="sim-label">Simulación</span> Datos “extraídos” de <strong>${E(N.archivo)}</strong>. Revisa y corrige antes de confirmar.
         ${d.referencia ? `<br>Referencia leída en el PDF: <strong>${E(d.referencia)}</strong> → se propuso como proyecto.` : ''}</div></div>` : ''}
-      ${sec(1, 'Cliente', `<div class="form-grid">
-        <label class="field"><span>Cliente <span class="req">*</span></span><select name="cliente" data-nq="clienteId" data-nq-render="1">${options([...(c && c.vendedorId !== u.id ? [[c.id, c.razonSocial + (c.vendedorId ? ' (cuenta de ' + usr(c.vendedorId).nombre + ')' : ' (sin asignar)')]] : []), ...misClientes.map(x => [x.id, x.razonSocial]), ['__nuevo', '+ Cliente nuevo…']], d.clienteId, 'Selecciona…')}</select></label>
-        ${d.clienteId === '__nuevo' ? `<label class="field"><span>Razón social <span class="req">*</span></span><input type="text" data-nq="clienteNuevo.razonSocial" value="${E(d.clienteNuevo.razonSocial)}"></label>
-          <label class="field"><span>RUC (11 dígitos) <span class="req">*</span></span><input type="text" name="ruc" inputmode="numeric" maxlength="11" data-nq="clienteNuevo.ruc" data-nq-render="1" value="${E(d.clienteNuevo.ruc)}"></label>`
-          : `<label class="field">RUC<input type="text" value="${c ? E(c.ruc) : ''}" readonly placeholder="Se completa con el cliente"></label>`}
-        <label class="field">Contacto<input type="text" list="nq-contactos" data-nq="contacto" data-nq-render="1" value="${E(d.contacto)}"><datalist id="nq-contactos">${c ? c.contactos.map(k => `<option value="${E(k.nombre)}">`).join('') : ''}</datalist></label>
+      ${sec(1, 'Cliente', `<div class="fg">
+        <div class="fg-sub fg-first">Empresa</div>
+        <label class="field c6"><span>Cliente <span class="req">*</span></span><select name="cliente" data-nq="clienteId" data-nq-render="1">${options([...(c && c.vendedorId !== u.id ? [[c.id, c.razonSocial + (c.vendedorId ? ' (cuenta de ' + usr(c.vendedorId).nombre + ')' : ' (sin asignar)')]] : []), ...misClientes.map(x => [x.id, x.razonSocial]), ['__nuevo', '+ Cliente nuevo…']], d.clienteId, 'Selecciona…')}</select></label>
+        ${d.clienteId === '__nuevo' ? `<label class="field c3"><span>Razón social <span class="req">*</span></span><input type="text" data-nq="clienteNuevo.razonSocial" value="${E(d.clienteNuevo.razonSocial)}"></label>
+          <label class="field c3"><span>RUC (11 dígitos) <span class="req">*</span></span><input type="text" name="ruc" inputmode="numeric" maxlength="11" data-nq="clienteNuevo.ruc" data-nq-render="1" value="${E(d.clienteNuevo.ruc)}"></label>`
+          : `<label class="field c3">RUC<input type="text" value="${c ? E(c.ruc) : ''}" readonly placeholder="Se completa con el cliente"></label>`}
         ${(() => { const k = c && c.contactos.find(x => x.nombre === d.contacto) || {}; return `
-        <label class="field">Correo del contacto<input type="email" data-nq="contactoCorreo" value="${E(d.contactoCorreo || k.correo || '')}" placeholder="Opcional"></label>
-        <label class="field">Teléfono del contacto<input type="tel" data-nq="contactoTelefono" value="${E(d.contactoTelefono || k.telefono || '')}" placeholder="Opcional"></label>
-        <label class="field" style="grid-column:span 2;min-width:0">Dirección de la empresa<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional · sale en el PDF"></label>
-        <label class="field">Ciudad<input type="text" data-nq="ciudad" value="${E(d.ciudad || (c && c.ciudad) || '')}" placeholder="Lima"></label>
-        <label class="field">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>`; })()}
-      </div><p class="small muted" style="margin:6px 0 0">El correo, el teléfono, la dirección, la ciudad y el país se guardan en esta cotización y en la cuenta, así cada cotización puede ser para un lugar distinto.</p>`)}
-      ${sec(2, 'Datos de la cotización', `<div class="form-grid">
-        <label class="field"><span>N° de cotización (como figura en el PDF) <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Formato libre">${plat ? `<span class="field-hint">${d.numAuto ? 'Correlativo automático (puedes editarlo)' : 'Número editado a mano'}</span>` : ''}
-          <span id="nq-dup">${dupHTML(dup)}</span></label>
-        <label class="field"><span>Fecha de emisión <span class="req">*</span></span><input type="date" name="fechaEmision" data-nq="fechaEmision" data-nq-render="1" max="${hoy()}" value="${d.fechaEmision}"></label>
-        <label class="field">Moneda<select data-nq="moneda" data-nq-render="1">${options([['USD', 'USD – Dólares'], ['PEN', 'PEN – Soles']], d.moneda)}</select></label>
-        ${d.moneda === 'PEN' ? `<label class="field"><span>Tipo de cambio del día <span class="req">*</span></span><input type="number" step="0.001" name="tc" data-nq="tc" value="${d.tc}"><span class="field-hint">TC ficticio del ${Util.fmtDate(d.fechaEmision)}</span></label>` : ''}
-        <label class="field"><span>Condición de pago <span class="req">*</span></span><select name="condicionPago" data-nq="condicionPago">${options(Config.CONDICIONES_PAGO.map(x => [x.id, x.nombre]), d.condicionPago, 'Selecciona…')}</select></label>
-        <label class="field"><span>Validez (días) <span class="req">*</span></span><input type="number" min="1" name="validezDias" data-nq="validezDias" value="${E(d.validezDias)}"></label>
-        <label class="field" style="grid-column:span 2;min-width:0"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select></label>
-        <label class="field" style="grid-column:1 / -1;min-width:0">Condición comercial especial (opcional)<textarea name="condicionEspecial" data-nq="condicionEspecial" rows="2" maxlength="1500" placeholder="Ej.: Precio válido por la compra conjunta de los 3 ítems. Entrega parcial: 50 % en 2 semanas y el saldo en 6.">${E(d.condicionEspecial || '')}</textarea><span class="field-hint">Sale en el PDF dentro de "Condiciones comerciales". Las condiciones fijas (cuentas, entrega, despacho) las mantiene gerencia en "Datos de la empresa".</span></label>
+        <div class="fg-sub">Dónde lo piden <span>sale en el PDF; puede variar entre cotizaciones</span></div>
+        <label class="field c6">Dirección<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional"></label>
+        <label class="field c3">Ciudad<input type="text" data-nq="ciudad" value="${E(d.ciudad || (c && c.ciudad) || '')}" placeholder="Lima"></label>
+        <label class="field c3">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>
+        <div class="fg-sub">Contacto <span>se guarda también en la agenda</span></div>
+        <label class="field c4">Nombre<input type="text" list="nq-contactos" data-nq="contacto" data-nq-render="1" value="${E(d.contacto)}" placeholder="Elige o escribe"><datalist id="nq-contactos">${c ? c.contactos.map(x => `<option value="${E(x.nombre)}">`).join('') : ''}</datalist></label>
+        <label class="field c4">Correo<input type="email" data-nq="contactoCorreo" value="${E(d.contactoCorreo || k.correo || '')}" placeholder="Opcional"></label>
+        <label class="field c4">Teléfono<input type="tel" data-nq="contactoTelefono" value="${E(d.contactoTelefono || k.telefono || '')}" placeholder="Opcional"></label>`; })()}
       </div>`)}
-      ${sec(3, 'Ítems', `<input type="hidden" name="items"><div class="table-wrap"><table class="tbl items-edit"><thead><tr><th style="width:44px" title="Opcional: se cotiza aparte y no suma al total">Opc.</th><th style="width:70px">Cant.</th><th style="width:80px">Uni.</th><th>Código</th><th style="width:130px">Marca</th><th>Descripción</th><th style="width:120px">V. unit. (${d.moneda})</th><th class="r" style="width:110px">Total</th><th></th></tr></thead><tbody>
-        ${d.items.map((it, i) => `<tr${it.opcional ? ' class="fila-opc"' : ''}>
-          <td class="center"><input type="checkbox" data-nqi="${i}" data-k="opcional"${it.opcional ? ' checked' : ''} aria-label="Opcional: no suma al total" title="Opcional: no suma al total"></td>
+      ${sec(2, 'Datos de la cotización', `<div class="fg">
+        <label class="field c3"><span>N° de cotización <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Como figura en el PDF">${plat ? `<span class="field-hint">${d.numAuto ? 'Correlativo automático (editable)' : 'Número editado a mano'}</span>` : ''}
+          <span id="nq-dup">${dupHTML(dup)}</span></label>
+        <label class="field c3"><span>Fecha de emisión <span class="req">*</span></span><input type="date" name="fechaEmision" data-nq="fechaEmision" data-nq-render="1" max="${hoy()}" value="${d.fechaEmision}"></label>
+        <label class="field ${d.moneda === 'PEN' ? 'c3' : 'c6'}">Moneda<select data-nq="moneda" data-nq-render="1">${options([['USD', 'USD – Dólares'], ['PEN', 'PEN – Soles']], d.moneda)}</select></label>
+        ${d.moneda === 'PEN' ? `<label class="field c3"><span>Tipo de cambio <span class="req">*</span></span><input type="number" step="0.001" name="tc" data-nq="tc" value="${d.tc}"><span class="field-hint">Del ${Util.fmtDate(d.fechaEmision)}</span></label>` : ''}
+        <label class="field c4"><span>Condición de pago <span class="req">*</span></span><select name="condicionPago" data-nq="condicionPago">${options(Config.CONDICIONES_PAGO.map(x => [x.id, x.nombre]), d.condicionPago, 'Selecciona…')}</select></label>
+        <label class="field c6"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select></label>
+        <label class="field c2"><span>Validez (días) <span class="req">*</span></span><input type="number" min="1" name="validezDias" data-nq="validezDias" value="${E(d.validezDias)}"></label>
+        <label class="field c12"><span>Condición comercial especial <span class="muted" style="font-weight:400">(opcional)</span></span><textarea name="condicionEspecial" data-nq="condicionEspecial" rows="2" maxlength="1500" placeholder="Ej.: Precio válido por la compra conjunta de los 3 ítems. Entrega parcial: 50 % en 2 semanas y el saldo en 6.">${E(d.condicionEspecial || '')}</textarea><span class="field-hint">Sale en el PDF dentro de "Condiciones comerciales". Cuentas, entrega y despacho los mantiene gerencia en "Datos de la empresa".</span></label>
+      </div>`)}
+      ${sec(3, 'Ítems', (() => {
+        const cab = `<colgroup><col style="width:72px"><col style="width:84px"><col style="width:170px"><col style="width:130px"><col><col style="width:124px"><col style="width:104px"><col style="width:76px"></colgroup>
+          <thead><tr><th>Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th>V. unit. (${d.moneda})</th><th class="r">Total</th><th></th></tr></thead>`;
+        const principales = d.items.map((it, i) => [it, i]).filter(([it]) => !it.opcional), opcionales = d.items.map((it, i) => [it, i]).filter(([it]) => it.opcional);
+        const fila = ([it, i]) => `<tr${it.opcional ? ' class="fila-opc"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td><input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Escribe código o descripción" aria-label="Código: escribe para buscar en la lista de precios" style="min-width:150px"></td>
+          <td><input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios"></td>
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options([...new Set([...marcasDisponibles(), it.marca].filter(Boolean))].map(x => [x, x]), it.marca)}</select></td>
-          <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción"></td>
+          <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción" title="${E(it.descripcion)}"></td>
           <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"><div class="field-hint" id="nq-lista-${i}">${listaHint(d, it)}</div></td>
-          <td class="r num" id="nq-tot-${i}">${Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0))}</td>
-          <td><button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`).join('')}
-        </tbody></table></div>
-        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
+          <td class="r num nq-total" id="nq-tot-${i}">${Util.nf2.format((+it.cant || 0) * (+it.valorUnit || 0))}</td>
+          <td class="nowrap r"><button type="button" class="btn sm ghost" data-action="nq-toggle-opc" data-i="${i}" title="${it.opcional ? 'Pasar a ítem principal (suma al total)' : 'Pasar a opcionales (no suma al total)'}" aria-label="${it.opcional ? 'Pasar a principal' : 'Pasar a opcional'}">${it.opcional ? '↑' : '↓'}</button><button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`;
+        return `<input type="hidden" name="items">
+        <div class="table-wrap"><table class="tbl items-edit">${cab}<tbody>${principales.map(fila).join('') || '<tr><td colspan="8" class="muted center">Agrega al menos un ítem principal.</td></tr>'}</tbody></table></div>
+        ${opcionales.length ? `<div class="opc-head">Opcionales <span>se cotizan aparte y no suman al total</span></div>
+        <div class="table-wrap"><table class="tbl items-edit opc">${cab}<tbody>${opcionales.map(fila).join('')}</tbody></table></div>` : ''}
+        <div class="items-pie">
           <div class="btn-row"><button type="button" class="btn sm" data-action="nq-add-item">${I('plus')} Agregar ítem</button><button type="button" class="btn sm" data-action="nq-add-opcional" title="Fuentes, accesorios u otros que el cliente puede sumar: van aparte y no suman al total">${I('plus')} Agregar opcional</button><button type="button" class="btn sm" data-action="nq-explorar">${I('tag')} Buscar en la lista de precios</button></div>
-          <div class="totals" id="nq-totales">${totalesHTML(d, t, usd)}</div>
-        </div>`)}
-      ${sec(4, 'Proyecto', `<div class="form-grid">
-        <label class="field"><span>Proyecto <span class="req">*</span></span><select name="proyecto" data-nq="proyectoSel" data-nq-render="1">
+          <div class="tot-box"><div class="totals" id="nq-totales">${totalesHTML(d, t, usd)}</div></div>
+        </div>`; })())}
+      ${sec(4, 'Proyecto y referencia', `<div class="fg">
+        <label class="field c6"><span>Proyecto <span class="req">*</span></span><select name="proyecto" data-nq="proyectoSel" data-nq-render="1">
           <option value="">Selecciona…</option><option value="PR-DIRECTA"${d.proyectoSel === 'PR-DIRECTA' ? ' selected' : ''}>Compra directa (sin proyecto)</option>
           ${priv.length ? `<optgroup label="Proyectos de este cliente">${priv.map(popt).join('')}</optgroup>` : ''}
           <optgroup label="Proyectos estatales / con varios integradores">${est.map(popt).join('')}</optgroup>
           <option value="__nuevo"${d.proyectoSel === '__nuevo' ? ' selected' : ''}>+ Proyecto nuevo…</option></select>
-          <span class="field-hint">Obligatorio. Si no hay proyecto, elige “Compra directa”.</span></label>
-        ${d.proyectoSel === '__nuevo' ? `<label class="field"><span>Nombre del proyecto <span class="req">*</span></span><input type="text" data-nq="proyectoNuevo.nombre" value="${E(d.proyectoNuevo.nombre)}" placeholder="Ej.: Red OT de planta"></label>
-          <label class="field"><span>Usuario final <span class="req">*</span></span><input type="text" data-nq="proyectoNuevo.usuarioFinal" value="${E(d.proyectoNuevo.usuarioFinal)}" placeholder="Ej.: entidad que convoca"></label>`
-          : `<label class="field">Usuario final<input type="text" readonly value="${pSel ? E(pSel.tipo === 'directa' ? '(el mismo cliente)' : pSel.usuarioFinal) : ''}"></label>`}
+          <span class="field-hint">Si no hay proyecto, elige “Compra directa”.</span></label>
+        ${d.proyectoSel === '__nuevo' ? `<label class="field c3"><span>Nombre del proyecto <span class="req">*</span></span><input type="text" data-nq="proyectoNuevo.nombre" value="${E(d.proyectoNuevo.nombre)}" placeholder="Ej.: Red OT de planta"></label>
+          <label class="field c3"><span>Usuario final <span class="req">*</span></span><input type="text" data-nq="proyectoNuevo.usuarioFinal" value="${E(d.proyectoNuevo.usuarioFinal)}" placeholder="Ej.: entidad que convoca"></label>`
+          : `<label class="field c6">Usuario final<input type="text" readonly value="${pSel ? E(pSel.tipo === 'directa' ? '(el mismo cliente)' : pSel.usuarioFinal) : ''}"></label>`}
+        <label class="field c12"><span>Referencia <span class="muted" style="font-weight:400">(sale en el PDF)</span></span><input type="text" data-nq="referencia" maxlength="300" value="${E(d.referencia || '')}" placeholder="${E(pSel && pSel.tipo !== 'directa' ? 'Si la dejas vacía: ' + pSel.nombre + (pSel.usuarioFinal ? ' — ' + pSel.usuarioFinal : '') : 'Ej.: Solicitud SOL-2026-118 · Reemplazo de switches de la sala eléctrica')}"><span class="field-hint">Texto libre: el requerimiento o el código de la solicitud del cliente. Si la dejas vacía, sale el proyecto.</span></label>
       </div>
       ${cands.length ? `<div class="alert warn" style="margin-top:12px"><div><strong>Posible revisión detectada.</strong> Ya tienes una oportunidad abierta con el mismo RUC y el mismo proyecto. Confirma cómo registrarla:
         <div class="stack" style="margin-top:8px">
@@ -5213,6 +5241,7 @@ const UI = (() => {
     else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; render(true); }
   });
   ACTIONS['nq-add-item'] = () => { S.nueva.d.items.push(itemVacio()); render(true); };
+  ACTIONS['nq-toggle-opc'] = el => { const it = S.nueva.d.items[+el.dataset.i]; it.opcional = !it.opcional; render(true); };
   ACTIONS['nq-add-opcional'] = () => { S.nueva.d.items.push(Object.assign(itemVacio(), { opcional: true })); render(true); };
   /** Explorar la lista de precios por marca y agregar ítems a la cotización */
   ACTIONS['nq-explorar'] = () => {
@@ -5254,7 +5283,7 @@ const UI = (() => {
     const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
     const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
       contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', condicionEspecial: d.condicionEspecial || '',
-      clienteDireccion: d.direccion || '', clienteCiudad: d.ciudad || '', clientePais: d.pais || '',
+      clienteDireccion: d.direccion || '', clienteCiudad: d.ciudad || '', clientePais: d.pais || '', referencia: d.referencia || '',
       descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
   };
@@ -5272,7 +5301,7 @@ const UI = (() => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', direccion: q.clienteDireccion || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
+      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
       contactoCorreo: q.contactoCorreo || '', contactoTelefono: q.contactoTelefono || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
@@ -5289,7 +5318,7 @@ const UI = (() => {
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
       modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
-      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
+      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', referencia: d.referencia || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {
