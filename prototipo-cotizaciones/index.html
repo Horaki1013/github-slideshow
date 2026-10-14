@@ -2456,7 +2456,7 @@ const Rules = (() => {
       case 'ver_todo': return user.rol === 'jefatura' || user.rol === 'finanzas';
       // Cuentas (opp = cliente en estos casos)
       case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
-      case 'editar_contactos': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      case 'editar_contactos': return ['jefatura', 'finanzas', 'admin'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
       case 'asignar_cuenta': return user.rol === 'jefatura';
@@ -2847,6 +2847,26 @@ const Repo = (() => {
       touch();
       return cambios;
     },
+    /** PATCH /cotizaciones/:id/cliente — corrige los datos del cliente y del contacto que salen en el PDF de una cotización ya registrada */
+    async actualizarDatosCotizacion(quoteId, datos, usuarioId) {
+      const q = db.quotes.find(x => x.id === quoteId) || fail('Cotización no encontrada.');
+      const o = opp(q.oppId), u = usuarioDe(usuarioId);
+      if (!(Rules.puede(u, 'editar_opp', o) || (u && u.rol === 'jefatura'))) fail('Solo el Account Manager de la oportunidad o gerencia pueden corregir estos datos.');
+      const t = v => String(v == null ? '' : v).trim();
+      if (datos.contactoCorreo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(datos.contactoCorreo))) fail('Correo no válido.', { contactoCorreo: 'Correo no válido.' });
+      Object.assign(q, { clienteDireccion: t(datos.direccion), clienteCiudad: t(datos.ciudad), clientePais: t(datos.pais) || 'Perú', contacto: t(datos.contacto), contactoCorreo: t(datos.contactoCorreo), contactoTelefono: t(datos.contactoTelefono) });
+      log(o, `Datos del cliente en la cotización N° ${q.numero} corregidos: ${[q.clienteDireccion, q.clienteCiudad, q.clientePais].filter(Boolean).join(', ')}.`, usuarioId);
+      touch();
+    },
+    /** PATCH /usuarios/yo — cada usuario actualiza su teléfono, correo y cargo (salen en el PDF). Rol, meta e iniciales los cambia gerencia */
+    async guardarMisDatos(usuarioId, datos) {
+      const u = usuarioDe(usuarioId) || fail('Usuario no encontrado.');
+      const t = v => String(v == null ? '' : v).trim();
+      if (t(datos.correo) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(datos.correo))) fail('Correo no válido.', { correo: 'Correo no válido.' });
+      Object.assign(u, { telefono: t(datos.telefono), correo: t(datos.correo), cargo: t(datos.cargo) || u.cargo });
+      touch();
+      return u;
+    },
     async desconectarCarpeta() { await AlmacenCompartido.olvidar(); Object.assign(estado, { compartida: false, carpeta: '' }); avisar(); },
     /** Trae los cambios de otros usuarios (la UI lo llama cada pocos segundos) */
     refrescar() {
@@ -3151,6 +3171,8 @@ const Repo = (() => {
         if (p.contacto && !kk) cta.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: p.contacto.trim(), cargo: '', correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' });
         else if (kk) { if (p.contactoCorreo) kk.correo = String(p.contactoCorreo).trim(); if (p.contactoTelefono) kk.telefono = String(p.contactoTelefono).trim(); }
         if (String(p.direccion || '').trim()) cta.direccion = String(p.direccion).trim();
+        if (String(p.ciudad || '').trim()) cta.ciudad = String(p.ciudad).trim();
+        if (String(p.pais || '').trim()) cta.pais = String(p.pais).trim();
         if (!cta.vendedorId) cta.vendedorId = p.vendedorId;
         else if (cta.vendedorId !== p.vendedorId && !cta.verificar) {
           const yo = usuarioDe(p.vendedorId), dueno = usuarioDe(cta.vendedorId);
@@ -3162,6 +3184,8 @@ const Repo = (() => {
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
         condicionEspecial: String(p.condicionEspecial || '').trim(),
+        // Dónde lo piden (puede variar entre cotizaciones del mismo cliente)
+        clienteDireccion: String(p.direccion || (cta && cta.direccion) || '').trim(), clienteCiudad: String(p.ciudad || (cta && cta.ciudad) || '').trim(), clientePais: String(p.pais || (cta && cta.pais) || 'Perú').trim(),
         // Copia de las condiciones vigentes al emitir: si luego cambian los datos de la empresa, esta cotización no cambia
         condiciones: db.empresa ? CAMPOS_CONDICIONES.reduce((o, k) => { if (db.empresa[k] != null) o[k] = db.empresa[k]; return o; }, {}) : undefined,
         vigente: true, contacto: p.contacto || '', contactoCorreo: String(p.contactoCorreo || '').trim(), contactoTelefono: String(p.contactoTelefono || '').trim(), origen: p.origen, archivo: p.archivo || undefined };
@@ -3521,6 +3545,7 @@ const UI = (() => {
     const u = S.user, adm = Rules.puede(u, 'gestionar_usuarios');
     $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="Usuario"><header><div style="display:flex;gap:10px;align-items:center">${avatar(u)}<div><strong>${E(u.nombre)}</strong><div class="small muted">${E(Rules.rolNombre(u))}${u.cargo ? ' · ' + E(u.cargo) : ''}${u.correo ? ' · ' + E(u.correo) : ''}</div></div></div></header>
       <footer style="flex-direction:column;align-items:stretch">
+        <button class="btn" data-action="mis-datos">${I('users')} Mis datos (teléfono, correo, cargo)</button>
         ${piloto() ? `<button class="btn" data-action="cambiar-clave">${I('key')} Cambiar contraseña</button>` : ''}
         ${piloto() && adm ? `<button class="btn" data-action="respaldo-exportar">${I('download')} Exportar respaldo (JSON)</button>
           <button class="btn" data-action="respaldo-importar">${I('upload')} Restaurar respaldo…</button><input type="file" id="respaldo-file" accept=".json" class="hidden">
@@ -3573,6 +3598,13 @@ const UI = (() => {
       } }] });
   };
   ACTIONS['cambiar-clave'] = () => { closePopover(); abrirCambioClave(false); };
+  ACTIONS['mis-datos'] = () => {
+    closePopover();
+    const u = S.user, f = (n, l, t) => `<label class="field">${l}<input type="${t || 'text'}" name="${n}" value="${E(u[n] || '')}"></label>`;
+    modal({ title: 'Mis datos', body: `<p class="small muted" style="margin-top:0">Salen en el PDF de tus cotizaciones ("Emitido por"). Tu rol, meta e iniciales los cambia gerencia o administración.</p>
+      <div class="form-grid">${f('telefono', 'Teléfono', 'tel')}${f('correo', 'Correo', 'email')}${f('cargo', 'Cargo')}</div>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { await Repo.guardarMisDatos(u.id, { telefono: val(root, 'telefono'), correo: val(root, 'correo'), cargo: val(root, 'cargo') }); S.user = Repo.sesion(u.id); toast('Tus datos se actualizaron.'); render(true); } }] });
+  };
   function abrirCambioClave(obligatorio) {
     modal({
       title: obligatorio ? 'Crea tu contraseña personal' : 'Cambiar contraseña',
@@ -3914,7 +3946,7 @@ const UI = (() => {
   function pdfHTML({ q, cliente, contacto, proyecto, vendedor }) {
     const emp = empresaPDF();
     const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp);
+    const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td><td>${E(it.unidad)}</td><td><strong>${E(it.codigo)}</strong></td><td><strong>${E(it.marca)}</strong></td><td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2((+it.cant || 0) * (+it.valorUnit || 0))}</td></tr>`;
     const princ = q.items.filter(it => !it.opcional), opc = q.items.filter(it => it.opcional);
     const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '';
@@ -3927,8 +3959,8 @@ const UI = (() => {
       <table class="h-datos"><tbody>
         ${fila('Dirigido a', E(cliente.razonSocial), 'Emitido por', E(vendedor.nombre))}
         ${fila('RUC', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
-        ${fila('Dirección', E(cliente.direccion || '—'), 'Área', E(emp.area))}
-        ${fila('Ciudad/País', `${E(cliente.ciudad || 'Lima')}, Perú`, 'Teléfono', E(vendedor.telefono || emp.central))}
+        ${fila('Dirección', E(ub.direccion || '—'), 'Área', E(emp.area))}
+        ${fila('Ciudad/País', E(ub.ciudadPais), 'Teléfono', E(vendedor.telefono || emp.central))}
         ${fila('Teléfono', E(k.telefono || '—'), 'Correo', E(vendedor.correo || '—'))}
         ${fila('Contacto', E(contacto || '—'), 'Fecha de emisión', Util.fmtDate(q.fechaEmision))}
         <tr><td class="k">Email</td><td colspan="3">${E(k.correo || '—')}</td></tr>
@@ -3968,6 +4000,11 @@ const UI = (() => {
   const empresaPDF = () => Object.assign({}, S.db.empresa ? {} : EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {}, S.db.empresa || {});
   /** Condiciones de una cotización: las copiadas al emitirla y, si no hay copia, las vigentes */
   const condicionesDe = (q, emp) => Object.assign({}, emp, q.condiciones || {});
+  /** Dónde lo piden: lo guardado en la cotización y, si falta, lo de la cuenta */
+  function ubicacionDe(q, cliente) {
+    const direccion = q.clienteDireccion || cliente.direccion || '', ciudad = q.clienteCiudad || cliente.ciudad || 'Lima', pais = q.clientePais || cliente.pais || 'Perú';
+    return { direccion, ciudad, pais, ciudadPais: [ciudad, pais].filter(Boolean).join(', ') };
+  }
   /** Datos de contacto que van en la cotización: los guardados en la cotización y, si faltan, los de la agenda */
   function datosContacto(q, cliente, contacto) {
     const k = (cliente.contactos || []).find(x => x.nombre === contacto) || {};
@@ -3982,7 +4019,7 @@ const UI = (() => {
     const L = 40, R = 555, LIM = doc.H - 70;
     const cur = q.moneda, n2 = v => Util.nf2.format(v || 0);
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp);
+    const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
     const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre}${proyecto.usuarioFinal ? ' — ' + proyecto.usuarioFinal : ''}` : '';
     let y = 0;
     const pie = () => {
@@ -4003,7 +4040,7 @@ const UI = (() => {
     const asegurar = h => { if (y + h > LIM) { nuevaPagina(); return true; } return false; };
     encabezado(false);
     // Datos del cliente y del emisor
-    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], ['RUC', cliente.ruc || '', 'F2', 9], ['Dirección', cliente.direccion || ''], ['Ciudad/País', `${cliente.ciudad || 'Lima'}, Perú`],
+    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], ['RUC', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Ciudad/País', ub.ciudadPais],
       ['Teléfono', dc.telefono], ['Contacto', contacto || ''], ['Email', dc.correo], ['Referencia', ref]];
     const der = [['Emitido por', vendedor.nombre], ['Cargo', vendedor.cargo || 'Account Manager'], ['Área', emp.area || ''], ['Teléfono', vendedor.telefono || emp.central || ''],
       ['Correo', vendedor.correo || '', 'F1', 8, vendedor.correo ? 'mailto:' + vendedor.correo : ''], ['Fecha de emisión', Util.fmtDate(q.fechaEmision)]];
@@ -4688,6 +4725,16 @@ const UI = (() => {
     const grid = $('#ficha-grid');
     if (grid && window.matchMedia('(max-width: 860px)').matches) grid.style.gridTemplateColumns = 'minmax(0,1fr)';
   };
+  /** Corregir los datos del cliente y del contacto que salen en el PDF de una cotización ya registrada */
+  ACTIONS['q-datos'] = el => {
+    const q = S.db.quotes.find(x => x.id === el.dataset.q), o = oppById(q.oppId), c = cli(o.clienteId);
+    const k = (c.contactos || []).find(x => x.nombre === q.contacto) || {};
+    const v = { direccion: q.clienteDireccion || c.direccion || '', ciudad: q.clienteCiudad || c.ciudad || '', pais: q.clientePais || c.pais || 'Perú', contacto: q.contacto || '', contactoCorreo: q.contactoCorreo || k.correo || '', contactoTelefono: q.contactoTelefono || k.telefono || '' };
+    const f = (n, l, span) => `<label class="field"${span ? ' style="grid-column:1 / -1"' : ''}>${l}<input type="text" name="${n}" value="${E(v[n])}"></label>`;
+    modal({ title: `Datos del cliente · N° ${q.numero}`, body: `<p class="small muted" style="margin-top:0">Corrige lo que sale en el PDF de esta cotización (no cambia los ítems ni el número). Para otro precio o producto, crea una revisión.</p>
+      <div class="form-grid">${f('direccion', 'Dirección', true)}${f('ciudad', 'Ciudad')}${f('pais', 'País')}${f('contacto', 'Contacto')}${f('contactoCorreo', 'Correo del contacto')}${f('contactoTelefono', 'Teléfono del contacto')}</div>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { const d = {}; Object.keys(v).forEach(n => { d[n] = val(root, n); }); await Repo.actualizarDatosCotizacion(q.id, d, S.user.id); toast('Datos de la cotización actualizados.'); refresh(); } }] });
+  };
   function quoteHTML(q, ed) {
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
     const vence = Util.addDays(q.fechaEmision, q.validezDias);
@@ -4697,6 +4744,7 @@ const UI = (() => {
       <header><strong>N° ${E(q.numero)}</strong><span class="chip ${q.tipo === 'alternativa' ? 'warn' : 'info'}">${q.tipo === 'alternativa' ? 'Alternativa (otra marca)' : q.revision}</span>
         ${q.vigente ? '<span class="chip dark">Vigente</span>' : ed ? `<button class="btn sm" data-action="vigente" data-q="${q.id}">Marcar como vigente</button>` : ''}
         <button class="btn sm" data-action="ver-pdf" data-q="${q.id}" title="Ver o descargar el PDF con la plantilla">${I('file')} PDF</button>
+        ${ed || S.user.rol === 'jefatura' ? `<button class="btn sm ghost" data-action="q-datos" data-q="${q.id}" title="Corregir dirección, ciudad, país y contacto del PDF">Datos del cliente</button>` : ''}
         ${dup.length ? `<span class="chip bad" title="Mismo número en ${dup.map(d => d.oppId).join(', ')}">${I('alert').replace('<svg', '<svg width="13" height="13"')} N° duplicado (${dup.map(d => d.oppId).join(', ')})</span>` : ''}
         <span class="small muted" style="margin-left:auto">${Util.fmtDate(q.fechaEmision)}</span></header>
       <div class="q-body">
@@ -4829,7 +4877,7 @@ const UI = (() => {
   }
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
-      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', condicionEspecial: '',
+      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', ciudad: '', pais: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
@@ -4887,6 +4935,8 @@ const UI = (() => {
       else if (c.vendedorId !== u.id) avisos.push(`${c.razonSocial} es cuenta de ${usr(c.vendedorId).nombre}. La cotización quedará a tu nombre y gerencia verá un aviso para definir quién lleva la cuenta.`);
     } else { d.clienteId = '__nuevo'; d.clienteNuevo = { razonSocial: r.cliente.razonSocial || '', ruc: r.cliente.ruc || '' }; }
     d.contacto = r.contacto.nombre || ''; d.contactoCorreo = r.contacto.correo || ''; d.contactoTelefono = r.contacto.telefono || '';
+    d.direccion = r.cliente.direccion || '';
+    if (r.cliente.ciudad) { const cp = r.cliente.ciudad.split(','); d.pais = cp.length > 1 ? cp.pop().trim() : ''; d.ciudad = cp.join(',').trim(); }
     // Proyecto: la Referencia del PDF; si no hay, compra directa
     d.referencia = r.referencia || '';
     if (d.referencia) {
@@ -5032,8 +5082,10 @@ const UI = (() => {
         ${(() => { const k = c && c.contactos.find(x => x.nombre === d.contacto) || {}; return `
         <label class="field">Correo del contacto<input type="email" data-nq="contactoCorreo" value="${E(d.contactoCorreo || k.correo || '')}" placeholder="Opcional"></label>
         <label class="field">Teléfono del contacto<input type="tel" data-nq="contactoTelefono" value="${E(d.contactoTelefono || k.telefono || '')}" placeholder="Opcional"></label>
-        <label class="field" style="grid-column:span 2;min-width:0">Dirección de la empresa<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional · sale en el PDF"></label>`; })()}
-      </div><p class="small muted" style="margin:6px 0 0">El correo, el teléfono y la dirección se guardan también en la cuenta y en la agenda de contactos.</p>`)}
+        <label class="field" style="grid-column:span 2;min-width:0">Dirección de la empresa<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional · sale en el PDF"></label>
+        <label class="field">Ciudad<input type="text" data-nq="ciudad" value="${E(d.ciudad || (c && c.ciudad) || '')}" placeholder="Lima"></label>
+        <label class="field">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>`; })()}
+      </div><p class="small muted" style="margin:6px 0 0">El correo, el teléfono, la dirección, la ciudad y el país se guardan en esta cotización y en la cuenta, así cada cotización puede ser para un lugar distinto.</p>`)}
       ${sec(2, 'Datos de la cotización', `<div class="form-grid">
         <label class="field"><span>N° de cotización (como figura en el PDF) <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Formato libre">${plat ? `<span class="field-hint">${d.numAuto ? 'Correlativo automático (puedes editarlo)' : 'Número editado a mano'}</span>` : ''}
           <span id="nq-dup">${dupHTML(dup)}</span></label>
@@ -5130,7 +5182,7 @@ const UI = (() => {
     if (ks.length === 2) d[ks[0]][ks[1]] = value; else d[ks[0]] = value;
     if (path === 'clienteId') { const c = value && value !== '__nuevo' ? cli(value) : null; d.contacto = c && c.contactos[0] ? c.contactos[0].nombre : ''; d.modoTocado = false; }
     // Al cambiar de cliente o de contacto, el correo, el teléfono y la dirección vuelven a tomarse de la agenda
-    if (path === 'clienteId') { d.contactoCorreo = ''; d.contactoTelefono = ''; d.direccion = ''; }
+    if (path === 'clienteId') { d.contactoCorreo = ''; d.contactoTelefono = ''; d.direccion = ''; d.ciudad = ''; d.pais = ''; }
     if (path === 'contacto') { const c = d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : null; if (c && c.contactos.some(k => k.nombre === value)) { d.contactoCorreo = ''; d.contactoTelefono = ''; } }
     if (path === 'proyectoSel' || path === 'clienteNuevo.ruc') d.modoTocado = false;
     if (path === 'numero') d.numAuto = false;
@@ -5202,6 +5254,7 @@ const UI = (() => {
     const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
     const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
       contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', condicionEspecial: d.condicionEspecial || '',
+      clienteDireccion: d.direccion || '', clienteCiudad: d.ciudad || '', clientePais: d.pais || '',
       descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
   };
@@ -5219,7 +5272,8 @@ const UI = (() => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
+      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', direccion: q.clienteDireccion || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
+      contactoCorreo: q.contactoCorreo || '', contactoTelefono: q.contactoTelefono || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
@@ -5235,7 +5289,7 @@ const UI = (() => {
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
       modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
-      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', condicionEspecial: d.condicionEspecial || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
+      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {

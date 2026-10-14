@@ -119,6 +119,10 @@ La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe c
      - Varias páginas con encabezado repetido y "1 de 2".
      - Archivo `COT_<número>.pdf`.
    - **Opcionales** (fuentes, accesorios): casilla "Opc." en cada ítem o botón "Agregar opcional". En el PDF van en una tabla aparte con su subtotal y **no suman** al total ni al monto de la oportunidad (`Rules.principales`).
+   - **Dónde lo piden:** dirección, ciudad y país en cada cotización (`q.clienteDireccion`, `q.clienteCiudad`, `q.clientePais`), así un mismo cliente puede tener cotizaciones para lugares distintos, incluso en otro país.
+     - En una cotización ya registrada, el botón **"Datos del cliente"** corrige dirección, ciudad, país y contacto sin hacer una revisión. Lo pueden usar el AM de la oportunidad y gerencia, y el cambio queda en el historial.
+   - **Mis datos:** cada usuario actualiza su teléfono, correo y cargo desde su menú. Rol, meta e iniciales los cambian gerencia y administración en "Usuarios".
+   - **Contactos:** los editan el AM de la cuenta, gerencia/jefatura, finanzas y administración. Logística solo los consulta.
    - **Condición comercial especial:** texto libre que el Account Manager redacta antes de emitir. Sale en el PDF dentro de "Condiciones comerciales".
    - **Datos de la empresa** (pantalla nueva; la editan gerencia/jefatura, finanzas y administración; `Rules.puede('editar_empresa')`):
      - Qué se edita: razón social, RUC, dirección, central, web, área, forma de pago (cuentas bancarias), entrega, despacho, términos de venta y su enlace.
