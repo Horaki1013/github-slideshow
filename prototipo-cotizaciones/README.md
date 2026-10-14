@@ -44,8 +44,8 @@ El mismo `index.html` funciona en dos modos:
 | Data | Ficticia, generada al cargar | Inicial migrada de los FUP reales, inyectada en el HTML como `window.__PILOTO_SEED` |
 | Persistencia | Ninguna (memoria) | **Carpeta compartida de red** (recurso compartido de Windows), común para todo el equipo. Sin carpeta, IndexedDB del navegador (`techvalue-piloto`). La sesión dura mientras la pestaña esté abierta |
 | Login | Usuarios de demo con clave `demo` | Usuario y contraseña propios; la primera vez obliga a cambiar la contraseña temporal |
-| Numeración de cotizaciones | Texto libre | Secuencia general `TV-AAAA-0001`, correlativa para todos |
-| Datos de la empresa en el PDF | Ficticios | Los reales (vienen en la data inicial, no en el código) |
+| Numeración de cotizaciones | Texto libre | Por Account Manager: `INICIALES-AAAA-0001` (p. ej. `NP-2026-0001`), reinicia cada año (`Rules.numeroAM`). Las `TV-AAAA-0001` anteriores se renumeran una vez al abrir la versión nueva (`Repo.migrar`) |
+| Datos de la empresa en el PDF | Ficticios, sin logo | Los reales y el logo (vienen en la data inicial y en `window.__PILOTO_EXTRA`, no en el código) |
 | Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
 | Ejemplo simulado de PDF | Visible | Oculto (solo PDF reales) |
 
@@ -112,7 +112,14 @@ La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe c
 1. **Cotizar en la plataforma** (opción principal). El vendedor arma la cotización en la pantalla "Nueva cotización" y, al registrarla, la plataforma genera el PDF con la plantilla de Techvalue. Se elimina el doble registro.
    - **Número correlativo automático** en el formato de cada vendedor. En una revisión, toma el número base más el sufijo `-R1`, `-R2`…, y en una alternativa, `-ALT`. Se puede editar a mano.
    - **El código del producto completa** la marca, la descripción y el precio de lista, desde un catálogo ficticio (`db.catalogo`, `Repo.catalogo()`).
-   - **"Vista previa PDF"** antes de registrar. Al registrar se abre el PDF generado, con los botones "Descargar PDF" (diálogo de impresión → "Guardar como PDF") y "Enviar por correo" (simulado).
+   - **"Vista previa PDF"** antes de registrar. Al registrar se abre la cotización con los botones "Descargar PDF" y "Enviar por correo" (simulado).
+   - **PDF real con descarga directa** (`PdfDoc`, sin librerías y sin el diálogo de impresión, así que no salen la fecha, el título ni la ruta del navegador):
+     - Diseño de la plantilla oficial: logo (en el piloto), franja del número, datos en dos columnas, tabla con encabezado azul, descripción sombreada, totales y condiciones comerciales.
+     - Enlaces al correo del vendedor y al procedimiento de atención.
+     - Varias páginas con encabezado repetido y "1 de 2".
+     - Archivo `COT_<número>.pdf`.
+   - **Opcionales** (fuentes, accesorios): casilla "Opc." en cada ítem o botón "Agregar opcional". En el PDF van en una tabla aparte con su subtotal y **no suman** al total ni al monto de la oportunidad (`Rules.principales`).
+   - **Datos del contacto en la cotización:** correo, teléfono y dirección de la empresa. Se guardan en la cotización, en la cuenta y en la agenda de contactos.
    - **Cada cotización de la ficha tiene su botón "PDF"**, y la ficha permite **"Crear revisión desde la vigente"**: copia ítems y condiciones para ajustarlos y emitir la R siguiente.
    - **Datos de ejemplo en la plantilla:** el RUC, los datos bancarios, la dirección y la central de Techvalue son marcadores, no copias del archivo real.
 2. **Registrar un PDF ya enviado** (para cotizaciones hechas con la plantilla Excel). El PDF **se lee de verdad en el navegador**, sin internet y sin subirlo a ningún lado (`LectorPDF` + `LecturaCotizacion`), y llena el formulario para revisar y confirmar.
