@@ -2409,6 +2409,7 @@ const Rules = (() => {
       if (!p.proyectoId && !p.proyectoNuevo) e.proyecto = 'Indica el proyecto o "Compra directa".';
       if (p.proyectoNuevo && (!String(p.proyectoNuevo.nombre || '').trim() || !String(p.proyectoNuevo.usuarioFinal || '').trim())) e.proyecto = 'El proyecto nuevo necesita nombre y usuario final.';
     }
+    if (String(p.condicionEspecial || '').length > 1500) e.condicionEspecial = 'La condición especial no puede pasar de 1,500 caracteres.';
     if (!p.proxContacto) e.proxContacto = 'Define el próximo contacto.';
     else if (p.proxContacto < hoy) e.proxContacto = 'No puede estar en el pasado.';
     if (!p.fechaOC) e.fechaOC = 'Elige la fecha estimada de OC (no tiene valor por defecto).';
@@ -2439,10 +2440,10 @@ const Rules = (() => {
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
     vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado', 'postventa', 'contactos', 'catalogo'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
+    finanzas: ['proyeccion', 'facturado', 'postventa', 'contactos', 'catalogo', 'empresa'],
     logistica: ['postventa', 'contactos', 'catalogo'],
-    admin: ['usuarios', 'catalogo', 'contactos'],
+    admin: ['usuarios', 'catalogo', 'contactos', 'empresa'],
   };
   const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa' };
   function puede(user, accion, opp) {
@@ -2464,6 +2465,7 @@ const Rules = (() => {
       case 'gestionar_usuarios': return ['jefatura', 'admin'].includes(user.rol);
       case 'ver_postventa': return ['jefatura', 'finanzas', 'logistica'].includes(user.rol);
       case 'editar_catalogo': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);
+      case 'editar_empresa': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // datos de la empresa y condiciones comerciales del PDF
       default: return false;
     }
   }
@@ -2680,6 +2682,8 @@ const Repo = (() => {
     if (!Rules.puede(u, 'editar_catalogo')) fail('Solo jefatura, finanzas o administración pueden modificar la lista de precios.');
     return u;
   };
+  const CAMPOS_CONDICIONES = ['formaPago', 'entrega', 'despacho', 'terminos', 'terminosEnlace'];
+  const CAMPOS_EMPRESA = ['razonSocial', 'ruc', 'direccion', 'central', 'web', 'area', 'formaPago', 'entrega', 'despacho', 'terminos'];
   const logCatalogo = (usuarioId, accion) => db.catalogoLog.unshift({ fecha: hoy(), usuarioId, accion });
 
   /* Con carpeta compartida, cada escritura toma el bloqueo, lee lo último de la carpeta, aplica el cambio y lo guarda
@@ -2821,6 +2825,27 @@ const Repo = (() => {
       db._migraciones = (db._migraciones || []).concat('numero-iniciales');
       if (cambios) touch(); else programarGuardado();   // sin cotizaciones que renumerar no cuenta como cambio propio
       return cambios > 0;
+    },
+    /** PUT /empresa — datos de la empresa y condiciones comerciales que salen en el PDF (gerencia, jefatura, finanzas y administración) */
+    async guardarEmpresa(datos, usuarioId) {
+      exigir(usuarioId, 'editar_empresa', 'Solo gerencia, jefatura, finanzas o administración pueden editar los datos de la empresa.');
+      const e = {}, d = {};
+      CAMPOS_EMPRESA.forEach(k => { if (datos[k] !== undefined) d[k] = String(datos[k] || '').trim(); });
+      if (!d.razonSocial) e.razonSocial = 'La razón social es obligatoria.';
+      if (d.ruc && !/^\d{11}$/.test(d.ruc) && db.empresa) e.ruc = 'El RUC debe tener 11 dígitos.';
+      if (!d.formaPago) e.formaPago = 'La forma de pago es obligatoria (cuentas bancarias).';
+      const url = String(datos.enlaceUrl || '').trim();
+      if (url && !/^https?:\/\/\S+$/i.test(url)) e.enlaceUrl = 'El enlace debe empezar con http:// o https://';
+      if (Object.keys(e).length) fail(Object.values(e)[0], e);
+      d.terminosEnlace = url ? { texto: String(datos.enlaceTexto || '').trim() || 'Procedimiento de atención', url } : null;
+      const antes = db.empresa || {};
+      const norm = v => JSON.stringify(typeof v === 'string' ? v.replace(/ · /g, '\n') : (v == null ? '' : v));   // "·" y salto de línea son el mismo renglón
+      const cambios = Object.keys(d).filter(k => norm(antes[k]) !== norm(d[k]));
+      if (!cambios.length) return [];
+      db.empresa = Object.assign({}, antes, d);
+      db.empresaLog = [{ fecha: hoy(), en: new Date().toISOString(), usuarioId, campos: cambios }].concat(db.empresaLog || []).slice(0, 50);
+      touch();
+      return cambios;
     },
     async desconectarCarpeta() { await AlmacenCompartido.olvidar(); Object.assign(estado, { compartida: false, carpeta: '' }); avisar(); },
     /** Trae los cambios de otros usuarios (la UI lo llama cada pocos segundos) */
@@ -3136,6 +3161,9 @@ const Repo = (() => {
         descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit), listaUSD: +it.listaUSD > 0 ? +it.listaUSD : null, ...(it.opcional ? { opcional: true } : {}) }));
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
+        condicionEspecial: String(p.condicionEspecial || '').trim(),
+        // Copia de las condiciones vigentes al emitir: si luego cambian los datos de la empresa, esta cotización no cambia
+        condiciones: db.empresa ? CAMPOS_CONDICIONES.reduce((o, k) => { if (db.empresa[k] != null) o[k] = db.empresa[k]; return o; }, {}) : undefined,
         vigente: true, contacto: p.contacto || '', contactoCorreo: String(p.contactoCorreo || '').trim(), contactoTelefono: String(p.contactoTelefono || '').trim(), origen: p.origen, archivo: p.archivo || undefined };
       q.descuento = Rules.totales(q).descuento;
       let o;
@@ -3387,13 +3415,13 @@ const UI = (() => {
   const PAGES = {};
   const NAV = {
     vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book'], ['empresa', 'Datos de la empresa', 'file']],
     logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
-    admin: [['usuarios', 'Usuarios', 'key'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
   };
   const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios' };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -3886,14 +3914,14 @@ const UI = (() => {
   function pdfHTML({ q, cliente, contacto, proyecto, vendedor }) {
     const emp = empresaPDF();
     const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const k = datosContacto(q, cliente, contacto);
+    const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp);
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td><td>${E(it.unidad)}</td><td><strong>${E(it.codigo)}</strong></td><td><strong>${E(it.marca)}</strong></td><td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2((+it.cant || 0) * (+it.valorUnit || 0))}</td></tr>`;
     const princ = q.items.filter(it => !it.opcional), opc = q.items.filter(it => it.opcional);
     const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '';
     const n2 = v => Util.nf2.format(v || 0);
     const fila = (k1, v1, k2, v2) => `<tr><td class="k">${k1}</td><td>${v1}</td><td class="k">${k2}</td><td>${v2}</td></tr>`;
     return `<div class="hoja">
-      ${S.db.empresa ? '' : '<div class="h-wm">PROTOTIPO · DATOS FICTICIOS</div>'}
+      ${piloto() ? '' : '<div class="h-wm">PROTOTIPO · DATOS FICTICIOS</div>'}
       <div class="h-top"><div class="h-logo">${emp.logo ? `<img src="${emp.logo}" alt="Techvalue" style="width:150px;height:auto;display:block">` : 'TECHVALUE<small>Líder en Tecnología Industrial</small>'}</div><div class="h-ruc">${E(emp.razonSocial)}<br>R.U.C. ${E(emp.ruc)}</div></div>
       <h2 class="h-title">COTIZACIÓN Nº ${E(q.numero)}</h2>
       <table class="h-datos"><tbody>
@@ -3924,18 +3952,22 @@ const UI = (() => {
       <h3 style="margin:14px 0 4px;color:var(--brand)">Condiciones comerciales</h3>
       <table class="h-cond"><tbody>
         <tr><td class="k">Condición de pago</td><td>${E(cp ? cp.nombre : '—')}</td></tr>
-        <tr><td class="k">Forma de pago</td><td>${E(emp.formaPago)}</td></tr>
+        <tr><td class="k">Forma de pago</td><td>${E(cnd.formaPago).replace(/ · |\n/g, '<br>')}</td></tr>
         <tr><td class="k">Validez cotización</td><td>${E(q.validezDias)} días</td></tr>
         <tr><td class="k">Plazo de Entrega</td><td>${E(pl ? pl.nombre : '—')}</td></tr>
-        <tr><td class="k">Entrega</td><td>${E(emp.entrega)}</td></tr>
-        ${emp.despacho ? `<tr><td class="k">Despacho</td><td>${E(emp.despacho)}</td></tr>` : ''}
-        ${emp.terminos ? `<tr><td class="k">Términos de venta</td><td>${emp.terminosEnlace ? `<a href="${E(emp.terminosEnlace.url)}" target="_blank" rel="noopener">Revisar el siguiente enlace: ${E(emp.terminosEnlace.texto || 'Procedimiento de atención')}</a><br>` : ''}${E(emp.terminos)}</td></tr>` : ''}
+        ${cnd.entrega ? `<tr><td class="k">Entrega</td><td>${E(cnd.entrega)}</td></tr>` : ''}
+        ${cnd.despacho ? `<tr><td class="k">Despacho</td><td>${E(cnd.despacho)}</td></tr>` : ''}
+        ${q.condicionEspecial ? `<tr><td class="k">Condición especial</td><td><strong>${E(q.condicionEspecial).replace(/\n/g, '<br>')}</strong></td></tr>` : ''}
+        ${cnd.terminos ? `<tr><td class="k">Términos de venta</td><td>${cnd.terminosEnlace ? `<a href="${E(cnd.terminosEnlace.url)}" target="_blank" rel="noopener">Revisar el siguiente enlace: ${E(cnd.terminosEnlace.texto || 'Procedimiento de atención')}</a><br>` : ''}${E(cnd.terminos)}</td></tr>` : ''}
       </tbody></table>
       <div class="h-foot"><span>${E(emp.razonSocial)} · ${E(emp.direccion)} · Central: ${E(emp.central)}</span><span>${E(emp.web || '')}</span></div>
     </div>`;
   }
   /* ---------- Cotización en PDF real (descarga directa), con el diseño de la plantilla oficial ---------- */
-  const empresaPDF = () => Object.assign({}, S.db.empresa || EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {});
+  // Lo editado en "Datos de la empresa" manda sobre los recursos privados del archivo (el logo solo viene de ahí)
+  const empresaPDF = () => Object.assign({}, S.db.empresa ? {} : EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {}, S.db.empresa || {});
+  /** Condiciones de una cotización: las copiadas al emitirla y, si no hay copia, las vigentes */
+  const condicionesDe = (q, emp) => Object.assign({}, emp, q.condiciones || {});
   /** Datos de contacto que van en la cotización: los guardados en la cotización y, si faltan, los de la agenda */
   function datosContacto(q, cliente, contacto) {
     const k = (cliente.contactos || []).find(x => x.nombre === contacto) || {};
@@ -3950,7 +3982,7 @@ const UI = (() => {
     const L = 40, R = 555, LIM = doc.H - 70;
     const cur = q.moneda, n2 = v => Util.nf2.format(v || 0);
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const dc = datosContacto(q, cliente, contacto);
+    const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp);
     const ref = proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre}${proyecto.usuarioFinal ? ' — ' + proyecto.usuarioFinal : ''}` : '';
     let y = 0;
     const pie = () => {
@@ -3962,7 +3994,7 @@ const UI = (() => {
       if (logoPDF) doc.imagen(logoPDF, L, 22, 150, 150 * logoPDF.h / logoPDF.w);
       else doc.texto('TECHVALUE', L, 48, { f: 'F2', t: 20, color: AZ }).texto('Líder en Tecnología Industrial', L, 60, { t: 7, color: GRIS });
       doc.texto(emp.razonSocial, R, 32, { t: 7, color: GRIS, align: 'right' }).texto('R.U.C. ' + emp.ruc, R, 41, { t: 7, color: GRIS, align: 'right' });
-      if (!S.db.empresa) doc.texto('PROTOTIPO · DATOS FICTICIOS', L, 92, { f: 'F2', t: 7, color: [180, 35, 24], align: 'center', w: R - L });
+      if (!piloto()) doc.texto('PROTOTIPO · DATOS FICTICIOS', L, 92, { f: 'F2', t: 7, color: [180, 35, 24], align: 'center', w: R - L });
       doc.rect(L, 98, R - L, 17, { fill: BANDA });
       doc.texto(`COTIZACIÓN Nº ${q.numero}${continuacion ? ' (continuación)' : ''}`, L, 110, { f: 'F2', t: 10.5, color: AZ, align: 'center', w: R - L });
       y = 128;
@@ -4055,12 +4087,13 @@ const UI = (() => {
     // Condiciones comerciales
     y += 10; asegurar(110);
     doc.rect(L, y, R - L, 13, { fill: AZ }); doc.texto('Condiciones comerciales', L + 4, y + 9.5, { f: 'F2', t: 8.5, color: BLANCO }); y += 22;
-    const cond = [['Condición de pago', cp ? cp.nombre : ''], ['Forma de pago', String(emp.formaPago || '').split(' · ').join('\n')], ['Validez cotización', `${q.validezDias} días`],
-      ['Plazo de Entrega', pl ? pl.nombre : ''], ['Entrega', emp.entrega || ''], ['Despacho', emp.despacho || ''], ['Términos de venta', emp.terminos || '']];
+    const cond = [['Condición de pago', cp ? cp.nombre : ''], ['Forma de pago', String(cnd.formaPago || '').replace(/ · /g, '\n')], ['Validez cotización', `${q.validezDias} días`],
+      ['Plazo de Entrega', pl ? pl.nombre : ''], ['Entrega', cnd.entrega || ''], ['Despacho', cnd.despacho || ''], ['Condición especial', q.condicionEspecial || ''], ['Términos de venta', cnd.terminos || '']];
     cond.forEach(([k, v]) => {
       if (!v && k !== 'Términos de venta') return;
-      const enl = k === 'Términos de venta' && emp.terminosEnlace ? emp.terminosEnlace : null;
-      const ls = doc.partir(v, R - 150, 'F1', 8);
+      const enl = k === 'Términos de venta' && cnd.terminosEnlace ? cnd.terminosEnlace : null;
+      const fv = k === 'Condición especial' ? 'F2' : 'F1';
+      const ls = doc.partir(v, R - 150, fv, 8);
       asegurar((ls.length + (enl ? 1 : 0)) * 9.5 + 2);
       doc.texto(k, L, y, { f: 'F2', t: 8, color: AZ });
       let yy = y;
@@ -4070,7 +4103,7 @@ const UI = (() => {
         const w = PdfDoc.ancho(pre + tx, 'F1', 8); doc.linea(150, yy + 1.5, 150 + w, yy + 1.5, { color: [0, 70, 200], lw: 0.4 }); doc.enlace(150, yy - 8, w, 10, enl.url);
         yy += 9.5;
       }
-      ls.forEach(s => { doc.texto(s, 150, yy, { t: 8, color: NEGRO }); yy += 9.5; });
+      ls.forEach(s => { doc.texto(s, 150, yy, { f: fv, t: 8, color: NEGRO }); yy += 9.5; });
       y = yy + 2;
     });
     pie();
@@ -4796,7 +4829,7 @@ const UI = (() => {
   }
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
-      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '',
+      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
@@ -5010,6 +5043,7 @@ const UI = (() => {
         <label class="field"><span>Condición de pago <span class="req">*</span></span><select name="condicionPago" data-nq="condicionPago">${options(Config.CONDICIONES_PAGO.map(x => [x.id, x.nombre]), d.condicionPago, 'Selecciona…')}</select></label>
         <label class="field"><span>Validez (días) <span class="req">*</span></span><input type="number" min="1" name="validezDias" data-nq="validezDias" value="${E(d.validezDias)}"></label>
         <label class="field" style="grid-column:span 2;min-width:0"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select></label>
+        <label class="field" style="grid-column:1 / -1;min-width:0">Condición comercial especial (opcional)<textarea name="condicionEspecial" data-nq="condicionEspecial" rows="2" maxlength="1500" placeholder="Ej.: Precio válido por la compra conjunta de los 3 ítems. Entrega parcial: 50 % en 2 semanas y el saldo en 6.">${E(d.condicionEspecial || '')}</textarea><span class="field-hint">Sale en el PDF dentro de "Condiciones comerciales". Las condiciones fijas (cuentas, entrega, despacho) las mantiene gerencia en "Datos de la empresa".</span></label>
       </div>`)}
       ${sec(3, 'Ítems', `<input type="hidden" name="items"><div class="table-wrap"><table class="tbl items-edit"><thead><tr><th style="width:44px" title="Opcional: se cotiza aparte y no suma al total">Opc.</th><th style="width:70px">Cant.</th><th style="width:80px">Uni.</th><th>Código</th><th style="width:130px">Marca</th><th>Descripción</th><th style="width:120px">V. unit. (${d.moneda})</th><th class="r" style="width:110px">Total</th><th></th></tr></thead><tbody>
         ${d.items.map((it, i) => `<tr${it.opcional ? ' class="fila-opc"' : ''}>
@@ -5167,7 +5201,7 @@ const UI = (() => {
     const c = Object.assign({}, d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : { razonSocial: d.clienteNuevo.razonSocial || '(cliente nuevo)', ruc: d.clienteNuevo.ruc || '—', ciudad: 'Lima', contactos: [] }, d.direccion ? { direccion: d.direccion } : {});
     const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
     const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
-      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '',
+      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', condicionEspecial: d.condicionEspecial || '',
       descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
   };
@@ -5185,7 +5219,7 @@ const UI = (() => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
+      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
@@ -5201,7 +5235,7 @@ const UI = (() => {
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
       modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
-      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
+      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', condicionEspecial: d.condicionEspecial || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {
@@ -5827,6 +5861,37 @@ const UI = (() => {
   /* =====================================================================
      USUARIOS — gerencia, jefatura y administración del sistema
      ===================================================================== */
+  /* ---------- Datos de la empresa y condiciones comerciales del PDF (gerencia, jefatura, finanzas, administración) ---------- */
+  PAGES['empresa'] = async () => {
+    const emp = empresaPDF(), ed = Rules.puede(S.user, 'editar_empresa'), log = S.db.empresaLog || [];
+    const enl = emp.terminosEnlace || {};
+    const NOMBRES = { razonSocial: 'Razón social', ruc: 'RUC', direccion: 'Dirección', central: 'Central', web: 'Web', area: 'Área', formaPago: 'Forma de pago', entrega: 'Entrega', despacho: 'Despacho', terminos: 'Términos de venta', terminosEnlace: 'Enlace de términos' };
+    const campo = (k, label, area, hint) => `<label class="field"${area ? ' style="grid-column:1 / -1;min-width:0"' : ''}>${label}${area ? `<textarea name="${k}" rows="${area}"${ed ? '' : ' readonly'}>${E(String(emp[k] || '').replace(/ · /g, '\n'))}</textarea>` : `<input type="text" name="${k}" value="${E(emp[k] || '')}"${ed ? '' : ' readonly'}>`}${hint ? `<span class="field-hint">${hint}</span>` : ''}</label>`;
+    view().innerHTML = `<div class="page-head"><div><h1>Datos de la empresa</h1><p class="muted">Datos fijos y condiciones comerciales que salen en todas las cotizaciones</p></div></div>
+      ${piloto() ? '' : '<div class="alert info" style="margin-bottom:12px"><div>En la demo estos datos son de ejemplo y los cambios no se guardan al recargar.</div></div>'}
+      <form data-submit="empresa" class="stack" novalidate>
+        <section class="card"><div class="card-head"><h2>Empresa</h2><span class="sub">Encabezado y pie del PDF</span></div><div class="form-grid">
+          ${campo('razonSocial', 'Razón social')}${campo('ruc', 'RUC')}${campo('area', 'Área (en "Emitido por")')}
+          ${campo('direccion', 'Dirección')}${campo('central', 'Central telefónica')}${campo('web', 'Web')}
+        </div></section>
+        <section class="card"><div class="card-head"><h2>Condiciones comerciales</h2><span class="sub">Cada cotización guarda una copia al emitirse: los cambios rigen para las nuevas</span></div><div class="form-grid">
+          ${campo('formaPago', 'Forma de pago (cuentas bancarias)', 3, 'Una línea por renglón del PDF.')}
+          ${campo('entrega', 'Entrega', 2)}${campo('despacho', 'Despacho', 2)}${campo('terminos', 'Términos de venta', 3)}
+          <label class="field">Texto del enlace<input type="text" name="enlaceTexto" value="${E(enl.texto || '')}" placeholder="Procedimiento de atención"${ed ? '' : ' readonly'}></label>
+          <label class="field" style="grid-column:span 2;min-width:0">Enlace (URL)<input type="text" inputmode="url" name="enlaceUrl" value="${E(enl.url || '')}" placeholder="https://…"${ed ? '' : ' readonly'}><span class="field-hint">Sale como "Revisar el siguiente enlace: …" en Términos de venta. Déjalo vacío para no mostrarlo.</span></label>
+        </div><p class="small muted" style="margin:8px 0 0">La condición de pago, la validez y el plazo de entrega se eligen en cada cotización. Si una cotización necesita algo distinto, el Account Manager lo escribe en "Condición comercial especial".</p></section>
+        ${ed ? `<div class="btn-row" style="justify-content:flex-end"><button type="submit" class="btn primary">${I('check')} Guardar cambios</button></div>` : ''}
+      </form>
+      <section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2></div>
+        ${log.length ? `<ul class="timeline">${log.slice(0, 15).map(r => `<li><div class="t-date">${Util.fmtDate(r.fecha)}</div><div><strong>${E((usr(r.usuarioId) || {}).nombre || '—')}</strong> cambió ${r.campos.map(c => E(NOMBRES[c] || c)).join(', ')}</div></li>`).join('')}</ul>` : '<p class="muted">Sin cambios registrados.</p>'}</section>`;
+  };
+  SUBMITS['empresa'] = async form => {
+    const v = n => (form.querySelector(`[name="${n}"]`) || {}).value || '';
+    const datos = { enlaceTexto: v('enlaceTexto'), enlaceUrl: v('enlaceUrl') };
+    ['razonSocial', 'ruc', 'direccion', 'central', 'web', 'area', 'formaPago', 'entrega', 'despacho', 'terminos'].forEach(k => { datos[k] = v(k); });
+    try { const c = await Repo.guardarEmpresa(datos, S.user.id); toast(c.length ? 'Datos de la empresa guardados. Rigen para las cotizaciones nuevas.' : 'No hubo cambios.'); refresh(); }
+    catch (e) { showFormError(form, e); }
+  };
   PAGES['usuarios'] = async () => {
     const us = S.db.users.slice().sort((a, b) => (a.activo === false) - (b.activo === false) || Object.keys(Config.ROLES).indexOf(a.rol) - Object.keys(Config.ROLES).indexOf(b.rol) || a.nombre.localeCompare(b.nombre));
     view().innerHTML = `<div class="page-head"><div><h1>Usuarios</h1><p class="muted">${us.filter(u => u.activo !== false).length} activos · alta, roles y contraseñas</p></div>

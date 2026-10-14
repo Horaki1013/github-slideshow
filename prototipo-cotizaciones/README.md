@@ -119,6 +119,11 @@ La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe c
      - Varias páginas con encabezado repetido y "1 de 2".
      - Archivo `COT_<número>.pdf`.
    - **Opcionales** (fuentes, accesorios): casilla "Opc." en cada ítem o botón "Agregar opcional". En el PDF van en una tabla aparte con su subtotal y **no suman** al total ni al monto de la oportunidad (`Rules.principales`).
+   - **Condición comercial especial:** texto libre que el Account Manager redacta antes de emitir. Sale en el PDF dentro de "Condiciones comerciales".
+   - **Datos de la empresa** (pantalla nueva; la editan gerencia/jefatura, finanzas y administración; `Rules.puede('editar_empresa')`):
+     - Qué se edita: razón social, RUC, dirección, central, web, área, forma de pago (cuentas bancarias), entrega, despacho, términos de venta y su enlace.
+     - Queda un historial de quién cambió qué.
+     - Cada cotización guarda una copia de las condiciones al emitirse (`q.condiciones`), así que un cambio posterior no altera las ya enviadas.
    - **Datos del contacto en la cotización:** correo, teléfono y dirección de la empresa. Se guardan en la cotización, en la cuenta y en la agenda de contactos.
    - **Cada cotización de la ficha tiene su botón "PDF"**, y la ficha permite **"Crear revisión desde la vigente"**: copia ítems y condiciones para ajustarlos y emitir la R siguiente.
    - **Datos de ejemplo en la plantilla:** el RUC, los datos bancarios, la dirección y la central de Techvalue son marcadores, no copias del archivo real.
