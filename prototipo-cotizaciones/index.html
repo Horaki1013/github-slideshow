@@ -391,7 +391,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
 .dir-k tr.dir-hit td{background:var(--brand-50)}
-.sede-fila{display:grid;gap:8px;grid-template-columns:1fr 2fr 1fr 1fr auto;align-items:end}
+.sede-fila{display:grid;gap:8px;grid-template-columns:1fr 2fr 1fr 1fr 1fr auto;align-items:end}
 @media (max-width: 700px){ .sede-fila{grid-template-columns:1fr 1fr} }
 .fg{display:grid;gap:12px 14px;grid-template-columns:repeat(12,minmax(0,1fr))}
 .fg>.field{min-width:0}
@@ -2343,11 +2343,11 @@ const Rules = (() => {
   const esPeru = pais => !String(pais || '').trim() || /^per[uú]$/i.test(String(pais).trim());
   /** RUC de 11 dígitos en Perú; en otro país (RUT, NIT…) basta un identificador de 5 caracteres o más */
   const rucValido = (ruc, pais) => esPeru(pais) ? /^\d{11}$/.test(String(ruc || '').trim()) : String(ruc || '').trim().length >= 5;
-  const normSede = s => [s.direccion, s.ciudad, s.pais || 'Perú'].map(x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
+  const normSede = s => [s.direccion, s.distrito, s.ciudad, s.pais || 'Perú'].map(x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
   /** Sedes de una empresa: la principal (dirección, ciudad y país de la cuenta) y las demás registradas */
   function sedesDe(c) {
     if (c && Array.isArray(c.sedes) && c.sedes.length) return c.sedes;
-    return c && (c.direccion || c.ciudad) ? [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion || '', ciudad: c.ciudad || '', pais: c.pais || 'Perú' }] : [];
+    return c && (c.direccion || c.ciudad) ? [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion || '', distrito: c.distrito || '', ciudad: c.ciudad || '', pais: c.pais || 'Perú' }] : [];
   }
   function validarCliente(db, d) {
     const e = {};
@@ -2927,6 +2927,7 @@ const Repo = (() => {
       const t = v => String(v == null ? '' : v).trim();
       if (datos.contactoCorreo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(datos.contactoCorreo))) fail('Correo no válido.', { contactoCorreo: 'Correo no válido.' });
       if (datos.referencia !== undefined) q.referencia = t(datos.referencia);
+      if (datos.distrito !== undefined) q.clienteDistrito = t(datos.distrito);
       Object.assign(q, { clienteDireccion: t(datos.direccion), clienteCiudad: t(datos.ciudad), clientePais: t(datos.pais) || 'Perú', contacto: t(datos.contacto), contactoCorreo: t(datos.contactoCorreo), contactoTelefono: t(datos.contactoTelefono) });
       log(o, `Datos del cliente en la cotización N° ${q.numero} corregidos: ${[q.clienteDireccion, q.clienteCiudad, q.clientePais].filter(Boolean).join(', ')}.`, usuarioId);
       touch();
@@ -3127,8 +3128,8 @@ const Repo = (() => {
       exigir(usuarioId, 'crear_cliente', 'Tu rol no puede registrar empresas.');
       const t = v => String(v == null ? '' : v).trim();
       const c = { id: 'C-' + (++db.seq.client), razonSocial: t(d.razonSocial), ruc: t(d.ruc), vendedorId: d.vendedorId || null, ciudad: t(d.ciudad) || 'Lima', pais: t(d.pais) || 'Perú',
-        direccion: t(d.direccion), rubro: t(d.rubro), tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
-      c.sedes = [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion, ciudad: c.ciudad, pais: c.pais }];
+        direccion: t(d.direccion), distrito: t(d.distrito), rubro: t(d.rubro), tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
+      c.sedes = [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion, distrito: c.distrito, ciudad: c.ciudad, pais: c.pais }];
       if (d.contacto && t(d.contacto.nombre)) {
         c.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: t(d.contacto.nombre), cargo: t(d.contacto.cargo), rol: t(d.contacto.rol), correo: t(d.contacto.correo), telefono: t(d.contacto.telefono) });
       }
@@ -3142,14 +3143,14 @@ const Repo = (() => {
       const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
       if (!Rules.puede(usuarioDe(usuarioId), 'editar_contactos', c)) fail('Solo el vendedor de la cuenta, gerencia, finanzas o administración editan la empresa.');
       const t = v => String(v == null ? '' : v).trim();
-      const sedes = (d.sedes || []).map((x, i) => ({ id: x.id || 'SD-' + Date.now().toString(36) + i, nombre: t(x.nombre) || (i ? t(x.ciudad) || 'Sede ' + (i + 1) : 'Principal'), direccion: t(x.direccion), ciudad: t(x.ciudad), pais: t(x.pais) || 'Perú' })).filter(x => x.direccion || x.ciudad);
+      const sedes = (d.sedes || []).map((x, i) => ({ id: x.id || 'SD-' + Date.now().toString(36) + i, nombre: t(x.nombre) || (i ? t(x.ciudad) || 'Sede ' + (i + 1) : 'Principal'), direccion: t(x.direccion), distrito: t(x.distrito), ciudad: t(x.ciudad), pais: t(x.pais) || 'Perú' })).filter(x => x.direccion || x.ciudad);
       const pais = sedes[0] ? sedes[0].pais : (c.pais || 'Perú');
       const e = {};
       if (!t(d.razonSocial)) e.razonSocial = 'La razón social es obligatoria.';
       if (t(d.ruc) || c.ruc) { const v = Rules.validarCliente(db, { id: c.id, razonSocial: t(d.razonSocial) || 'x', ruc: t(d.ruc), pais }); if (v.ruc) e.ruc = v.ruc; }
       if (Object.keys(e).length) fail(Object.values(e)[0], e);
       Object.assign(c, { razonSocial: t(d.razonSocial), ruc: t(d.ruc), rubro: t(d.rubro), tipo: d.tipo || c.tipo, sedes });
-      if (sedes[0]) Object.assign(c, { direccion: sedes[0].direccion, ciudad: sedes[0].ciudad || c.ciudad, pais: sedes[0].pais });
+      if (sedes[0]) Object.assign(c, { direccion: sedes[0].direccion, distrito: sedes[0].distrito, ciudad: sedes[0].ciudad || c.ciudad, pais: sedes[0].pais });
       touch();
       return c;
     },
@@ -3303,10 +3304,10 @@ const Repo = (() => {
         if (p.contacto && !kk) cta.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: p.contacto.trim(), cargo: '', rol: '', correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' });
         else if (kk) { if (p.contactoCorreo) kk.correo = String(p.contactoCorreo).trim(); if (p.contactoTelefono) kk.telefono = String(p.contactoTelefono).trim(); }
         // Dónde lo piden: si la cuenta no tenía dirección pasa a ser la principal; si es otra, se agrega como sede
-        const sede = { direccion: String(p.direccion || '').trim(), ciudad: String(p.ciudad || '').trim(), pais: String(p.pais || '').trim() || 'Perú' };
+        const sede = { direccion: String(p.direccion || '').trim(), distrito: String(p.distrito || '').trim(), ciudad: String(p.ciudad || '').trim(), pais: String(p.pais || '').trim() || 'Perú' };
         if (sede.direccion || sede.ciudad) {
           const ss = Rules.sedesDe(cta).slice();
-          if (!ss.length || (!cta.direccion && ss.length === 1)) { cta.direccion = sede.direccion; cta.ciudad = sede.ciudad || cta.ciudad; cta.pais = sede.pais; cta.sedes = [Object.assign({ id: 'SD-0', nombre: 'Principal' }, { direccion: cta.direccion, ciudad: cta.ciudad, pais: cta.pais })]; }
+          if (!ss.length || (!cta.direccion && ss.length === 1)) { cta.direccion = sede.direccion; cta.distrito = sede.distrito || cta.distrito || ''; cta.ciudad = sede.ciudad || cta.ciudad; cta.pais = sede.pais; cta.sedes = [Object.assign({ id: 'SD-0', nombre: 'Principal' }, { direccion: cta.direccion, distrito: cta.distrito, ciudad: cta.ciudad, pais: cta.pais })]; }
           else if (!ss.some(x => Rules.normSede(x) === Rules.normSede(sede))) cta.sedes = ss.concat([Object.assign({ id: 'SD-' + Date.now().toString(36), nombre: sede.ciudad || 'Sede' }, sede)]);
         }
         // Sin asignar: pasa al vendedor. Si es de otro Account Manager, la cotización queda a nombre de quien cotiza (un cliente puede pedir a varios)
@@ -3318,7 +3319,7 @@ const Repo = (() => {
         tc: p.moneda === 'PEN' ? +p.tc : null, condicionPago: p.condicionPago, validezDias: +p.validezDias, plazo: p.plazo, items, descuentoTipo: p.descuentoTipo === 'pct' ? 'pct' : 'monto', descuentoPct: p.descuentoTipo === 'pct' ? +p.descuentoPct || 0 : 0, descuento: 0,
         condicionEspecial: String(p.condicionEspecial || '').trim(), referencia: String(p.referencia || '').trim(),
         // Dónde lo piden (puede variar entre cotizaciones del mismo cliente)
-        clienteDireccion: String(p.direccion || (cta && cta.direccion) || '').trim(), clienteCiudad: String(p.ciudad || (cta && cta.ciudad) || '').trim(), clientePais: String(p.pais || (cta && cta.pais) || 'Perú').trim(),
+        clienteDireccion: String(p.direccion || (cta && cta.direccion) || '').trim(), clienteDistrito: String(p.distrito || (p.direccion ? '' : (cta && cta.distrito)) || '').trim(), clienteCiudad: String(p.ciudad || (cta && cta.ciudad) || '').trim(), clientePais: String(p.pais || (cta && cta.pais) || 'Perú').trim(),
         // Copia de las condiciones vigentes al emitir: si luego cambian los datos de la empresa, esta cotización no cambia
         condiciones: db.empresa ? CAMPOS_CONDICIONES.reduce((o, k) => { if (db.empresa[k] != null) o[k] = db.empresa[k]; return o; }, {}) : undefined,
         vigente: true, contacto: p.contacto || '', contactoCorreo: String(p.contactoCorreo || '').trim(), contactoTelefono: String(p.contactoTelefono || '').trim(), origen: p.origen, archivo: p.archivo || undefined };
@@ -4093,9 +4094,10 @@ const UI = (() => {
         ${fila('Dirigido a', E(cliente.razonSocial), 'Emitido por', E(vendedor.nombre))}
         ${fila(Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
         ${fila('Dirección', E(ub.direccion || '—'), 'Área', E(emp.area))}
-        ${fila('Ciudad/País', E(ub.ciudadPais), 'Teléfono', E(vendedor.telefono || emp.central))}
-        ${fila('Teléfono', E(k.telefono || '—'), 'Correo', E(vendedor.correo || '—'))}
-        ${fila('Contacto', E(contacto || '—'), 'Fecha de emisión', Util.fmtDate(q.fechaEmision))}
+        ${fila('Distrito/Comuna', E(ub.distrito || '—'), 'Teléfono', E(vendedor.telefono || emp.central))}
+        ${fila('Ciudad/País', E(ub.ciudadPais), 'Correo', E(vendedor.correo || '—'))}
+        ${fila('Teléfono', E(k.telefono || '—'), 'Fecha de emisión', Util.fmtDate(q.fechaEmision))}
+        ${fila('Contacto', E(contacto || '—'), '', '')}
         <tr><td class="k">Email</td><td colspan="3">${E(k.correo || '—')}</td></tr>
         <tr><td class="k">Referencia</td><td colspan="3">${E(ref || '—')}</td></tr>
       </tbody></table>
@@ -4136,7 +4138,9 @@ const UI = (() => {
   /** Dónde lo piden: lo guardado en la cotización y, si falta, lo de la cuenta */
   function ubicacionDe(q, cliente) {
     const direccion = q.clienteDireccion || cliente.direccion || '', ciudad = q.clienteCiudad || cliente.ciudad || 'Lima', pais = q.clientePais || cliente.pais || 'Perú';
-    return { direccion, ciudad, pais, ciudadPais: [ciudad, pais].filter(Boolean).join(', ') };
+    // Distrito: el de la cotización; si la cotización no trae dirección propia, el de la cuenta
+    const distrito = q.clienteDistrito != null && (q.clienteDistrito || q.clienteDireccion) ? q.clienteDistrito : (cliente.distrito || '');
+    return { direccion, distrito, ciudad, pais, ciudadPais: [ciudad, pais].filter(Boolean).join(', ') };
   }
   /** Datos de contacto que van en la cotización: los guardados en la cotización y, si faltan, los de la agenda */
   function datosContacto(q, cliente, contacto) {
@@ -4173,7 +4177,7 @@ const UI = (() => {
     const asegurar = h => { if (y + h > LIM) { nuevaPagina(); return true; } return false; };
     encabezado(false);
     // Datos del cliente y del emisor
-    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], [Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Ciudad/País', ub.ciudadPais],
+    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], [Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Distrito/Comuna', ub.distrito], ['Ciudad/País', ub.ciudadPais],
       ['Teléfono', dc.telefono], ['Contacto', contacto || ''], ['Email', dc.correo], ['Referencia', ref]];
     const der = [['Emitido por', vendedor.nombre], ['Cargo', vendedor.cargo || 'Account Manager'], ['Área', emp.area || ''], ['Teléfono', vendedor.telefono || emp.central || ''],
       ['Correo', vendedor.correo || '', 'F1', 8, vendedor.correo ? 'mailto:' + vendedor.correo : ''], ['Fecha de emisión', Util.fmtDate(q.fechaEmision)]];
@@ -4441,6 +4445,7 @@ const UI = (() => {
         <h3 style="margin:4px 0 0">Sede principal <span class="muted small" style="font-weight:400">(se completa sola al cotizar; luego puedes agregar más sedes)</span></h3>
         <div class="form-grid">
           <label class="field" style="grid-column:span 2">Dirección<input type="text" name="direccion"></label>
+          <label class="field">Distrito / comuna <span class="muted" style="font-weight:400">(opcional)</span><input type="text" name="distrito"></label>
           <label class="field">Ciudad<input type="text" name="ciudad" list="dl-ciudades" value="Lima"><datalist id="dl-ciudades">${Config.CIUDADES.map(x => `<option value="${x}">`).join('')}</datalist></label>
           <label class="field">País<input type="text" name="pais" list="dl-paises" value="Perú"><datalist id="dl-paises">${Config.PAISES.map(x => `<option value="${x}">`).join('')}</datalist></label>
         </div>
@@ -4455,7 +4460,7 @@ const UI = (() => {
         </div></div>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Registrar empresa`, cls: 'primary', onClick: async root => {
         const c = await Repo.crearCliente({ razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), tipo: val(root, 'tipo'), rubro: val(root, 'rubro'),
-          direccion: val(root, 'direccion'), ciudad: val(root, 'ciudad'), pais: val(root, 'pais'),
+          direccion: val(root, 'direccion'), distrito: val(root, 'distrito'), ciudad: val(root, 'ciudad'), pais: val(root, 'pais'),
           vendedorId: jef ? val(root, 'vendedorId') || null : vend ? S.user.id : null,
           contacto: { nombre: val(root, 'contactoNombre'), cargo: val(root, 'contactoCargo'), rol: val(root, 'contactoRol'), correo: val(root, 'contactoCorreo'), telefono: val(root, 'contactoTelefono') } }, S.user.id);
         toast(`Empresa ${c.razonSocial} registrada.`);
@@ -4471,6 +4476,7 @@ const UI = (() => {
     const fila = (sd, i) => `<div class="sede-fila" data-sede="${E(sd.id || '')}">
         <label class="field">Nombre de la sede<input type="text" name="sn" value="${E(sd.nombre || (i ? '' : 'Principal'))}" placeholder="${i ? 'Ej.: Planta Ilo' : 'Principal'}"></label>
         <label class="field">Dirección<input type="text" name="sd" value="${E(sd.direccion || '')}"></label>
+        <label class="field">Distrito / comuna<input type="text" name="sdi" value="${E(sd.distrito || '')}"></label>
         <label class="field">Ciudad<input type="text" name="sc" list="dl-ciudades" value="${E(sd.ciudad || '')}"></label>
         <label class="field">País<input type="text" name="sp" list="dl-paises" value="${E(sd.pais || 'Perú')}"></label>
         <button type="button" class="btn sm ghost" data-quitar-sede aria-label="Quitar sede"${i ? '' : ' disabled title="La principal no se quita"'}>${I('x')}</button></div>`;
@@ -4494,7 +4500,7 @@ const UI = (() => {
         lista.addEventListener('click', ev => { const b = ev.target.closest('[data-quitar-sede]'); if (b && !b.disabled) b.closest('.sede-fila').remove(); });
       },
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        const ss = [...root.querySelectorAll('.sede-fila')].map(f => ({ id: f.dataset.sede || null, nombre: f.querySelector('[name=sn]').value, direccion: f.querySelector('[name=sd]').value, ciudad: f.querySelector('[name=sc]').value, pais: f.querySelector('[name=sp]').value }));
+        const ss = [...root.querySelectorAll('.sede-fila')].map(f => ({ id: f.dataset.sede || null, nombre: f.querySelector('[name=sn]').value, direccion: f.querySelector('[name=sd]').value, distrito: f.querySelector('[name=sdi]').value, ciudad: f.querySelector('[name=sc]').value, pais: f.querySelector('[name=sp]').value }));
         await Repo.guardarCliente(c.id, { razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), rubro: val(root, 'rubro'), tipo: val(root, 'tipo'), sedes: ss }, S.user.id);
         toast('Empresa actualizada.'); refresh();
       } }],
@@ -4927,10 +4933,10 @@ const UI = (() => {
   ACTIONS['q-datos'] = el => {
     const q = S.db.quotes.find(x => x.id === el.dataset.q), o = oppById(q.oppId), c = cli(o.clienteId);
     const k = (c.contactos || []).find(x => x.nombre === q.contacto) || {};
-    const v = { referencia: q.referencia || '', direccion: q.clienteDireccion || c.direccion || '', ciudad: q.clienteCiudad || c.ciudad || '', pais: q.clientePais || c.pais || 'Perú', contacto: q.contacto || '', contactoCorreo: q.contactoCorreo || k.correo || '', contactoTelefono: q.contactoTelefono || k.telefono || '' };
+    const v = { referencia: q.referencia || '', direccion: q.clienteDireccion || c.direccion || '', distrito: q.clienteDistrito != null && (q.clienteDistrito || q.clienteDireccion) ? q.clienteDistrito : (c.distrito || ''), ciudad: q.clienteCiudad || c.ciudad || '', pais: q.clientePais || c.pais || 'Perú', contacto: q.contacto || '', contactoCorreo: q.contactoCorreo || k.correo || '', contactoTelefono: q.contactoTelefono || k.telefono || '' };
     const f = (n, l, span) => `<label class="field"${span ? ' style="grid-column:1 / -1"' : ''}>${l}<input type="text" name="${n}" value="${E(v[n])}"></label>`;
     modal({ title: `Datos del cliente · N° ${q.numero}`, body: `<p class="small muted" style="margin-top:0">Corrige la referencia y los datos del cliente que salen en el PDF de esta cotización (no cambia los ítems ni el número). Para otro precio o producto, crea una revisión.</p>
-      <div class="form-grid">${f('referencia', 'Referencia (vacía: sale el proyecto)', true)}${f('direccion', 'Dirección', true)}${f('ciudad', 'Ciudad')}${f('pais', 'País')}${f('contacto', 'Contacto')}${f('contactoCorreo', 'Correo del contacto')}${f('contactoTelefono', 'Teléfono del contacto')}</div>`,
+      <div class="form-grid">${f('referencia', 'Referencia (vacía: sale el proyecto)', true)}${f('direccion', 'Dirección', true)}${f('distrito', 'Distrito / comuna', true)}${f('ciudad', 'Ciudad')}${f('pais', 'País')}${f('contacto', 'Contacto')}${f('contactoCorreo', 'Correo del contacto')}${f('contactoTelefono', 'Teléfono del contacto')}</div>`,
       actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { const d = {}; Object.keys(v).forEach(n => { d[n] = val(root, n); }); await Repo.actualizarDatosCotizacion(q.id, d, S.user.id); toast('Datos de la cotización actualizados.'); refresh(); } }] });
   };
   function quoteHTML(q, ed) {
@@ -5138,7 +5144,7 @@ const UI = (() => {
   }
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
-      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', ciudad: '', pais: '', condicionEspecial: '',
+      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
@@ -5342,12 +5348,13 @@ const UI = (() => {
           : `<label class="field c3">RUC<input type="text" value="${c ? E(c.ruc) : ''}" readonly placeholder="Se completa con el cliente"></label>`}
         ${(() => { const k = c && c.contactos.find(x => x.nombre === d.contacto) || {}; return `
         <div class="fg-sub">Dónde lo piden <span>sale en el PDF; puede variar entre cotizaciones</span></div>
-        ${(() => { const ss = c ? Rules.sedesDe(c) : []; if (ss.length < 2) return ''; const act = { direccion: d.direccion || c.direccion || '', ciudad: d.ciudad || c.ciudad || '', pais: d.pais || c.pais || 'Perú' };
+        ${(() => { const ss = c ? Rules.sedesDe(c) : []; if (ss.length < 2) return ''; const act = { direccion: d.direccion || c.direccion || '', distrito: d.distrito || (d.direccion ? '' : c.distrito) || '', ciudad: d.ciudad || c.ciudad || '', pais: d.pais || c.pais || 'Perú' };
           const sel = ss.findIndex(x => Rules.normSede(x) === Rules.normSede(act));
-          return `<label class="field c12">Sede<select data-nq-sede="1">${options(ss.map((x, i) => [String(i), `${x.nombre || 'Sede'} — ${[x.direccion, x.ciudad, x.pais].filter(Boolean).join(', ')}`]), sel >= 0 ? String(sel) : '', 'Otra dirección (escríbela abajo)')}</select><span class="field-hint">${ss.length} sedes registradas: al elegir una se completan dirección, ciudad y país.</span></label>`; })()}
-        <label class="field c6">Dirección<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional"></label>
+          return `<label class="field c12">Sede<select data-nq-sede="1">${options(ss.map((x, i) => [String(i), `${x.nombre || 'Sede'} — ${[x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', ')}`]), sel >= 0 ? String(sel) : '', 'Otra dirección (escríbela abajo)')}</select><span class="field-hint">${ss.length} sedes registradas: al elegir una se completan dirección, ciudad y país.</span></label>`; })()}
+        <label class="field c4">Dirección<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional"></label>
+        <label class="field c3">Distrito / comuna<input type="text" data-nq="distrito" value="${E(d.distrito || (!d.direccion && c && c.distrito) || '')}" placeholder="Opcional"></label>
         <label class="field c3">Ciudad<input type="text" data-nq="ciudad" value="${E(d.ciudad || (c && c.ciudad) || '')}" placeholder="Lima"></label>
-        <label class="field c3">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>
+        <label class="field c2">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>
         <div class="fg-sub">Contacto <span>se guarda también en la agenda</span></div>
         <label class="field c4">Nombre<input type="text" list="nq-contactos" data-nq="contacto" data-nq-render="1" value="${E(d.contacto)}" placeholder="${c && c.contactos.length ? 'Elige de la agenda o escribe' : 'Escribe el nombre'}"><datalist id="nq-contactos">${c ? c.contactos.map(x => `<option value="${E(x.nombre)}" label="${E([x.cargo, x.rol, x.correo, x.telefono].filter(Boolean).join(' · '))}">`).join('') : ''}</datalist><span class="field-hint">${c && c.contactos.length ? c.contactos.length + ' en la agenda de esta empresa. ' : ''}Si es alguien nuevo, se agrega a la agenda.</span></label>
         <label class="field c4">Correo<input type="email" data-nq="contactoCorreo" value="${E(d.contactoCorreo || k.correo || '')}" placeholder="Opcional"></label>
@@ -5455,7 +5462,7 @@ const UI = (() => {
     if (ks.length === 2) d[ks[0]][ks[1]] = value; else d[ks[0]] = value;
     if (path === 'clienteId') { const c = value && value !== '__nuevo' ? cli(value) : null; d.contacto = c && c.contactos[0] ? c.contactos[0].nombre : ''; d.modoTocado = false; }
     // Al cambiar de cliente o de contacto, el correo, el teléfono y la dirección vuelven a tomarse de la agenda
-    if (path === 'clienteId') { d.contactoCorreo = ''; d.contactoTelefono = ''; d.direccion = ''; d.ciudad = ''; d.pais = ''; }
+    if (path === 'clienteId') { d.contactoCorreo = ''; d.contactoTelefono = ''; d.direccion = ''; d.distrito = ''; d.ciudad = ''; d.pais = ''; }
     if (path === 'contacto') { const c = d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : null; if (c && c.contactos.some(k => k.nombre === value)) { d.contactoCorreo = ''; d.contactoTelefono = ''; } }
     if (path === 'proyectoSel' || path === 'clienteNuevo.ruc') d.modoTocado = false;
     if (path === 'numero') d.numAuto = false;
@@ -5488,7 +5495,7 @@ const UI = (() => {
     const el = e.target;
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
     if (el.dataset.nqCli) { aplicarCliente(el, true); return; }
-    if (el.dataset.nqSede) { const c = cli(S.nueva.d.clienteId), x = el.value !== '' && Rules.sedesDe(c)[+el.value]; if (x) Object.assign(S.nueva.d, { direccion: x.direccion, ciudad: x.ciudad, pais: x.pais || 'Perú' }); render(true); return; }
+    if (el.dataset.nqSede) { const c = cli(S.nueva.d.clienteId), x = el.value !== '' && Rules.sedesDe(c)[+el.value]; if (x) Object.assign(S.nueva.d, { direccion: x.direccion, distrito: x.distrito || '', ciudad: x.ciudad, pais: x.pais || 'Perú' }); render(true); return; }
     if (el.dataset.nq) { setDraft(el.dataset.nq, el.value); if (el.dataset.nqRender || el.tagName === 'SELECT') render(true); }
     else if (el.dataset.nqi != null) {
       const d = S.nueva.d, it = d.items[+el.dataset.nqi];
@@ -5543,7 +5550,7 @@ const UI = (() => {
     const p = d.proyectoSel === '__nuevo' ? { tipo: 'privado', nombre: d.proyectoNuevo.nombre, usuarioFinal: d.proyectoNuevo.usuarioFinal } : (d.proyectoSel ? proj(d.proyectoSel) : null);
     const q = { numero: d.numero || '(sin número)', moneda: d.moneda, tc: d.tc, fechaEmision: d.fechaEmision, condicionPago: d.condicionPago, validezDias: d.validezDias, plazo: d.plazo,
       contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', condicionEspecial: d.condicionEspecial || '',
-      clienteDireccion: d.direccion || '', clienteCiudad: d.ciudad || '', clientePais: d.pais || '', referencia: d.referencia || '',
+      clienteDireccion: d.direccion || '', clienteDistrito: d.distrito || '', clienteCiudad: d.ciudad || '', clientePais: d.pais || '', referencia: d.referencia || '',
       descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, items: d.items.filter(it => String(it.codigo || '').trim()).map(it => Object.assign({}, it, { cant: +it.cant || 0, valorUnit: +it.valorUnit || 0 })) };
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
   };
@@ -5561,7 +5568,7 @@ const UI = (() => {
     const o = oppEditable(el.dataset.id); if (!o) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
-      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
+      validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', distrito: q.clienteDistrito || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
       contactoCorreo: q.contactoCorreo || '', contactoTelefono: q.contactoTelefono || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
       fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
@@ -5578,7 +5585,7 @@ const UI = (() => {
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
       modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
-      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', referencia: d.referencia || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
+      contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', distrito: d.distrito || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', referencia: d.referencia || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {
@@ -6023,7 +6030,7 @@ const UI = (() => {
         <div class="op-header"><div>
           <h1>${E(c.razonSocial)} <span class="seg ${seg.seg}" title="Facturado 12 meses: ${money(seg.total)}">${seg.seg}</span> ${estadoChip(r.estado)}</h1>
           <div class="muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : 'Sin RUC'} · ${E(c.tipo)}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div>
-          <div class="dir-sedes" style="margin:4px 0 0">${Rules.sedesDe(c).map(x => `<span><strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') || '<span class="muted">Sin dirección registrada</span>'}</div>
+          <div class="dir-sedes" style="margin:4px 0 0">${Rules.sedesDe(c).map(x => `<span><strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') || '<span class="muted">Sin dirección registrada</span>'}</div>
           <div class="small muted" style="margin-top:2px">Alta ${Util.fmtDate(c.fechaAlta)}${reg ? ' · registrada por ' + E(reg.nombre) : ''} · Vendedor: ${c.vendedorId ? E(usr(c.vendedorId).nombre) : '<strong>Sin asignar</strong>'}</div>
         </div>
         <div class="btn-row">${editK ? `<button class="btn ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}${gest ? `<button class="btn" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Nueva cotización</button>` : ''}</div></div>
@@ -6091,7 +6098,7 @@ const UI = (() => {
           <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
           <div class="small muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : '<span style="color:var(--warn)">Sin RUC</span>'} · ${E(c.tipo || 'Integrador')}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div></div>
           <div class="btn-row">${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}</div></div>
-        <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
+        <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
         ${ks.length ? `<div class="table-wrap"><table class="tbl dir-k"><thead><tr><th>Contacto</th><th>Cargo</th><th>Rol</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
           ${ks.map(k => `<tr${t && enK(c, k) ? ' class="dir-hit"' : ''}><td class="cell-main">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td><td class="small">${E(k.rol || '—')}</td>
             <td class="small">${k.correo ? `<a href="mailto:${E(k.correo)}">${E(k.correo)}</a>` : '—'}</td><td class="small nowrap">${E(k.telefono || '—')}</td>

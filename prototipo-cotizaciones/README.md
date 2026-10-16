@@ -210,7 +210,7 @@ La pantalla "Directorio de clientes" (antes "Agenda de contactos") es común par
 En la cotización:
 - **Cliente:** el campo es un buscador sobre todo el directorio, con las cuentas propias primero.
 - **Cuentas de otro AM:** se pueden cotizar; la oportunidad queda a nombre de quien cotiza y la cuenta no cambia de dueño.
-- **Sede:** si la empresa tiene varias, un selector completa dirección, ciudad y país. Una dirección nueva usada al cotizar se agrega como sede.
+- **Sede:** si la empresa tiene varias, un selector completa dirección, distrito/comuna, ciudad y país. Distrito/comuna es opcional y en el PDF sale entre Dirección y Ciudad/País. Una dirección nueva usada al cotizar se agrega como sede.
 - **Contacto:** la lista muestra los contactos de la empresa con cargo, rol, correo y teléfono; un nombre nuevo se agrega a la agenda.
 
 ## Lista de precios (confidencial)
