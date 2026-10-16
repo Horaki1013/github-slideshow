@@ -196,6 +196,13 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
   - en la demo, en memoria.
   - En `datos.json` solo queda la ficha del documento (nombre, tipo, quién, cuándo). Al iniciar una carpeta con los datos de un navegador, sus documentos pasan a la carpeta.
 
+## Visor de cotizaciones (áreas de post-venta)
+
+Finanzas, logística/soporte y administración tienen la pantalla **Cotizaciones**: todas las cotizaciones de los vendedores, **solo lectura**.
+- Buscador por N° de cotización, cliente, RUC, proyecto o referencia; filtros por vendedor y etapa (abiertas, ganadas, perdidas, en pausa). De la más reciente a la más antigua, 50 por página.
+- **Ver PDF** abre la cotización y permite descargarla; no se puede editar ni "enviar". Las revisiones reemplazadas se marcan como tales.
+- Gerencia/jefatura ya ve todo en Oportunidades; los vendedores no tienen este visor.
+
 ## Directorio de clientes
 
 La pantalla "Directorio de clientes" (antes "Agenda de contactos") es común para todo el equipo:

@@ -44,7 +44,6 @@ h3{font-size:14px;margin:0;font-weight:700}
 .muted{color:var(--muted)} .small{font-size:12px} .nowrap{white-space:nowrap} .right{text-align:right} .center{text-align:center}
 .num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .hidden{display:none!important}
-.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
 /* ---------- Estructura ---------- */
 .topbar{position:sticky;top:0;z-index:40;height:var(--topbar-h);background:var(--brand);color:#fff;display:flex;align-items:center;gap:12px;padding:0 16px;box-shadow:0 1px 0 rgba(0,0,0,.08)}
@@ -195,7 +194,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 /* SVG charts */
 .chart{width:100%;position:relative}
 .chart svg{display:block;width:100%;height:auto;overflow:visible}
-.chart .axis text,.chart text{font-family:var(--font);font-size:11px;fill:var(--text-2)}
+.chart text{font-family:var(--font);font-size:11px;fill:var(--text-2)}
 .chart .grid line{stroke:#e6eaf0}
 .chart .bar{cursor:default}
 .chart .tip{position:absolute;pointer-events:none;background:#1b2530;color:#fff;border-radius:6px;padding:6px 9px;font-size:12px;white-space:nowrap;transform:translate(-50%,-110%);box-shadow:var(--shadow-lg);z-index:5}
@@ -2565,9 +2564,9 @@ const Rules = (() => {
   const RUTAS = {
     vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
     jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado', 'postventa', 'contactos', 'catalogo', 'empresa'],
-    logistica: ['postventa', 'contactos', 'catalogo'],
-    admin: ['usuarios', 'postventa', 'catalogo', 'contactos', 'empresa'],
+    finanzas: ['proyeccion', 'facturado', 'postventa', 'cotizaciones', 'contactos', 'catalogo', 'empresa'],
+    logistica: ['postventa', 'cotizaciones', 'contactos', 'catalogo'],
+    admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos', 'empresa'],
   };
   const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa' };
   function puede(user, accion, opp) {
@@ -3658,7 +3657,7 @@ const UI = (() => {
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
     expand: {}, pvF: { estado: 'pendientes', vendedor: '' },
-    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
+    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, cotF: { q: '', vendedor: '', etapa: '', lim: 50 }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -3746,12 +3745,12 @@ const UI = (() => {
   const NAV = {
     vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
     jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
-    logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
-    admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
+    logistica: [['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios', empresa: 'Empresa' };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'cotizaciones', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos'] };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', cotizaciones: 'Cotizaciones', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -3924,7 +3923,7 @@ const UI = (() => {
     await Repo.reset();
     S.db = await Repo.snapshot();
     S.user = S.db.users.find(u => u.id === id) || null;
-    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' };
+    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 };
     toast('Datos de demo restablecidos.');
     render();
   };
@@ -4456,7 +4455,7 @@ const UI = (() => {
     $('#print-root').innerHTML = `<div class="pdf-back" role="dialog" aria-modal="true" aria-label="Cotización en PDF">
       <div class="pdf-toolbar"><span class="sim-label">${borrador ? 'Vista previa · aún no registrada' : 'PDF generado por la plataforma'}</span>
         <button class="btn primary" data-action="pdf-descargar">${I('download')} Descargar PDF</button>
-        ${borrador ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo (simulado)</button>`}
+        ${borrador || !['vendedor', 'jefatura'].includes(S.user.rol) ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo (simulado)</button>`}
         <button class="btn" data-action="pdf-close">${I('x')} Cerrar</button></div>
       ${pdfHTML(ctx)}</div>`;
   }
@@ -4790,7 +4789,7 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.catF = { q: '', marca: '' }; S.expand = {};
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.catF = { q: '', marca: '' }; S.expand = {};
       if (piloto()) guardarSesion(S.user.id);
       if (S.user.debeCambiar && piloto()) { location.hash = '#/' + Rules.INICIO[S.user.rol]; await render(); abrirCambioClave(true); return; }
       go(Rules.INICIO[S.user.rol]);
@@ -6519,6 +6518,45 @@ const UI = (() => {
   /* =====================================================================
      POST-VENTA — cada área marca sus pasos (logística: físicos; finanzas: factura y cobro)
      ===================================================================== */
+  /* =====================================================================
+     COTIZACIONES — visor de solo lectura para las áreas de post-venta (finanzas, logística y administración)
+     ===================================================================== */
+  PAGES['cotizaciones'] = async () => {
+    const db = S.db, F = S.cotF, t = Util.norm(F.q);
+    const filas = [];
+    db.quotes.forEach(q => {
+      const o = oppById(q.oppId); if (!o) return;
+      if (F.vendedor && o.vendedorId !== F.vendedor) return;
+      if (F.etapa && (F.etapa === 'abiertas' ? !Rules.esAbierta(o) : o.etapa !== F.etapa)) return;
+      const c = cli(o.clienteId), p = proj(o.proyectoId);
+      if (t && !Util.norm([q.numero, c && c.razonSocial, c && c.ruc, p && p.nombre, q.referencia].join(' ')).includes(t)) return;
+      filas.push({ q, o, c, p });
+    });
+    filas.sort((a, b) => (b.q.fechaEmision || '').localeCompare(a.q.fechaEmision || '') || String(b.q.numero).localeCompare(String(a.q.numero)));
+    view().innerHTML = `
+      <div class="page-head"><div><h1>Cotizaciones</h1><p class="muted">Todas las cotizaciones de los vendedores · solo lectura · ${db.quotes.length.toLocaleString('en-US')} registradas</p></div></div>
+      <div class="card" style="padding:12px"><div class="filters" style="margin:0">
+        <label class="field" style="flex:2 1 300px">Buscar<input type="text" data-input="cotf" name="q" value="${E(F.q)}" placeholder="N° de cotización, cliente, RUC, proyecto o referencia" autocomplete="off"></label>
+        <label class="field">Vendedor<select data-change="cotf" name="vendedor">${options(S.db.users.filter(u => u.rol === 'vendedor').map(v => [v.id, v.iniciales + ' · ' + v.nombre]), F.vendedor, 'Todos')}</select></label>
+        <label class="field">Etapa<select data-change="cotf" name="etapa">${options([['abiertas', 'Abiertas'], ['ganada', 'Ganadas'], ['perdida', 'Perdidas'], ['pausa', 'En pausa']], F.etapa, 'Todas')}</select></label>
+      </div><div class="small muted" style="margin-top:8px">${filas.length.toLocaleString('en-US')} cotizaciones · de la más reciente a la más antigua</div></div>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:980px"><thead><tr><th>N° cotización</th><th>Emisión</th><th>Cliente</th><th>Proyecto</th><th>Vendedor</th><th class="r">Monto sin IGV</th><th>Etapa</th><th></th></tr></thead><tbody>
+        ${filas.slice(0, F.lim).map(({ q, o, c, p }) => { const v = usr(o.vendedorId); return `<tr>
+          <td class="nowrap"><strong>${E(q.numero || '—')}</strong>${q.vigente === false ? ' <span class="chip">Reemplazada</span>' : ''}${q.referencia ? `<div class="cell-sub">${E(q.referencia)}</div>` : ''}</td>
+          <td class="nowrap">${Util.fmtDate(q.fechaEmision)}</td>
+          <td>${E(c ? c.razonSocial : '—')}<div class="cell-sub">${c && c.ruc ? 'RUC ' + E(c.ruc) : ''}</div></td>
+          <td class="small">${E(projName(p))}</td>
+          <td class="nowrap">${v ? vendTag(v) : '—'}</td>
+          <td class="r num nowrap">${Util.money(Rules.totales(q).neto, q.moneda)}</td>
+          <td class="nowrap">${etapaHTML(o.etapa)}</td>
+          <td><button class="btn sm" data-action="ver-pdf" data-q="${q.id}">${I('file')} Ver PDF</button></td></tr>`; }).join('') || '<tr><td colspan="8" class="center muted" style="padding:20px">Sin cotizaciones con estos filtros.</td></tr>'}
+      </tbody></table></div>
+      ${filas.length > F.lim ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="cot-mas">Ver más (${(filas.length - F.lim).toLocaleString('en-US')} restantes)</button></div>` : ''}
+      <p class="small muted">Visor de consulta: se puede ver y descargar el PDF de cada cotización, pero no editarla. Los documentos de cada venta ganada están en Post-venta.</p>`;
+  };
+  ACTIONS['cot-mas'] = () => { S.cotF.lim += 50; refresh(); };
+  filtro('cotf', () => S.cotF, F => { F.lim = 50; });
+
   PAGES['postventa'] = async () => {
     const db = S.db, u = S.user, F = S.pvF;
     let rows = db.opps.filter(o => o.etapa === 'ganada' && (!F.vendedor || o.vendedorId === F.vendedor));
