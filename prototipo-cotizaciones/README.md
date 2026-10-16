@@ -176,6 +176,25 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
   - Los agrega o edita el vendedor de la cuenta o jefatura. Finanzas solo consulta.
 - **Dashboard:** la tarjeta "Cartera de cuentas" muestra, por vendedor, cuentas activas, que no responden, sin contacto y sin asignar.
 
+## Directorio de clientes
+
+La pantalla "Directorio de clientes" (antes "Agenda de contactos") es común para todo el equipo:
+
+- **Empresas agrupadas** con RUC (o RUT/NIT si es del extranjero), tipo, rubro, Account Manager, sedes y sus contactos.
+- **Buscador** por empresa, RUC, rubro, ciudad, contacto, correo o teléfono. Tus cuentas aparecen primero y se muestran 30 empresas por página.
+- **Agregar empresa** (`Repo.crearCliente`): razón social, RUC o ID fiscal, rubro, tipo, sede principal y un contacto opcional.
+  - La registran Account Managers (queda a su nombre), gerencia/jefatura (la asignan) y finanzas y administración (queda sin asignar).
+- **Agregar contacto** a cualquier empresa (todos menos logística). Si la empresa no existe, se registra desde el mismo formulario.
+  - El contacto tiene un **rol en su empresa** opcional (compras, técnico, usuario final…).
+- **Editar empresa** (`Repo.guardarCliente`): razón social, RUC, rubro, tipo y **varias sedes**; la primera es la principal (`Rules.sedesDe`). La editan el AM de la cuenta, gerencia, finanzas y administración.
+- **El rubro, el cargo y el rol no salen en las cotizaciones.**
+
+En la cotización:
+- **Cliente:** el campo es un buscador sobre todo el directorio, con las cuentas propias primero.
+- **Cuentas de otro AM:** se pueden cotizar; la oportunidad queda a nombre de quien cotiza y la cuenta no cambia de dueño.
+- **Sede:** si la empresa tiene varias, un selector completa dirección, ciudad y país. Una dirección nueva usada al cotizar se agrega como sede.
+- **Contacto:** la lista muestra los contactos de la empresa con cargo, rol, correo y teléfono; un nombre nuevo se agrega a la agenda.
+
 ## Lista de precios (confidencial)
 
 **Pantalla "Lista de precios".** Todos la consultan; **solo jefatura, finanzas y administración** la modifican:

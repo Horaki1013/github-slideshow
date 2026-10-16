@@ -381,6 +381,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .hoja .h-cond td.k{font-weight:700;width:24%}
 .hoja .h-foot{margin-top:18px;border-top:2px solid var(--brand);padding-top:6px;color:#555;font-size:9.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 /* Formulario de cotización: grilla de 12 columnas y subgrupos */
+.dir-emp{padding:14px 16px}
+.dir-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.dir-head h2{margin:0;font-size:15px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.dir-head h2 a{color:inherit}
+.dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
+.dir-k{font-size:13px}
+.dir-k tr.dir-hit td{background:var(--brand-50)}
+.sede-fila{display:grid;gap:8px;grid-template-columns:1fr 2fr 1fr 1fr auto;align-items:end}
+@media (max-width: 700px){ .sede-fila{grid-template-columns:1fr 1fr} }
 .fg{display:grid;gap:12px 14px;grid-template-columns:repeat(12,minmax(0,1fr))}
 .fg>.field{min-width:0}
 .fg .c2{grid-column:span 2}.fg .c3{grid-column:span 3}.fg .c4{grid-column:span 4}.fg .c6{grid-column:span 6}.fg .c12{grid-column:1 / -1}
@@ -464,6 +473,9 @@ const Config = {
   RESULTADOS_CONTACTO: [['respondio', 'Respondió'], ['sin_respuesta', 'No respondió']],
   TIPOS_CUENTA: ['Integrador', 'Cliente final', 'Distribuidor'],
   CIUDADES: ['Lima', 'Arequipa', 'Trujillo', 'Piura', 'Chiclayo', 'Cusco', 'Huancayo', 'Ica', 'Moquegua', 'Tacna', 'Cajamarca', 'Iquitos'],
+  PAISES: ['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia', 'Argentina', 'Brasil'],
+  // Rol del contacto en su empresa (opcional; no sale en la cotización)
+  ROLES_CONTACTO: ['Compras', 'Técnico / Ingeniería', 'Proyectos', 'Mantenimiento / Operaciones', 'Gerencia', 'Usuario final', 'Finanzas / Pagos', 'Logística / Almacén'],
 
   // Escala de CRITERIOS (sin cambios). El vendedor elige la etapa; la probabilidad se deriva.
   ETAPAS: [
@@ -2311,12 +2323,22 @@ const Rules = (() => {
     return { tipo: 'cuenta_inactiva', nivel: r.estado === 'sin_contacto' ? 'bad' : 'warn', dias: r.diasSinCotizar, estado: r.estado,
       texto: `${r.ultimaCot ? 'Sin cotizar hace' : 'Sin cotizaciones desde su alta hace'} ${r.diasSinCotizar} días · ${est.nombre}` };
   }
+  /* ---------- Clientes: identificación fiscal y sedes ---------- */
+  const esPeru = pais => !String(pais || '').trim() || /^per[uú]$/i.test(String(pais).trim());
+  /** RUC de 11 dígitos en Perú; en otro país (RUT, NIT…) basta un identificador de 5 caracteres o más */
+  const rucValido = (ruc, pais) => esPeru(pais) ? /^\d{11}$/.test(String(ruc || '').trim()) : String(ruc || '').trim().length >= 5;
+  const normSede = s => [s.direccion, s.ciudad, s.pais || 'Perú'].map(x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
+  /** Sedes de una empresa: la principal (dirección, ciudad y país de la cuenta) y las demás registradas */
+  function sedesDe(c) {
+    if (c && Array.isArray(c.sedes) && c.sedes.length) return c.sedes;
+    return c && (c.direccion || c.ciudad) ? [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion || '', ciudad: c.ciudad || '', pais: c.pais || 'Perú' }] : [];
+  }
   function validarCliente(db, d) {
     const e = {};
     if (!String(d.razonSocial || '').trim()) e.razonSocial = 'La razón social es obligatoria.';
-    if (!/^\d{11}$/.test(String(d.ruc || '').trim())) e.ruc = 'El RUC debe tener 11 dígitos.';
+    if (!rucValido(d.ruc, d.pais)) e.ruc = esPeru(d.pais) ? 'El RUC debe tener 11 dígitos.' : 'Indica el identificador fiscal (RUT, NIT u otro).';
     else {
-      const ex = db.clients.find(c => c.ruc === String(d.ruc).trim());
+      const ex = db.clients.find(c => c.id !== d.id && c.ruc === String(d.ruc).trim());
       if (ex) e.ruc = `Ya existe una cuenta con ese RUC: ${ex.razonSocial}${ex.vendedorId ? ' (asignada a ' + ix(db).user[ex.vendedorId].nombre + ')' : ' (sin asignar)'}.`;
     }
     if (d.contacto && (d.contacto.correo || d.contacto.telefono || d.contacto.cargo) && !String(d.contacto.nombre || '').trim()) e.contactoNombre = 'Indica el nombre del contacto.';
@@ -2410,7 +2432,7 @@ const Rules = (() => {
   function validarCotizacion(p, hoy = Util.today()) {
     const e = {};
     if (!p.clienteId && !(p.clienteNuevo && p.clienteNuevo.razonSocial)) e.cliente = 'Selecciona o registra el cliente.';
-    if (p.clienteNuevo && !/^\d{11}$/.test(p.clienteNuevo.ruc || '')) e.ruc = 'El RUC debe tener 11 dígitos.';
+    if (p.clienteNuevo && !rucValido(p.clienteNuevo.ruc, p.pais)) e.ruc = esPeru(p.pais) ? 'El RUC debe tener 11 dígitos.' : 'Indica el identificador fiscal del cliente (RUT, NIT u otro).';
     if (!String(p.numero || '').trim()) e.numero = 'Ingresa el número tal como figura en el PDF.';
     if (!p.fechaEmision) e.fechaEmision = 'Fecha obligatoria.';
     if (p.moneda === 'PEN' && !(+p.tc > 0)) e.tc = 'Tipo de cambio obligatorio para PEN.';
@@ -2474,6 +2496,8 @@ const Rules = (() => {
       case 'ver_todo': return user.rol === 'jefatura' || user.rol === 'finanzas';
       // Cuentas (opp = cliente en estos casos)
       case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      case 'agregar_contacto': return user.rol !== 'logistica';   // la agenda es común: se agregan contactos a cualquier empresa
+      case 'crear_cliente': return ['vendedor', 'jefatura', 'finanzas', 'admin'].includes(user.rol);
       case 'editar_contactos': return ['jefatura', 'finanzas', 'admin'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
@@ -2515,7 +2539,7 @@ const Rules = (() => {
   return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, aUSD, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, rucValido, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroGeneral, numeroAM, principales, rolNombre };
 })();
 
@@ -3032,21 +3056,42 @@ const Repo = (() => {
     async crearCliente(d, usuarioId) {
       const errs = Rules.validarCliente(db, d);
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
-      const c = { id: 'C-' + (++db.seq.client), razonSocial: d.razonSocial.trim(), ruc: String(d.ruc).trim(), vendedorId: d.vendedorId || null, ciudad: d.ciudad || 'Lima',
-        tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
-      if (d.contacto && String(d.contacto.nombre || '').trim()) {
-        c.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: d.contacto.nombre.trim(), cargo: (d.contacto.cargo || '').trim(), correo: (d.contacto.correo || '').trim(), telefono: (d.contacto.telefono || '').trim() });
+      exigir(usuarioId, 'crear_cliente', 'Tu rol no puede registrar empresas.');
+      const t = v => String(v == null ? '' : v).trim();
+      const c = { id: 'C-' + (++db.seq.client), razonSocial: t(d.razonSocial), ruc: t(d.ruc), vendedorId: d.vendedorId || null, ciudad: t(d.ciudad) || 'Lima', pais: t(d.pais) || 'Perú',
+        direccion: t(d.direccion), rubro: t(d.rubro), tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
+      c.sedes = [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion, ciudad: c.ciudad, pais: c.pais }];
+      if (d.contacto && t(d.contacto.nombre)) {
+        c.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: t(d.contacto.nombre), cargo: t(d.contacto.cargo), rol: t(d.contacto.rol), correo: t(d.contacto.correo), telefono: t(d.contacto.telefono) });
       }
       db.clients.push(c);
       touch();
       return c;
     },
     /** POST/PATCH /clientes/:id/contactos — agenda común de contactos */
-    async guardarContacto(clienteId, k) {
+    /** PATCH /clientes/:id — datos de la empresa: razón social, RUC o ID fiscal, rubro, tipo y sedes (la primera es la principal) */
+    async guardarCliente(clienteId, d, usuarioId) {
       const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
+      if (!Rules.puede(usuarioDe(usuarioId), 'editar_contactos', c)) fail('Solo el vendedor de la cuenta, gerencia, finanzas o administración editan la empresa.');
+      const t = v => String(v == null ? '' : v).trim();
+      const sedes = (d.sedes || []).map((x, i) => ({ id: x.id || 'SD-' + Date.now().toString(36) + i, nombre: t(x.nombre) || (i ? t(x.ciudad) || 'Sede ' + (i + 1) : 'Principal'), direccion: t(x.direccion), ciudad: t(x.ciudad), pais: t(x.pais) || 'Perú' })).filter(x => x.direccion || x.ciudad);
+      const pais = sedes[0] ? sedes[0].pais : (c.pais || 'Perú');
+      const e = {};
+      if (!t(d.razonSocial)) e.razonSocial = 'La razón social es obligatoria.';
+      if (t(d.ruc) || c.ruc) { const v = Rules.validarCliente(db, { id: c.id, razonSocial: t(d.razonSocial) || 'x', ruc: t(d.ruc), pais }); if (v.ruc) e.ruc = v.ruc; }
+      if (Object.keys(e).length) fail(Object.values(e)[0], e);
+      Object.assign(c, { razonSocial: t(d.razonSocial), ruc: t(d.ruc), rubro: t(d.rubro), tipo: d.tipo || c.tipo, sedes });
+      if (sedes[0]) Object.assign(c, { direccion: sedes[0].direccion, ciudad: sedes[0].ciudad || c.ciudad, pais: sedes[0].pais });
+      touch();
+      return c;
+    },
+    async guardarContacto(clienteId, k, usuarioId) {
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
+      const u = usuarioDe(usuarioId);
+      if (u && !Rules.puede(u, k.id ? 'editar_contactos' : 'agregar_contacto', c)) fail(k.id ? 'Solo el vendedor de la cuenta, gerencia, finanzas o administración editan este contacto.' : 'Tu rol solo consulta la agenda.');
       const errs = Rules.validarContacto(k);
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
-      const data = { nombre: k.nombre.trim(), cargo: (k.cargo || '').trim(), correo: (k.correo || '').trim(), telefono: (k.telefono || '').trim() };
+      const data = { nombre: k.nombre.trim(), cargo: (k.cargo || '').trim(), rol: (k.rol || '').trim(), correo: (k.correo || '').trim(), telefono: (k.telefono || '').trim() };
       if (k.id) Object.assign(c.contactos.find(x => x.id === k.id) || fail('Contacto no encontrado.'), data);
       else c.contactos.push(Object.assign({ id: 'K-' + (db.seq.contacto++) }, data));
       touch();
@@ -3187,16 +3232,17 @@ const Repo = (() => {
       if (cta) {
         if (!cta.ruc && /^\d{11}$/.test(p.rucCompletar || '') && !db.clients.some(x => x.ruc === p.rucCompletar)) cta.ruc = p.rucCompletar;
         const kk = p.contacto && cta.contactos.find(k => k.nombre.trim().toLowerCase() === p.contacto.trim().toLowerCase());
-        if (p.contacto && !kk) cta.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: p.contacto.trim(), cargo: '', correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' });
+        if (p.contacto && !kk) cta.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: p.contacto.trim(), cargo: '', rol: '', correo: p.contactoCorreo || '', telefono: p.contactoTelefono || '' });
         else if (kk) { if (p.contactoCorreo) kk.correo = String(p.contactoCorreo).trim(); if (p.contactoTelefono) kk.telefono = String(p.contactoTelefono).trim(); }
-        if (String(p.direccion || '').trim()) cta.direccion = String(p.direccion).trim();
-        if (String(p.ciudad || '').trim()) cta.ciudad = String(p.ciudad).trim();
-        if (String(p.pais || '').trim()) cta.pais = String(p.pais).trim();
-        if (!cta.vendedorId) cta.vendedorId = p.vendedorId;
-        else if (cta.vendedorId !== p.vendedorId && !cta.verificar) {
-          const yo = usuarioDe(p.vendedorId), dueno = usuarioDe(cta.vendedorId);
-          cta.verificar = `${yo ? yo.nombre : 'Otro Account Manager'} registró la cotización N° ${String(p.numero || '').trim()} para esta cuenta, asignada a ${dueno ? dueno.nombre : 'otro Account Manager'}. Definir quién lleva la cuenta.`;
+        // Dónde lo piden: si la cuenta no tenía dirección pasa a ser la principal; si es otra, se agrega como sede
+        const sede = { direccion: String(p.direccion || '').trim(), ciudad: String(p.ciudad || '').trim(), pais: String(p.pais || '').trim() || 'Perú' };
+        if (sede.direccion || sede.ciudad) {
+          const ss = Rules.sedesDe(cta).slice();
+          if (!ss.length || (!cta.direccion && ss.length === 1)) { cta.direccion = sede.direccion; cta.ciudad = sede.ciudad || cta.ciudad; cta.pais = sede.pais; cta.sedes = [Object.assign({ id: 'SD-0', nombre: 'Principal' }, { direccion: cta.direccion, ciudad: cta.ciudad, pais: cta.pais })]; }
+          else if (!ss.some(x => Rules.normSede(x) === Rules.normSede(sede))) cta.sedes = ss.concat([Object.assign({ id: 'SD-' + Date.now().toString(36), nombre: sede.ciudad || 'Sede' }, sede)]);
         }
+        // Sin asignar: pasa al vendedor. Si es de otro Account Manager, la cotización queda a nombre de quien cotiza (un cliente puede pedir a varios)
+        if (!cta.vendedorId) cta.vendedorId = p.vendedorId;
       }
       const items = p.items.filter(it => String(it.codigo || '').trim()).map(it => ({ cant: +it.cant, unidad: it.unidad || 'Und', codigo: it.codigo.trim(), marca: it.marca,
         descripcion: (it.descripcion || '').trim(), valorUnit: Util.round2(+it.valorUnit), listaUSD: +it.listaUSD > 0 ? +it.listaUSD : null, ...(it.opcional ? { opcional: true } : {}) }));
@@ -3457,14 +3503,14 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Agenda de contactos', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book'], ['empresa', 'Datos de la empresa', 'file']],
-    logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
-    admin: [['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Agenda de contactos', 'book']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
+    logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
   };
   const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Agenda', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios', empresa: 'Empresa' };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -3977,7 +4023,7 @@ const UI = (() => {
       <h2 class="h-title">COTIZACIÓN Nº ${E(q.numero)}</h2>
       <table class="h-datos"><tbody>
         ${fila('Dirigido a', E(cliente.razonSocial), 'Emitido por', E(vendedor.nombre))}
-        ${fila('RUC', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
+        ${fila(Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
         ${fila('Dirección', E(ub.direccion || '—'), 'Área', E(emp.area))}
         ${fila('Ciudad/País', E(ub.ciudadPais), 'Teléfono', E(vendedor.telefono || emp.central))}
         ${fila('Teléfono', E(k.telefono || '—'), 'Correo', E(vendedor.correo || '—'))}
@@ -4059,7 +4105,7 @@ const UI = (() => {
     const asegurar = h => { if (y + h > LIM) { nuevaPagina(); return true; } return false; };
     encabezado(false);
     // Datos del cliente y del emisor
-    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], ['RUC', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Ciudad/País', ub.ciudadPais],
+    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], [Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Ciudad/País', ub.ciudadPais],
       ['Teléfono', dc.telefono], ['Contacto', contacto || ''], ['Email', dc.correo], ['Referencia', ref]];
     const der = [['Emitido por', vendedor.nombre], ['Cargo', vendedor.cargo || 'Account Manager'], ['Área', emp.area || ''], ['Teléfono', vendedor.telefono || emp.central || ''],
       ['Correo', vendedor.correo || '', 'F1', 8, vendedor.correo ? 'mailto:' + vendedor.correo : ''], ['Fecha de emisión', Util.fmtDate(q.fechaEmision)]];
@@ -4272,62 +4318,126 @@ const UI = (() => {
       } }],
     });
   }
+  /* ---------- Directorio de clientes: búsqueda de empresas para elegir rápido (propias primero) ---------- */
+  const etiquetaCliente = c => `${c.razonSocial} · ${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID ') + c.ruc : 'sin RUC'}${c.vendedorId && c.vendedorId !== S.user.id ? ' · cuenta de ' + usr(c.vendedorId).nombre : !c.vendedorId ? ' · sin asignar' : ''}`;
+  const clientesOrdenados = () => S.db.clients.slice().sort((a, b) => (b.vendedorId === S.user.id) - (a.vendedorId === S.user.id) || a.razonSocial.localeCompare(b.razonSocial));
+  const opcionesClientes = () => clientesOrdenados().map(c => `<option value="${E(etiquetaCliente(c))}">`).join('');
+  /** Encuentra la empresa por la etiqueta elegida, por RUC o por razón social exacta */
+  function clientePorTexto(txt) {
+    const t = String(txt || '').trim(); if (!t) return null;
+    const n = t.toLowerCase();
+    return S.db.clients.find(c => etiquetaCliente(c) === t) || S.db.clients.find(c => c.ruc && c.ruc === t) || S.db.clients.find(c => c.razonSocial.toLowerCase() === n) || null;
+  }
+  const rolesContactoDL = () => `<datalist id="dl-roles">${Config.ROLES_CONTACTO.map(r => `<option value="${E(r)}">`).join('')}</datalist>`;
   function abrirEditarContacto(clienteId, contactoId) {
-    const editables = S.db.clients.filter(c => Rules.puede(S.user, 'editar_contactos', c)).sort((a, b) => a.razonSocial.localeCompare(b.razonSocial));
     const c = clienteId ? cli(clienteId) : null;
-    if (c && !Rules.puede(S.user, 'editar_contactos', c)) { toast('Solo el vendedor asignado o jefatura pueden editar estos contactos.'); return; }
+    if (c && contactoId && !Rules.puede(S.user, 'editar_contactos', c)) { toast('Solo el vendedor de la cuenta, gerencia, finanzas o administración editan este contacto.'); return; }
+    if (!Rules.puede(S.user, 'agregar_contacto', c || {})) { toast('Tu rol solo consulta la agenda.'); return; }
     const k = c && contactoId ? c.contactos.find(x => x.id === contactoId) : {};
     modal({
       title: contactoId ? 'Editar contacto' : 'Agregar contacto',
       body: `<div class="stack">
-        ${c ? `<p class="muted" style="margin:0">${E(c.razonSocial)}</p>` : `<label class="field"><span>Empresa <span class="req">*</span></span><select name="clienteId">${options(editables.map(x => [x.id, x.razonSocial]), '', 'Selecciona…')}</select></label>`}
-        <label class="field"><span>Nombre <span class="req">*</span></span><input type="text" name="nombre" value="${E(k.nombre || '')}"></label>
-        <label class="field">Cargo (opcional)<input type="text" name="cargo" value="${E(k.cargo || '')}" placeholder="Ej.: Jefe de compras"></label>
+        ${c ? `<p class="muted" style="margin:0"><strong>${E(c.razonSocial)}</strong>${c.ruc ? ' · ' + E(c.ruc) : ''}</p>` : `<label class="field"><span>Empresa <span class="req">*</span></span><input type="text" name="empresa" list="dl-empresas" placeholder="Busca por razón social o RUC" autocomplete="off"><datalist id="dl-empresas">${opcionesClientes()}</datalist>
+          <span class="field-hint">¿No está? <a href="#" data-modal-nueva-empresa>Registra la empresa nueva</a> con este contacto.</span></label>`}
+        <div class="form-grid"><label class="field"><span>Nombre <span class="req">*</span></span><input type="text" name="nombre" value="${E(k.nombre || '')}"></label>
+        <label class="field">Cargo <span class="muted" style="font-weight:400">(opcional)</span><input type="text" name="cargo" value="${E(k.cargo || '')}" placeholder="Ej.: Jefe de compras"></label>
+        <label class="field">Rol en su empresa <span class="muted" style="font-weight:400">(opcional)</span><input type="text" name="rol" list="dl-roles" value="${E(k.rol || '')}" placeholder="Compras, técnico, usuario final…">${rolesContactoDL()}</label></div>
         <div class="form-grid"><label class="field">Correo (opcional)<input type="email" name="correo" value="${E(k.correo || '')}"></label>
         <label class="field">Teléfono (opcional)<input type="text" name="telefono" value="${E(k.telefono || '')}" placeholder="+51 9xx xxx xxx"></label></div>
-        <p class="small muted" style="margin:0">La agenda es común: el contacto queda visible para todo el equipo.</p></div>`,
+        <p class="small muted" style="margin:0">La agenda es común: el contacto queda visible para todo el equipo. El cargo y el rol no salen en las cotizaciones.</p></div>`,
+      onOpen: back => { const a = back.querySelector('[data-modal-nueva-empresa]'); if (a) a.addEventListener('click', ev => { ev.preventDefault();
+        const pre = { nombre: val(back, 'nombre'), cargo: val(back, 'cargo'), rol: val(back, 'rol'), correo: val(back, 'correo'), telefono: val(back, 'telefono'), razonSocial: val(back, 'empresa') };
+        closeModal(); abrirNuevaCuenta({ contacto: pre, razonSocial: clientePorTexto(pre.razonSocial) ? '' : pre.razonSocial, quedarse: true }); }); },
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        const cid = clienteId || val(root, 'clienteId');
-        if (!cid) { const e = new Error('Selecciona la empresa.'); e.campos = { clienteId: 'Obligatorio' }; throw e; }
-        await Repo.guardarContacto(cid, { id: contactoId || null, nombre: val(root, 'nombre'), cargo: val(root, 'cargo'), correo: val(root, 'correo'), telefono: val(root, 'telefono') });
-        toast(contactoId ? 'Contacto actualizado.' : 'Contacto agregado a la agenda.'); refresh();
+        const cc = c || clientePorTexto(val(root, 'empresa'));
+        if (!cc) { const e = new Error('Elige la empresa de la lista o registra una nueva.'); e.campos = { empresa: 'Elige de la lista' }; throw e; }
+        await Repo.guardarContacto(cc.id, { id: contactoId || null, nombre: val(root, 'nombre'), cargo: val(root, 'cargo'), rol: val(root, 'rol'), correo: val(root, 'correo'), telefono: val(root, 'telefono') }, S.user.id);
+        toast(contactoId ? 'Contacto actualizado.' : `Contacto agregado a ${cc.razonSocial}.`); refresh();
       } }],
     });
   }
-  function abrirNuevaCuenta() {
-    const jef = S.user.rol === 'jefatura';
+  /** Nueva empresa (cuenta). Desde el directorio puede traer un contacto ya escrito */
+  function abrirNuevaCuenta(op = {}) {
+    const jef = S.user.rol === 'jefatura', vend = S.user.rol === 'vendedor', k = op.contacto || {};
     modal({
-      title: 'Nueva cuenta',
+      title: 'Nueva empresa',
       wide: true,
       body: `<div class="stack">
         <div class="form-grid">
-          <label class="field"><span>Razón social <span class="req">*</span></span><input type="text" name="razonSocial"></label>
-          <label class="field"><span>RUC (11 dígitos) <span class="req">*</span></span><input type="text" name="ruc" inputmode="numeric" maxlength="11"></label>
+          <label class="field" style="grid-column:span 2"><span>Razón social <span class="req">*</span></span><input type="text" name="razonSocial" value="${E(op.razonSocial || '')}"></label>
+          <label class="field"><span>RUC / ID fiscal <span class="req">*</span></span><input type="text" name="ruc" maxlength="20"><span class="field-hint">RUC de 11 dígitos; si es del extranjero, su RUT, NIT u otro.</span></label>
+          <label class="field">Rubro <span class="muted" style="font-weight:400">(opcional)</span><input type="text" name="rubro" placeholder="Ej.: Minería, energía, agua…"></label>
           <label class="field">Tipo<select name="tipo">${options(Config.TIPOS_CUENTA.map(t => [t, t]), 'Integrador')}</select></label>
-          <label class="field">Ciudad<select name="ciudad">${options(Config.CIUDADES.map(t => [t, t]), 'Lima')}</select></label>
           ${jef ? `<label class="field">Asignar a<select name="vendedorId">${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), '', 'Sin asignar (por ahora)')}</select></label>` : ''}
         </div>
-        ${jef ? '' : '<div class="alert info"><div>La cuenta quedará asignada a ti. Jefatura podrá reasignarla.</div></div>'}
-        <h3 style="margin:4px 0 0">Contacto principal <span class="muted small" style="font-weight:400">(opcional)</span></h3>
+        <h3 style="margin:4px 0 0">Sede principal <span class="muted small" style="font-weight:400">(se completa sola al cotizar; luego puedes agregar más sedes)</span></h3>
         <div class="form-grid">
-          <label class="field">Nombre<input type="text" name="contactoNombre"></label>
-          <label class="field">Cargo<input type="text" name="contactoCargo"></label>
-          <label class="field">Correo<input type="email" name="contactoCorreo"></label>
-          <label class="field">Teléfono<input type="text" name="contactoTelefono"></label>
+          <label class="field" style="grid-column:span 2">Dirección<input type="text" name="direccion"></label>
+          <label class="field">Ciudad<input type="text" name="ciudad" list="dl-ciudades" value="Lima"><datalist id="dl-ciudades">${Config.CIUDADES.map(x => `<option value="${x}">`).join('')}</datalist></label>
+          <label class="field">País<input type="text" name="pais" list="dl-paises" value="Perú"><datalist id="dl-paises">${Config.PAISES.map(x => `<option value="${x}">`).join('')}</datalist></label>
+        </div>
+        ${jef ? '' : `<div class="alert info"><div>${vend ? 'La cuenta quedará asignada a ti.' : 'La cuenta quedará sin asignar.'} Gerencia podrá reasignarla.</div></div>`}
+        <h3 style="margin:4px 0 0">Contacto <span class="muted small" style="font-weight:400">(opcional)</span></h3>
+        <div class="form-grid">
+          <label class="field">Nombre<input type="text" name="contactoNombre" value="${E(k.nombre || '')}"></label>
+          <label class="field">Cargo<input type="text" name="contactoCargo" value="${E(k.cargo || '')}"></label>
+          <label class="field">Rol en su empresa<input type="text" name="contactoRol" list="dl-roles" value="${E(k.rol || '')}">${rolesContactoDL()}</label>
+          <label class="field">Correo<input type="email" name="contactoCorreo" value="${E(k.correo || '')}"></label>
+          <label class="field">Teléfono<input type="text" name="contactoTelefono" value="${E(k.telefono || '')}"></label>
         </div></div>`,
-      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Crear cuenta`, cls: 'primary', onClick: async root => {
-        const c = await Repo.crearCliente({ razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), tipo: val(root, 'tipo'), ciudad: val(root, 'ciudad'),
-          vendedorId: jef ? val(root, 'vendedorId') || null : S.user.id,
-          contacto: { nombre: val(root, 'contactoNombre'), cargo: val(root, 'contactoCargo'), correo: val(root, 'contactoCorreo'), telefono: val(root, 'contactoTelefono') } }, S.user.id);
-        toast('Cuenta creada.'); go('cuenta/' + c.id);
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Registrar empresa`, cls: 'primary', onClick: async root => {
+        const c = await Repo.crearCliente({ razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), tipo: val(root, 'tipo'), rubro: val(root, 'rubro'),
+          direccion: val(root, 'direccion'), ciudad: val(root, 'ciudad'), pais: val(root, 'pais'),
+          vendedorId: jef ? val(root, 'vendedorId') || null : vend ? S.user.id : null,
+          contacto: { nombre: val(root, 'contactoNombre'), cargo: val(root, 'contactoCargo'), rol: val(root, 'contactoRol'), correo: val(root, 'contactoCorreo'), telefono: val(root, 'contactoTelefono') } }, S.user.id);
+        toast(`Empresa ${c.razonSocial} registrada.`);
+        if (op.quedarse || !Rules.puede(S.user, 'ver_cuenta', c)) { S.agF.q = c.razonSocial; S.agF.vendedor = ''; if (location.hash === '#/contactos') refresh(); else go('contactos'); }
+        else go('cuenta/' + c.id);
       } }],
     });
   }
+  /** Editar la empresa: razón social, RUC o ID fiscal, rubro, tipo y sedes (la primera es la principal) */
+  function abrirEditarEmpresa(clienteId) {
+    const c = cli(clienteId);
+    if (!Rules.puede(S.user, 'editar_contactos', c)) { toast('Solo el vendedor de la cuenta, gerencia, finanzas o administración editan la empresa.'); return; }
+    const fila = (sd, i) => `<div class="sede-fila" data-sede="${E(sd.id || '')}">
+        <label class="field">Nombre de la sede<input type="text" name="sn" value="${E(sd.nombre || (i ? '' : 'Principal'))}" placeholder="${i ? 'Ej.: Planta Ilo' : 'Principal'}"></label>
+        <label class="field">Dirección<input type="text" name="sd" value="${E(sd.direccion || '')}"></label>
+        <label class="field">Ciudad<input type="text" name="sc" list="dl-ciudades" value="${E(sd.ciudad || '')}"></label>
+        <label class="field">País<input type="text" name="sp" list="dl-paises" value="${E(sd.pais || 'Perú')}"></label>
+        <button type="button" class="btn sm ghost" data-quitar-sede aria-label="Quitar sede"${i ? '' : ' disabled title="La principal no se quita"'}>${I('x')}</button></div>`;
+    const sedes = Rules.sedesDe(c);
+    modal({
+      title: 'Editar empresa', wide: true,
+      body: `<div class="stack">
+        <div class="form-grid">
+          <label class="field" style="grid-column:span 2"><span>Razón social <span class="req">*</span></span><input type="text" name="razonSocial" value="${E(c.razonSocial)}"></label>
+          <label class="field">RUC / ID fiscal<input type="text" name="ruc" maxlength="20" value="${E(c.ruc || '')}"></label>
+          <label class="field">Rubro <span class="muted" style="font-weight:400">(no sale en la cotización)</span><input type="text" name="rubro" value="${E(c.rubro || '')}"></label>
+          <label class="field">Tipo<select name="tipo">${options(Config.TIPOS_CUENTA.map(t => [t, t]), c.tipo || 'Integrador')}</select></label>
+        </div>
+        <h3 style="margin:4px 0 0">Sedes <span class="muted small" style="font-weight:400">(se eligen rápido al cotizar; la primera es la principal)</span></h3>
+        <div id="sedes-lista" class="stack">${(sedes.length ? sedes : [{}]).map(fila).join('')}</div>
+        <datalist id="dl-ciudades">${Config.CIUDADES.map(x => `<option value="${x}">`).join('')}</datalist><datalist id="dl-paises">${Config.PAISES.map(x => `<option value="${x}">`).join('')}</datalist>
+        <div><button type="button" class="btn sm" data-agregar-sede>${I('plus')} Agregar sede</button></div></div>`,
+      onOpen: back => {
+        const lista = back.querySelector('#sedes-lista');
+        back.querySelector('[data-agregar-sede]').addEventListener('click', () => { lista.insertAdjacentHTML('beforeend', fila({}, lista.children.length)); });
+        lista.addEventListener('click', ev => { const b = ev.target.closest('[data-quitar-sede]'); if (b && !b.disabled) b.closest('.sede-fila').remove(); });
+      },
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        const ss = [...root.querySelectorAll('.sede-fila')].map(f => ({ id: f.dataset.sede || null, nombre: f.querySelector('[name=sn]').value, direccion: f.querySelector('[name=sd]').value, ciudad: f.querySelector('[name=sc]').value, pais: f.querySelector('[name=sp]').value }));
+        await Repo.guardarCliente(c.id, { razonSocial: val(root, 'razonSocial'), ruc: val(root, 'ruc'), rubro: val(root, 'rubro'), tipo: val(root, 'tipo'), sedes: ss }, S.user.id);
+        toast('Empresa actualizada.'); refresh();
+      } }],
+    });
+  }
+  ACTIONS['empresa-editar'] = el => abrirEditarEmpresa(el.dataset.cliente);
   ACTIONS['expandir'] = el => { S.expand[el.dataset.k] = !S.expand[el.dataset.k]; refresh(); };
   ACTIONS['gestion-cuenta'] = el => abrirGestionCuenta(el.dataset.id);
   ACTIONS['contacto-nuevo'] = el => abrirEditarContacto(el.dataset.cliente || null, null);
   ACTIONS['contacto-editar'] = el => abrirEditarContacto(el.dataset.cliente, el.dataset.k);
-  ACTIONS['cuenta-nueva'] = () => abrirNuevaCuenta();
+  ACTIONS['cuenta-nueva'] = el => abrirNuevaCuenta({ quedarse: !!(el && el.dataset.quedarse) });
 
   /* ---------- Componentes de lista ---------- */
   function quickInline(o) {
@@ -5077,7 +5187,6 @@ const UI = (() => {
   }
   function formNueva(N) {
     const d = N.d, db = S.db, u = S.user;
-    const misClientes = db.clients.filter(c => c.vendedorId === u.id).sort((a, b) => a.razonSocial.localeCompare(b.razonSocial));
     const c = d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : null;
     const cands = revisionInfo(d);
     const { t, usd } = totalesDraft(d);
@@ -5094,17 +5203,21 @@ const UI = (() => {
         ${d.referencia ? `<br>Referencia leída en el PDF: <strong>${E(d.referencia)}</strong> → se propuso como proyecto.` : ''}</div></div>` : ''}
       ${sec(1, 'Cliente', `<div class="fg">
         <div class="fg-sub fg-first">Empresa</div>
-        <label class="field c6"><span>Cliente <span class="req">*</span></span><select name="cliente" data-nq="clienteId" data-nq-render="1">${options([...(c && c.vendedorId !== u.id ? [[c.id, c.razonSocial + (c.vendedorId ? ' (cuenta de ' + usr(c.vendedorId).nombre + ')' : ' (sin asignar)')]] : []), ...misClientes.map(x => [x.id, x.razonSocial]), ['__nuevo', '+ Cliente nuevo…']], d.clienteId, 'Selecciona…')}</select></label>
+        <label class="field c6"><span>Cliente <span class="req">*</span></span><input type="text" name="cliente" list="nq-clientes" data-nq-cli="1" autocomplete="off" value="${E(c ? etiquetaCliente(c) : d.clienteId === '__nuevo' ? NUEVO_CLIENTE : '')}" placeholder="Busca por razón social o RUC"><datalist id="nq-clientes">${opcionesClientes()}<option value="${NUEVO_CLIENTE}"></datalist>
+          <span class="field-hint">${c && c.vendedorId && c.vendedorId !== u.id ? `Cuenta de ${E(usr(c.vendedorId).nombre)}: la cotización queda a tu nombre.` : 'Directorio de todas las empresas; tus cuentas aparecen primero.'}</span></label>
         ${d.clienteId === '__nuevo' ? `<label class="field c3"><span>Razón social <span class="req">*</span></span><input type="text" data-nq="clienteNuevo.razonSocial" value="${E(d.clienteNuevo.razonSocial)}"></label>
-          <label class="field c3"><span>RUC (11 dígitos) <span class="req">*</span></span><input type="text" name="ruc" inputmode="numeric" maxlength="11" data-nq="clienteNuevo.ruc" data-nq-render="1" value="${E(d.clienteNuevo.ruc)}"></label>`
+          <label class="field c3"><span>RUC / ID fiscal <span class="req">*</span></span><input type="text" name="ruc" maxlength="20" data-nq="clienteNuevo.ruc" data-nq-render="1" value="${E(d.clienteNuevo.ruc)}"><span class="field-hint">Extranjero: RUT, NIT u otro.</span></label>`
           : `<label class="field c3">RUC<input type="text" value="${c ? E(c.ruc) : ''}" readonly placeholder="Se completa con el cliente"></label>`}
         ${(() => { const k = c && c.contactos.find(x => x.nombre === d.contacto) || {}; return `
         <div class="fg-sub">Dónde lo piden <span>sale en el PDF; puede variar entre cotizaciones</span></div>
+        ${(() => { const ss = c ? Rules.sedesDe(c) : []; if (ss.length < 2) return ''; const act = { direccion: d.direccion || c.direccion || '', ciudad: d.ciudad || c.ciudad || '', pais: d.pais || c.pais || 'Perú' };
+          const sel = ss.findIndex(x => Rules.normSede(x) === Rules.normSede(act));
+          return `<label class="field c12">Sede<select data-nq-sede="1">${options(ss.map((x, i) => [String(i), `${x.nombre || 'Sede'} — ${[x.direccion, x.ciudad, x.pais].filter(Boolean).join(', ')}`]), sel >= 0 ? String(sel) : '', 'Otra dirección (escríbela abajo)')}</select><span class="field-hint">${ss.length} sedes registradas: al elegir una se completan dirección, ciudad y país.</span></label>`; })()}
         <label class="field c6">Dirección<input type="text" data-nq="direccion" value="${E(d.direccion || (c && c.direccion) || '')}" placeholder="Opcional"></label>
         <label class="field c3">Ciudad<input type="text" data-nq="ciudad" value="${E(d.ciudad || (c && c.ciudad) || '')}" placeholder="Lima"></label>
         <label class="field c3">País<input type="text" list="nq-paises" data-nq="pais" value="${E(d.pais || (c && c.pais) || '')}" placeholder="Perú"><datalist id="nq-paises">${['Perú', 'Chile', 'Bolivia', 'Ecuador', 'Colombia'].map(x => `<option value="${x}">`).join('')}</datalist></label>
         <div class="fg-sub">Contacto <span>se guarda también en la agenda</span></div>
-        <label class="field c4">Nombre<input type="text" list="nq-contactos" data-nq="contacto" data-nq-render="1" value="${E(d.contacto)}" placeholder="Elige o escribe"><datalist id="nq-contactos">${c ? c.contactos.map(x => `<option value="${E(x.nombre)}">`).join('') : ''}</datalist></label>
+        <label class="field c4">Nombre<input type="text" list="nq-contactos" data-nq="contacto" data-nq-render="1" value="${E(d.contacto)}" placeholder="${c && c.contactos.length ? 'Elige de la agenda o escribe' : 'Escribe el nombre'}"><datalist id="nq-contactos">${c ? c.contactos.map(x => `<option value="${E(x.nombre)}" label="${E([x.cargo, x.rol, x.correo, x.telefono].filter(Boolean).join(' · '))}">`).join('') : ''}</datalist><span class="field-hint">${c && c.contactos.length ? c.contactos.length + ' en la agenda de esta empresa. ' : ''}Si es alguien nuevo, se agrega a la agenda.</span></label>
         <label class="field c4">Correo<input type="email" data-nq="contactoCorreo" value="${E(d.contactoCorreo || k.correo || '')}" placeholder="Opcional"></label>
         <label class="field c4">Teléfono<input type="tel" data-nq="contactoTelefono" value="${E(d.contactoTelefono || k.telefono || '')}" placeholder="Opcional"></label>`; })()}
       </div>`)}
@@ -5223,12 +5336,27 @@ const UI = (() => {
   document.addEventListener('input', e => {
     const el = e.target;
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
+    if (el.dataset.nqCli) { aplicarCliente(el, false); return; }
     if (el.dataset.nq && el.tagName !== 'SELECT' && !el.dataset.nqRender) { setDraft(el.dataset.nq, el.value); actualizarCalculos(); }
     if (el.dataset.nqi != null && el.type !== 'checkbox') { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); if (el.dataset.ac != null) mostrarAc(el); }
   });
+  /** Cliente elegido en el buscador (o escrito): existente, nuevo con ese nombre o RUC */
+  const NUEVO_CLIENTE = '+ Cliente nuevo (registrar)';
+  function aplicarCliente(el, final) {
+    const d = S.nueva.d, txt = el.value.trim();
+    let id = null;
+    if (txt === NUEVO_CLIENTE) id = '__nuevo';
+    else { const c = clientePorTexto(txt); if (c) id = c.id; else if (final && txt) id = '__nuevo'; else if (final) id = ''; }
+    if (id === null || id === d.clienteId) return;
+    setDraft('clienteId', id);
+    if (id === '__nuevo' && txt && txt !== NUEVO_CLIENTE) d.clienteNuevo = /^[\d-]{6,}$/.test(txt) ? { razonSocial: '', ruc: txt } : { razonSocial: txt, ruc: '' };
+    render(true);
+  }
   document.addEventListener('change', e => {
     const el = e.target;
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
+    if (el.dataset.nqCli) { aplicarCliente(el, true); return; }
+    if (el.dataset.nqSede) { const c = cli(S.nueva.d.clienteId), x = el.value !== '' && Rules.sedesDe(c)[+el.value]; if (x) Object.assign(S.nueva.d, { direccion: x.direccion, ciudad: x.ciudad, pais: x.pais || 'Perú' }); render(true); return; }
     if (el.dataset.nq) { setDraft(el.dataset.nq, el.value); if (el.dataset.nqRender || el.tagName === 'SELECT') render(true); }
     else if (el.dataset.nqi != null) {
       const d = S.nueva.d, it = d.items[+el.dataset.nqi];
@@ -5695,7 +5823,7 @@ const UI = (() => {
     const sinAsig = base.filter(c => !c.vendedorId).length;
     view().innerHTML = `
       <div class="page-head"><div><h1>${jef ? 'Cuentas' : 'Mis cuentas'}</h1><p class="muted">${jef ? 'Asigna cuentas a los vendedores y revisa su estado' : 'Tu cartera de clientes y su estado'} · alerta tras ${Config.CUENTA_INACTIVA_DIAS} días sin cotizar</p></div>
-        <div class="btn-row"><a class="btn" href="#/contactos">${I('book')} Agenda de contactos</a><button class="btn primary" data-action="cuenta-nueva">${I('plus')} Nueva cuenta</button></div></div>
+        <div class="btn-row"><a class="btn" href="#/contactos">${I('book')} Directorio de clientes</a><button class="btn primary" data-action="cuenta-nueva">${I('plus')} Nueva cuenta</button></div></div>
       <div class="grid ${jef ? 'g5' : 'g4'}">
         ${kpi('Cuentas', String(base.length), jef ? 'toda la empresa' : 'asignadas a ti')}
         ${kpi('Activas', String(cnt('activo')), 'cotizadas o con respuesta en 60 días')}
@@ -5762,10 +5890,11 @@ const UI = (() => {
       <section class="card">
         <div class="op-header"><div>
           <h1>${E(c.razonSocial)} <span class="seg ${seg.seg}" title="Facturado 12 meses: ${money(seg.total)}">${seg.seg}</span> ${estadoChip(r.estado)}</h1>
-          <div class="muted">RUC ${E(c.ruc)} · ${E(c.tipo)} · ${E(c.ciudad)}</div>
+          <div class="muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : 'Sin RUC'} · ${E(c.tipo)}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div>
+          <div class="dir-sedes" style="margin:4px 0 0">${Rules.sedesDe(c).map(x => `<span><strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') || '<span class="muted">Sin dirección registrada</span>'}</div>
           <div class="small muted" style="margin-top:2px">Alta ${Util.fmtDate(c.fechaAlta)}${reg ? ' · registrada por ' + E(reg.nombre) : ''} · Vendedor: ${c.vendedorId ? E(usr(c.vendedorId).nombre) : '<strong>Sin asignar</strong>'}</div>
         </div>
-        <div class="btn-row">${gest ? `<button class="btn" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Nueva cotización</button>` : ''}</div></div>
+        <div class="btn-row">${editK ? `<button class="btn ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}${gest ? `<button class="btn" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Nueva cotización</button>` : ''}</div></div>
         ${verificarHTML('cliente', c)}
         ${al ? `<div class="alert ${al.nivel === 'bad' ? 'bad' : 'warn'}" style="margin-top:12px"><div><strong>${E(al.texto)}.</strong> ${E(Config.ESTADOS_CUENTA[r.estado].regla)} La alerta llega al vendedor asignado y a jefatura.</div></div>` : ''}
         <div class="facts">
@@ -5809,35 +5938,50 @@ const UI = (() => {
   /* =====================================================================
      AGENDA DE CONTACTOS — común para todo el equipo
      ===================================================================== */
+  /* ---------- Directorio de clientes: empresas (RUC, rubro, sedes) con sus contactos. Común para todo el equipo ---------- */
   PAGES['contactos'] = async () => {
     const db = S.db, u = S.user, F = S.agF;
-    let rows = db.clients.flatMap(c => c.contactos.map(k => ({ k, c })));
-    const total = rows.length, empresas = db.clients.filter(c => c.contactos.length).length;
-    if (F.vendedor) rows = rows.filter(x => F.vendedor === '__mias' ? x.c.vendedorId === u.id : F.vendedor === '__sin' ? !x.c.vendedorId : x.c.vendedorId === F.vendedor);
-    if (F.q.trim()) { const t = F.q.trim().toLowerCase(); rows = rows.filter(x => [x.k.nombre, x.k.cargo, x.k.correo, x.k.telefono, x.c.razonSocial, x.c.ruc].join(' ').toLowerCase().includes(t)); }
-    rows.sort((a, b) => a.c.razonSocial.localeCompare(b.c.razonSocial) || a.k.nombre.localeCompare(b.k.nombre));
-    const puedeAgregar = u.rol !== 'finanzas';
-    const vOpts = [...(u.rol === 'vendedor' ? [['__mias', 'Mis cuentas']] : []), ...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar']];
+    if (!F.lim) F.lim = 30;
+    const nrm = x => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    let cs = clientesOrdenados();
+    const totalK = db.clients.reduce((a, c) => a + c.contactos.length, 0);
+    if (F.vendedor) cs = cs.filter(c => F.vendedor === '__mias' ? c.vendedorId === u.id : F.vendedor === '__sin' ? !c.vendedorId : F.vendedor === '__conk' ? c.contactos.length : c.vendedorId === F.vendedor);
+    const t = nrm(F.q.trim());
+    const enK = (c, k) => nrm([k.nombre, k.cargo, k.rol, k.correo, k.telefono].join(' ')).includes(t);
+    if (t) cs = cs.filter(c => nrm([c.razonSocial, c.ruc, c.rubro, c.tipo, ...Rules.sedesDe(c).map(x => [x.nombre, x.direccion, x.ciudad, x.pais].join(' '))].join(' ')).includes(t) || c.contactos.some(k => enK(c, k)));
+    const vOpts = [...(u.rol === 'vendedor' ? [['__mias', 'Mis cuentas']] : []), ...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar'], ['__conk', 'Solo empresas con contactos']];
+    const puedeK = Rules.puede(u, 'agregar_contacto', {}), puedeC = Rules.puede(u, 'crear_cliente');
+    const tarjeta = c => {
+      const edC = Rules.puede(u, 'editar_contactos', c), sedes = Rules.sedesDe(c);
+      const ks = t && !nrm([c.razonSocial, c.ruc].join(' ')).includes(t) ? c.contactos.slice().sort((a, b) => enK(c, b) - enK(c, a)) : c.contactos;
+      return `<section class="card dir-emp">
+        <div class="dir-head"><div style="min-width:0">
+          <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
+          <div class="small muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : '<span style="color:var(--warn)">Sin RUC</span>'} · ${E(c.tipo || 'Integrador')}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div></div>
+          <div class="btn-row">${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}</div></div>
+        <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
+        ${ks.length ? `<div class="table-wrap"><table class="tbl dir-k"><thead><tr><th>Contacto</th><th>Cargo</th><th>Rol</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
+          ${ks.map(k => `<tr${t && enK(c, k) ? ' class="dir-hit"' : ''}><td class="cell-main">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td><td class="small">${E(k.rol || '—')}</td>
+            <td class="small">${k.correo ? `<a href="mailto:${E(k.correo)}">${E(k.correo)}</a>` : '—'}</td><td class="small nowrap">${E(k.telefono || '—')}</td>
+            <td class="nowrap"><div class="btn-row" style="flex-wrap:nowrap;justify-content:flex-end">${contactoLinks(k)}${edC ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="small muted" style="margin:6px 0 0">Sin contactos registrados.</p>'}
+      </section>`;
+    };
     view().innerHTML = `
-      <div class="page-head"><div><h1>Agenda de contactos</h1><p class="muted">Común para todo el equipo · ${total} contactos de ${empresas} empresas</p></div>
-        ${puedeAgregar ? `<button class="btn primary" data-action="contacto-nuevo">${I('plus')} Agregar contacto</button>` : ''}</div>
+      <div class="page-head"><div><h1>Directorio de clientes</h1><p class="muted">Común para todo el equipo · ${db.clients.length} empresas · ${totalK} contactos</p></div>
+        <div class="btn-row">${puedeC ? `<button class="btn" data-action="cuenta-nueva" data-quedarse="1">${I('plus')} Agregar empresa</button>` : ''}${puedeK ? `<button class="btn primary" data-action="contacto-nuevo">${I('plus')} Agregar contacto</button>` : ''}</div></div>
       <div class="card" style="padding:12px"><div class="filters" style="margin:0">
-        <label class="field">Buscar<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Nombre, cargo, empresa, correo o teléfono"></label>
-        <label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las cuentas')}</select></label>
-      </div><div class="small muted" id="ag-count" style="margin-top:8px">${rows.length} contactos</div></div>
-      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1120px"><thead><tr><th>Nombre</th><th>Cargo</th><th>Empresa</th><th>Vend.</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
-        ${rows.map(({ k, c }) => `<tr><td class="cell-main nowrap">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td>
-          <td>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)}</td>
-          <td>${c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="muted small">Sin asignar</span>'}</td>
-          <td class="small">${k.correo ? `<a href="mailto:${E(k.correo)}">${E(k.correo)}</a>` : '—'}</td><td class="small nowrap">${E(k.telefono || '—')}</td>
-          <td class="nowrap"><div class="btn-row" style="flex-wrap:nowrap">${contactoLinks(k)}${Rules.puede(u, 'editar_contactos', c) ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></td></tr>`).join('')
-          || `<tr><td colspan="7" class="center muted" style="padding:20px">Sin contactos con estos filtros.</td></tr>`}
-      </tbody></table></div>
-      <p class="small muted">Registrar contactos es opcional. Cada vendedor (o jefatura) puede agregar y editar los contactos de sus cuentas; todos pueden consultarlos.</p>`;
+        <label class="field" style="flex:2 1 320px">Buscar<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Empresa, RUC, rubro, ciudad, contacto, correo o teléfono"></label>
+        <label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las empresas')}</select></label>
+      </div><div class="small muted" id="ag-count" style="margin-top:8px">${cs.length} empresa${cs.length === 1 ? '' : 's'}${u.rol === 'vendedor' && !F.vendedor ? ' · tus cuentas primero' : ''}</div></div>
+      <div class="stack" style="margin-top:12px">${cs.slice(0, F.lim).map(tarjeta).join('') || '<div class="card center muted">Sin empresas con estos filtros.</div>'}</div>
+      ${cs.length > F.lim ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="dir-mas">Ver más empresas (${cs.length - F.lim} restantes)</button></div>` : ''}
+      <p class="small muted">El cargo, el rol y el rubro son para el registro interno: no salen en las cotizaciones. Cualquier usuario (salvo logística) agrega contactos; el vendedor de la cuenta, gerencia, finanzas y administración los editan.</p>`;
   };
-  CHANGES['agf'] = el => { S.agF[el.name] = el.value; render(true); };
+  ACTIONS['dir-mas'] = () => { S.agF.lim = (S.agF.lim || 30) + 30; refresh(); };
+  CHANGES['agf'] = el => { S.agF[el.name] = el.value; S.agF.lim = 30; render(true); };
   let tAg = null;
-  INPUTS['agf'] = el => { S.agF[el.name] = el.value; clearTimeout(tAg); tAg = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="agf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  INPUTS['agf'] = el => { S.agF[el.name] = el.value; S.agF.lim = 30; clearTimeout(tAg); tAg = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="agf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
 
   /* =====================================================================
      LISTA DE PRECIOS — confidencial. Todos consultan; jefatura, finanzas y administración la mantienen.
