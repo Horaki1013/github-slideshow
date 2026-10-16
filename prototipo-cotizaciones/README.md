@@ -96,7 +96,8 @@ El HTML del piloto se arma fuera del repositorio con scripts privados: migració
 |---|---|---|---|
 | 0 | `Config` | Catálogos y parámetros: etapas, probabilidades, motivos de pérdida, condiciones de pago, plazos, horizontes, feriados, meta | Tabla de parámetros administrable |
 | 1b | `LectorPDF`, `LecturaCotizacion` | Extraen el texto de un PDF (objetos, flujos Flate/ASCII85/Hex, fuentes WinAnsi y ToUnicode, posiciones) e interpretan la plantilla de cotización | Lectura en el servidor desde el correo (IA + librería PDF) |
-| 1 | `Util` | Fechas ISO, días hábiles con feriados de Perú, formatos `USD 12,345.67` y `dd/mm/aaaa`, aleatorio con semilla | Se mantiene |
+| 1 | `Util` | Fechas ISO, días hábiles con feriados de Perú, formatos `USD 12,345.67` y `dd/mm/aaaa`, normalización de texto para buscar, descargas y CSV | Se mantiene |
+| 1c | `Excel` | Escritor mínimo de `.xlsx` (ZIP sin compresión + XML) para las plantillas de carga masiva | Se mantiene o lo genera el servidor |
 | 2 | `DemoData` | Generador de la data ficticia | **Se elimina** |
 | 3a | `Almacen` | Guarda y lee el estado del piloto en IndexedDB (no actúa en la demo) y recuerda la carpeta compartida | Se mantiene como caché local |
 | 3b | `AlmacenCompartido` | Lee y escribe `datos.json`, `lista-precios.json`, el bloqueo y los respaldos en la carpeta de red | **Se reemplaza por la API del servidor local** |
@@ -199,13 +200,19 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
 La pantalla "Directorio de clientes" (antes "Agenda de contactos") es común para todo el equipo:
 
 - **Empresas agrupadas** con RUC (o RUT/NIT si es del extranjero), tipo, rubro, Account Manager, sedes y sus contactos.
-- **Buscador** por empresa, RUC, rubro, ciudad, contacto, correo o teléfono. Tus cuentas aparecen primero y se muestran 30 empresas por página.
+- **Mis clientes / Todos los clientes (vendedores).** El directorio abre en **Mis clientes**: solo las cuentas asignadas al vendedor, con su estado, última cotización, último contacto y oportunidades abiertas, y accesos directos a **Ver cuenta**, **Registrar gestión** y **Cotizar**. **Todos los clientes** es el directorio general de la empresa.
+- **Buscador** por empresa, RUC, rubro, ciudad, contacto, correo o teléfono. En "Todos los clientes" tus cuentas aparecen primero; se muestran 30 empresas por página.
 - **Agregar empresa** (`Repo.crearCliente`): razón social, RUC o ID fiscal, rubro, tipo, sede principal y un contacto opcional.
   - La registran Account Managers (queda a su nombre), gerencia/jefatura (la asignan) y finanzas y administración (queda sin asignar).
 - **Agregar contacto** a cualquier empresa (todos menos logística). Si la empresa no existe, se registra desde el mismo formulario.
   - El contacto tiene un **rol en su empresa** opcional (compras, técnico, usuario final…).
 - **Editar empresa** (`Repo.guardarCliente`): razón social, RUC, rubro, tipo y **varias sedes**; la primera es la principal (`Rules.sedesDe`). La editan el AM de la cuenta, gerencia, finanzas y administración.
 - **El rubro, el cargo y el rol no salen en las cotizaciones.**
+- **Asignación de cuentas** (`Repo.reasignarCliente`, permiso `asignar_clientes`): gerencia/jefatura, finanzas y administración eligen el vendedor en cada tarjeta del directorio (jefatura también desde Cuentas). La cuenta se lleva sus oportunidades abiertas y en pausa.
+- **Carga masiva por Excel** (gerencia/jefatura, finanzas y administración):
+  - **Descargar plantilla:** un `.xlsx` con la hoja *Clientes* (RUC / ID fiscal, razón social, vendedor por iniciales, rubro, dirección, distrito/comuna, ciudad, país) prellenada con los datos actuales, la hoja *Vendedores* (iniciales válidas) e *Instrucciones*.
+  - **Subir datos y actualizar:** se lee en el navegador y se compara con los datos (`Rules.planClientes`). Antes de aplicar se ve un resumen fila por fila: clientes nuevos, cambios (asignación, razón social, rubro, sede principal), filas sin cambios y filas con error (RUC inválido, vendedor inexistente, fila repetida), que no se aplican.
+  - `Repo.importarClientes` aplica todo en una sola escritura. Las celdas vacías no borran datos.
 
 En la cotización:
 - **Cliente:** el campo es un buscador sobre todo el directorio, con las cuentas propias primero.
@@ -216,9 +223,9 @@ En la cotización:
 ## Lista de precios (confidencial)
 
 **Pantalla "Lista de precios".** Todos la consultan; **solo jefatura, finanzas y administración** la modifican:
-- Agregar, editar o quitar productos.
-- Importar la lista completa.
-- Exportarla a CSV.
+- Agregar, editar o quitar productos uno por uno.
+- **Descargar plantilla** (Excel): Marca, Código, Descripción y Precio USD, con la lista actual completa, una marca o vacía, más una hoja de instrucciones.
+- **Subir datos y actualizar:** el Excel de la plantilla (o la lista del proveedor) se importa; por defecto **solo agrega y actualiza precios**, sin quitar productos.
 - Ver el historial de cambios: quién actualizó qué y cuándo.
 
 El `Repo` vuelve a validar el rol en cada cambio, como lo haría el backend.
@@ -230,7 +237,7 @@ El `Repo` vuelve a validar el rol en cada cambio, como lo haría el backend.
 - El vendedor puede **modificar la descripción y el precio solo para su cotización**: la lista no cambia. Si edita el precio, el formulario y la ficha lo marcan como "editado vs lista" y el ítem guarda el precio de lista (`listaUSD`) para control.
 
 **Importación** (`ListaPrecios`, en el navegador; el archivo no se sube a ningún servidor):
-- **Formatos:** Excel `.xlsx` con una hoja por marca, o CSV con columna Marca. El CSV que exporta la propia pantalla es reimportable.
+- **Formatos:** Excel `.xlsx` con una hoja por marca o con columna Marca (como la plantilla), o CSV. Las hojas "Instrucciones" y "Vendedores" se ignoran.
 - **Qué interpreta:**
   - Encabezados en distintas filas.
   - Varias columnas de código: usa la que tiene más datos.
@@ -398,5 +405,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 
 - Fuente: Century Gothic, con alternativas sans-serif si no está instalada. Color principal `#015088`.
 - Los campos de fecha usan el selector nativo del navegador, que muestra el formato según el idioma del sistema (dd/mm/aaaa en un Windows o Chrome configurado en español de Perú). En todo el texto de la interfaz las fechas se muestran como dd/mm/aaaa.
-- El CSV exportado usa `;` como separador y UTF-8 con BOM, para que Excel lo abra directamente.
+- El CSV exportado usa `;` como separador y UTF-8 con BOM, para que Excel lo abra directamente. Las plantillas de carga son `.xlsx` reales (validados con openpyxl), con la fila de encabezados fija.
+- **Rendimiento.** En el navegador, la lista de precios (varios MB) se guarda en su propia clave de IndexedDB y solo cuando cambia; cada guardado serializa únicamente los datos (unos 1,7 MB en vez de unos 6 MB). Los datos guardados en el formato anterior se leen igual. El índice de búsqueda de productos se rehace solo cuando cambia la lista, y las autoverificaciones (`SelfTest`) corren en la demo, no en cada arranque del piloto (`SelfTest.run()` a mano).
+- **Autocompletado de productos.** Al elegir una sugerencia se sincroniza el campo antes de redibujar, para que el código escrito a medias no reemplace al elegido (corrige que el PDF mostrara el código incompleto).
 - Probado en Chromium headless a 1366 px y 375 px de ancho con todos los roles, en modo demo y en modo piloto (login, cambio de contraseña, persistencia tras recargar, respaldo, numeración general y post-venta por área): sin errores en la consola, sin desborde horizontal y con los flujos principales verificados.

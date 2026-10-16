@@ -388,6 +388,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dir-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
 .dir-head h2{margin:0;font-size:15px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .dir-head h2 a{color:inherit}
+.dir-seg{display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap;margin:8px 0 2px;padding:8px 10px;border-radius:8px;background:var(--surface-2)}
+.dir-seg .btn-row{margin-left:auto}
+.excel-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2,transparent)}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
 .dir-k tr.dir-hit td{background:var(--brand-50)}
@@ -666,12 +669,6 @@ const Util = (() => {
   const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
   const money = (v, cur = 'USD') => cur + ' ' + nf2.format(Math.abs(v) < 0.005 ? 0 : (v || 0));
   const money0 = (v, cur = 'USD') => cur + ' ' + nf0.format(v || 0);
-  const moneyK = v => {
-    const a = Math.abs(v || 0);
-    if (a >= 1e6) return 'USD ' + (v / 1e6).toFixed(2) + 'M';
-    if (a >= 1e3) return 'USD ' + (v / 1e3).toFixed(1) + 'K';
-    return 'USD ' + nf0.format(v || 0);
-  };
   const pct = (v, dec = 0) => (v == null || !isFinite(v)) ? '—' : (v * 100).toFixed(dec) + '%';
   const round2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -708,9 +705,20 @@ const Util = (() => {
     return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
   }
   const normNum = s => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/N[°º]/g, '');
+  /** Texto para comparar y buscar: sin tildes, en minúsculas y con espacios simples */
+  const norm = s => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  /** Descarga un Blob o un texto como archivo */
+  function descargar(contenido, nombre, tipo) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(contenido instanceof Blob ? contenido : new Blob([contenido], { type: tipo || 'application/json' }));
+    a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  /** CSV con separador ";" y BOM, para que Excel lo abra con tildes */
+  const csv = filas => '\uFEFF' + filas.map(r => r.map(v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n');
   return { rng, iso, parse, today, setToday, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
-    endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, moneyK, pct,
-    round2, esc, sum, groupBy, normNum, pad, nf2, sha256 };
+    endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, pct,
+    round2, esc, sum, groupBy, normNum, pad, nf2, sha256, norm, descargar, csv };
 })();
 
 /* =====================================================================
@@ -754,7 +762,7 @@ const ListaPrecios = (() => {
   /** hojas: [{ name, rows: [[celdas]] }] → { items: [{ marca, codigo, descripcion, precio }], resumen: [...] } */
   function interpretar(hojas) {
     const items = [], resumen = [];
-    hojas.forEach(h => {
+    hojas.filter(h => !/^(instrucciones|vendedores)$/i.test(h.name)).forEach(h => {
       let col = columnas(h.rows), desde;
       if (col) desde = col.fila + 1;
       else { const ancho = Math.max(0, ...h.rows.map(r => (r || []).length)); col = { cod: 0, desc: 1, precio: ancho - 1, marca: -1 }; desde = 0; }
@@ -852,6 +860,64 @@ const ListaPrecios = (() => {
     throw new Error('Formato no soportado: usa Excel (.xlsx) o CSV.');
   }
   return { interpretar, leerXlsx, leerCsv, leerArchivo, num, marcaDe };
+})();
+
+/* =====================================================================
+   CAPA 1c · EXCEL — escritor mínimo de .xlsx (ZIP sin compresión + XML) para las
+   plantillas de carga masiva. Sin librerías; Excel lo abre como un libro normal.
+   ===================================================================== */
+const Excel = (() => {
+  const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  /** archivos: [[ruta, texto]] → Blob .xlsx */
+  function zip(archivos) {
+    const enc = new TextEncoder(), partes = [], central = [];
+    let off = 0;
+    archivos.forEach(([ruta, texto]) => {
+      const n = enc.encode(ruta), d = enc.encode(texto), crc = crc32(d);
+      const h = new DataView(new ArrayBuffer(30)), c = new DataView(new ArrayBuffer(46));
+      [[h, 0x04034b50, 4], [c, 0x02014b50, 6]].forEach(([v, firma, o]) => {
+        v.setUint32(0, firma, true); v.setUint16(o, 20, true); v.setUint16(o + 2, 0x0800, true);   // versión 2.0, nombres UTF-8
+        v.setUint16(o + 6, 0, true); v.setUint16(o + 8, 0x21, true);                                // 01-01-1980
+        v.setUint32(o + 10, crc, true); v.setUint32(o + 14, d.length, true); v.setUint32(o + 18, d.length, true); v.setUint16(o + 22, n.length, true);
+      });
+      c.setUint16(4, 20, true); c.setUint32(42, off, true);
+      partes.push(h, n, d); central.push(c, n);
+      off += 30 + n.length + d.length;
+    });
+    const fin = new DataView(new ArrayBuffer(22));
+    fin.setUint32(0, 0x06054b50, true); fin.setUint16(8, archivos.length, true); fin.setUint16(10, archivos.length, true);
+    fin.setUint32(12, central.reduce((a, x) => a + x.byteLength, 0), true); fin.setUint32(16, off, true);
+    return new Blob([...partes, ...central, fin], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+  const esc = v => String(v).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const letra = i => { let s = ''; for (i++; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s; return s; };
+  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"', NSR = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  /** hoja: { nombre, filas: [[celdas]], anchos: [n], fija: true (1.ª fila en negrita y fija) } */
+  function hojaXML(h) {
+    const filas = h.filas.map((r, i) => `<row r="${i + 1}">${r.map((v, j) => {
+      if (v == null || v === '') return '';
+      const ref = letra(j) + (i + 1), s = i === 0 && h.fija ? ' s="1"' : '';
+      return typeof v === 'number' && isFinite(v) ? `<c r="${ref}"${s}><v>${v}</v></c>` : `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+    }).join('')}</row>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet ${NS} ${NSR}>`
+      + (h.fija ? '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' : '')
+      + (h.anchos ? `<cols>${h.anchos.map((w, j) => `<col min="${j + 1}" max="${j + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '')
+      + `<sheetData>${filas}</sheetData></worksheet>`;
+  }
+  /** hojas → Blob .xlsx */
+  function libro(hojas) {
+    const n = hojas.length, x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    return zip([
+      ['[Content_Types].xml', `${x}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${hojas.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`],
+      ['_rels/.rels', `${x}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+      ['xl/workbook.xml', `${x}<workbook ${NS} ${NSR}><sheets>${hojas.map((h, i) => `<sheet name="${esc(String(h.nombre).replace(/[\[\]:*?\/\\]/g, ' ').slice(0, 31))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`],
+      ['xl/_rels/workbook.xml.rels', `${x}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${hojas.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+      ['xl/styles.xml', `${x}<styleSheet ${NS}><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F3A5F"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
+      ...hojas.map((h, i) => [`xl/worksheets/sheet${i + 1}.xml`, hojaXML(h)]),
+    ]);
+  }
+  return { libro };
 })();
 
 /* =====================================================================
@@ -1170,8 +1236,7 @@ const LectorPDF = (() => {
     if (!out.some(p => p.lineas.length)) throw new Error('El PDF no tiene texto legible (¿es una imagen escaneada?).');
     return out;
   }
-  const textoPlano = pags => pags.map(p => p.lineas.map(l => l.celdas.map(c => c.s).join('   ')).join('\n')).join('\n\f\n');
-  return { leer, textoPlano };
+  return { leer };
 })();
 
 /* =====================================================================
@@ -2343,7 +2408,7 @@ const Rules = (() => {
   const esPeru = pais => !String(pais || '').trim() || /^per[uú]$/i.test(String(pais).trim());
   /** RUC de 11 dígitos en Perú; en otro país (RUT, NIT…) basta un identificador de 5 caracteres o más */
   const rucValido = (ruc, pais) => esPeru(pais) ? /^\d{11}$/.test(String(ruc || '').trim()) : String(ruc || '').trim().length >= 5;
-  const normSede = s => [s.direccion, s.distrito, s.ciudad, s.pais || 'Perú'].map(x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
+  const normSede = s => [s.direccion, s.distrito, s.ciudad, s.pais || 'Perú'].map(Util.norm).join('|');
   /** Sedes de una empresa: la principal (dirección, ciudad y país de la cuenta) y las demás registradas */
   function sedesDe(c) {
     if (c && Array.isArray(c.sedes) && c.sedes.length) return c.sedes;
@@ -2520,6 +2585,7 @@ const Rules = (() => {
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
       case 'asignar_cuenta': return user.rol === 'jefatura';
+      case 'asignar_clientes': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // asignación de cuentas y carga de clientes por Excel
       // Lista de precios: todos la consultan; solo jefatura, finanzas y administración la modifican
       case 'ver_catalogo': return true;
       case 'gestionar_usuarios': return ['jefatura', 'admin'].includes(user.rol);
@@ -2540,8 +2606,6 @@ const Rules = (() => {
     if (['pedido', 'transito', 'recibido', 'entregado'].includes(paso)) return user.rol === 'logistica';
     return false;
   }
-  /** Numeración general de la empresa (piloto): PREFIJO-AAAA-0001, correlativa para todos */
-  const numeroGeneral = (db, fecha) => db.numeracion ? `${db.numeracion.prefijo}-${String(fecha || Util.today()).slice(0, 4)}-${Util.pad(db.numeracion.siguiente, 4)}` : null;
   /** Número por Account Manager: INICIALES-AÑO-0001, correlativo propio que reinicia cada año (se calcula desde las cotizaciones registradas) */
   function numeroAM(db, vendedor, fecha) {
     if (!vendedor) return null;
@@ -2551,6 +2615,60 @@ const Rules = (() => {
     db.quotes.forEach(q => { const m = re.exec(String(q.numero || '').toUpperCase()); if (m) max = Math.max(max, +m[1]); });
     return `${ini}-${anio}-${Util.pad(max + 1, 4)}`;
   }
+  /* ---------- Carga de clientes y asignación de cuentas por Excel (plantilla de la plataforma) ---------- */
+  const COLS_CLIENTES = [['ruc', /^(ruc|id fiscal|identificador)/i], ['razonSocial', /raz[oó]n social|^(cliente|empresa)$/i], ['vendedor', /vendedor|account manager|iniciales|asignad/i],
+    ['rubro', /rubro/i], ['direccion', /direcci[oó]n/i], ['distrito', /distrito|comuna/i], ['ciudad', /ciudad/i], ['pais', /pa[ií]s/i]];
+  /** Compara el Excel con los datos: { filas: [{ fila, tipo: nuevo|cambio|igual|error, razonSocial, cambios: [[campo, valor, texto]], error }] } */
+  function planClientes(db, hojas) {
+    const t = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim(), nrm = Util.norm;
+    let hoja = null, col = null, desde = 0;
+    for (const h of hojas) {
+      for (let i = 0; i < Math.min(10, h.rows.length) && !col; i++) {
+        const c = (h.rows[i] || []).map(t), m = {};
+        COLS_CLIENTES.forEach(([k, rx]) => { const j = c.findIndex(x => rx.test(x)); if (j >= 0) m[k] = j; });
+        if (m.ruc != null && m.razonSocial != null) { col = m; desde = i + 1; hoja = h; }
+      }
+      if (col) break;
+    }
+    if (!col) return { error: 'No se encontraron las columnas "RUC / ID fiscal" y "Razón social". Usa la plantilla que descarga la plataforma.', filas: [] };
+    const vends = db.users.filter(u => u.rol === 'vendedor' && u.activo !== false), ini = id => (db.users.find(u => u.id === id) || {}).iniciales || '?';
+    const porRuc = new Map(db.clients.filter(c => c.ruc).map(c => [t(c.ruc).toUpperCase(), c])), porNombre = new Map(db.clients.map(c => [nrm(c.razonSocial), c]));
+    const vistos = new Set(), filas = [];
+    for (let i = desde; i < hoja.rows.length; i++) {
+      const r = hoja.rows[i] || [], v = k => col[k] == null ? '' : t(r[col[k]]);
+      const d = { ruc: v('ruc').replace(/\s/g, ''), razonSocial: v('razonSocial'), vendedor: v('vendedor'), rubro: v('rubro'), direccion: v('direccion'), distrito: v('distrito'), ciudad: v('ciudad'), pais: v('pais') };
+      if (!d.ruc && !d.razonSocial) continue;
+      const f = { fila: i + 1, razonSocial: d.razonSocial || d.ruc, cambios: [] }, mal = msg => { f.tipo = 'error'; f.error = msg; };
+      filas.push(f);
+      const clave = d.ruc ? d.ruc.toUpperCase() : nrm(d.razonSocial);
+      if (vistos.has(clave)) { mal('Fila repetida en el archivo.'); continue; }
+      vistos.add(clave);
+      let vid = null;
+      if (d.vendedor) {
+        const x = nrm(d.vendedor), u = vends.find(u => [u.iniciales, u.nombre, u.correo, u.usuario].some(y => y && nrm(y) === x));
+        if (!u) { mal(`No hay un vendedor activo "${d.vendedor}": usa las iniciales de la hoja Vendedores.`); continue; }
+        vid = u.id;
+      }
+      let c = d.ruc && porRuc.get(d.ruc.toUpperCase());
+      if (!c) { const n = porNombre.get(nrm(d.razonSocial)); if (n && d.ruc && n.ruc) { mal(`"${d.razonSocial}" ya está registrada con otro RUC (${n.ruc}).`); continue; } c = n; }
+      if (!c) {
+        if (!d.razonSocial) { mal('Cliente nuevo sin razón social.'); continue; }
+        if (!rucValido(d.ruc, d.pais)) { mal(esPeru(d.pais) ? 'Cliente nuevo: el RUC debe tener 11 dígitos.' : 'Cliente nuevo: indica el identificador fiscal.'); continue; }
+        f.tipo = 'nuevo'; f.nuevo = Object.assign(d, { vendedorId: vid });
+        f.cambios.push(['nuevo', null, `Cliente nuevo${vid ? ', asignado a ' + ini(vid) : ', sin asignar'}`]);
+        continue;
+      }
+      f.clienteId = c.id;
+      if (d.ruc && !c.ruc) { if (!rucValido(d.ruc, d.pais || c.pais)) { mal('El RUC debe tener 11 dígitos.'); continue; } f.cambios.push(['ruc', d.ruc, 'RUC: ' + d.ruc]); }
+      if (d.razonSocial && d.razonSocial !== t(c.razonSocial)) f.cambios.push(['razonSocial', d.razonSocial, `Razón social: ${c.razonSocial} → ${d.razonSocial}`]);
+      if (vid && vid !== c.vendedorId) f.cambios.push(['vendedorId', vid, `Asignar a ${ini(vid)}${c.vendedorId ? ' (antes ' + ini(c.vendedorId) + ')' : ''}`]);
+      if (d.rubro && d.rubro !== t(c.rubro)) f.cambios.push(['rubro', d.rubro, 'Rubro: ' + d.rubro]);
+      const s0 = sedesDe(c)[0] || {}, sede = { direccion: d.direccion || s0.direccion || '', distrito: d.distrito || s0.distrito || '', ciudad: d.ciudad || s0.ciudad || '', pais: d.pais || s0.pais || 'Perú' };
+      if ((d.direccion || d.distrito || d.ciudad || d.pais) && normSede(sede) !== normSede(s0)) f.cambios.push(['sede', sede, 'Sede principal: ' + [sede.direccion, sede.distrito, sede.ciudad, sede.pais].filter(Boolean).join(', ')]);
+      f.tipo = f.cambios.length ? 'cambio' : 'igual';
+    }
+    return { hoja: hoja.name, filas, error: null };
+  }
   const rolNombre = u => (u && Config.ROLES[u.rol]) || (u && u.rol) || '';
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
@@ -2559,7 +2677,7 @@ const Rules = (() => {
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, rucValido, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
-    siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroGeneral, numeroAM, principales, rolNombre };
+    siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes };
 })();
 
 /* =====================================================================
@@ -2708,13 +2826,19 @@ const Repo = (() => {
   let tGuardar = null;
   const oyentes = [];
   const avisar = () => oyentes.forEach(f => { try { f(Object.assign({ modo }, estado)); } catch (e) { /* sin efecto */ } });
+  // La lista de precios (varios MB) se guarda aparte y solo cuando cambia: cada guardado serializa únicamente los datos
+  let listaGuardada = null, listaSucia = false;
   function programarGuardado() {
     if (modo !== 'piloto') return;
     estado.pendiente = true; avisar();
     clearTimeout(tGuardar);
     tGuardar = setTimeout(async () => {
-      try { await Almacen.escribir('db', JSON.stringify(db)); estado.guardado = new Date(); estado.error = null; }
-      catch (e) { estado.error = e.message || 'No se pudo guardar'; }
+      try {
+        if (listaSucia || listaGuardada !== db.catalogo) { listaSucia = false; listaGuardada = db.catalogo; await Almacen.escribir('lista', JSON.stringify(db.catalogo || [])); }
+        await Almacen.escribir('db', JSON.stringify(Object.assign({}, db, { catalogo: undefined })));
+        estado.guardado = new Date(); estado.error = null;
+      }
+      catch (e) { listaSucia = true; estado.error = e.message || 'No se pudo guardar'; }
       estado.pendiente = false; avisar();
     }, 400);
   }
@@ -2736,6 +2860,21 @@ const Repo = (() => {
   const opp = id => db.opps.find(o => o.id === id) || fail('Oportunidad no encontrada.');
   const log = (o, nota, usuarioId) => db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Sistema', nota, proxContacto: o.proxContacto || null, usuarioId, auto: true });
   const guardar = o => { const e = Rules.validarOportunidad(o); if (e) fail(e); touch(); };
+  /** Asigna la cuenta y mueve con ella sus oportunidades abiertas y en pausa; devuelve cuántas movió */
+  function moverCliente(c, vendedorId, usuarioId, como) {
+    c.vendedorId = vendedorId;
+    const os = db.opps.filter(o => o.clienteId === c.id && (Rules.esAbierta(o) || o.etapa === 'pausa') && o.vendedorId !== vendedorId);
+    os.forEach(o => { o.vendedorId = vendedorId; log(o, `Reasignada junto con el cliente${como}.`, usuarioId); });
+    return os.length;
+  }
+  function nuevoCliente(d, usuarioId) {
+    const t = v => String(v == null ? '' : v).trim();
+    const c = { id: 'C-' + (++db.seq.client), razonSocial: t(d.razonSocial), ruc: t(d.ruc), vendedorId: d.vendedorId || null, ciudad: t(d.ciudad) || 'Lima', pais: t(d.pais) || 'Perú',
+      direccion: t(d.direccion), distrito: t(d.distrito), rubro: t(d.rubro), tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
+    c.sedes = [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion, distrito: c.distrito, ciudad: c.ciudad, pais: c.pais }];
+    db.clients.push(c);
+    return c;
+  }
   /** Si el HTML trae una lista de precios privada (copia local, nunca publicada), reemplaza a la ficticia */
   function cargarListaPrivada() {
     const L = typeof window !== 'undefined' && window.__LISTA_PRECIOS_PRIVADA;
@@ -2795,6 +2934,11 @@ const Repo = (() => {
         let guardado = null;
         try { guardado = Almacen.disponible() ? await Almacen.leer('db') : null; } catch (e) { estado.error = 'El navegador no permite guardar datos: ' + e.message; }
         db = guardado ? JSON.parse(guardado) : desdeSeed(seed);
+        if (guardado && !db.catalogo) {   // formato actual: la lista va en su propia clave
+          const l = await Almacen.leer('lista').catch(() => null);
+          db.catalogo = l ? JSON.parse(l) : JSON.parse(JSON.stringify(seed.catalogo || []));
+          if (l) listaGuardada = db.catalogo;
+        }
         if (!guardado) programarGuardado();
         // Carpeta compartida recordada y con permiso vigente: se conecta sola
         if (AlmacenCompartido.soportado()) {
@@ -3126,14 +3270,10 @@ const Repo = (() => {
       const errs = Rules.validarCliente(db, d);
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
       exigir(usuarioId, 'crear_cliente', 'Tu rol no puede registrar empresas.');
-      const t = v => String(v == null ? '' : v).trim();
-      const c = { id: 'C-' + (++db.seq.client), razonSocial: t(d.razonSocial), ruc: t(d.ruc), vendedorId: d.vendedorId || null, ciudad: t(d.ciudad) || 'Lima', pais: t(d.pais) || 'Perú',
-        direccion: t(d.direccion), distrito: t(d.distrito), rubro: t(d.rubro), tipo: d.tipo || 'Integrador', contactos: [], fechaAlta: hoy(), registradoPor: usuarioId };
-      c.sedes = [{ id: 'SD-0', nombre: 'Principal', direccion: c.direccion, distrito: c.distrito, ciudad: c.ciudad, pais: c.pais }];
+      const t = v => String(v == null ? '' : v).trim(), c = nuevoCliente(d, usuarioId);
       if (d.contacto && t(d.contacto.nombre)) {
         c.contactos.push({ id: 'K-' + (db.seq.contacto++), nombre: t(d.contacto.nombre), cargo: t(d.contacto.cargo), rol: t(d.contacto.rol), correo: t(d.contacto.correo), telefono: t(d.contacto.telefono) });
       }
-      db.clients.push(c);
       touch();
       return c;
     },
@@ -3272,14 +3412,33 @@ const Repo = (() => {
       touch();
     },
     async reasignarCliente(clienteId, vendedorId, usuarioId) {
+      exigir(usuarioId, 'asignar_clientes', 'Solo gerencia, jefatura, finanzas o administración asignan cuentas.');
       const c = db.clients.find(x => x.id === clienteId) || fail('Cliente no encontrado.');
-      c.vendedorId = vendedorId;
-      let n = 0;
-      db.opps.filter(o => o.clienteId === clienteId && (Rules.esAbierta(o) || o.etapa === 'pausa')).forEach(o => {
-        if (o.vendedorId !== vendedorId) { o.vendedorId = vendedorId; n++; log(o, 'Reasignada junto con el cliente por jefatura.', usuarioId); }
-      });
+      if (!db.users.some(u => u.id === vendedorId && u.rol === 'vendedor')) fail('Elige un vendedor.');
+      const n = moverCliente(c, vendedorId, usuarioId, ` (${usuarioDe(usuarioId).nombre})`);
       touch();
       return n;
+    },
+    /** POST /clientes/importar — carga de la plantilla Excel: asigna cuentas, actualiza datos y registra clientes nuevos */
+    async importarClientes(hojas, usuarioId) {
+      exigir(usuarioId, 'asignar_clientes', 'Solo gerencia, jefatura, finanzas o administración actualizan clientes por Excel.');
+      const plan = Rules.planClientes(db, hojas);
+      if (plan.error) fail(plan.error);
+      const r = { nuevos: 0, actualizados: 0, asignados: 0, opps: 0, errores: 0 };
+      plan.filas.forEach(f => {
+        if (f.tipo === 'error') { r.errores++; return; }
+        if (f.tipo === 'nuevo') { nuevoCliente(f.nuevo, usuarioId); r.nuevos++; return; }
+        if (f.tipo !== 'cambio') return;
+        const c = db.clients.find(x => x.id === f.clienteId);
+        f.cambios.forEach(([k, v]) => {
+          if (k === 'vendedorId') { r.opps += moverCliente(c, v, usuarioId, ' (carga Excel)'); r.asignados++; }
+          else if (k === 'sede') { const sedes = Rules.sedesDe(c).slice(); sedes[0] = Object.assign({ id: 'SD-0', nombre: 'Principal' }, sedes[0], v); Object.assign(c, v, { sedes }); }
+          else c[k] = v;
+        });
+        if (f.cambios.some(([k]) => k !== 'vendedorId')) r.actualizados++;
+      });
+      if (r.nuevos || r.actualizados || r.asignados) touch();
+      return r;
     },
     /** POST /cotizaciones — registra una cotización: oportunidad nueva, revisión o alternativa */
     async registrarCotizacion(p, usuarioId) {
@@ -3362,7 +3521,7 @@ const Repo = (() => {
   Object.keys(api).forEach(k => {
     const f = api[k];
     if (typeof f !== 'function' || LECTURAS.has(k)) return;
-    api[k] = function (...args) { return estado.compartida ? enCola(() => escrituraCompartida(k, () => f.apply(api, args))) : f.apply(api, args); };
+    api[k] = function (...args) { if (CAMBIAN_LISTA.has(k)) listaSucia = true; return estado.compartida ? enCola(() => escrituraCompartida(k, () => f.apply(api, args))) : f.apply(api, args); };
   });
   return api;
 })();
@@ -3505,6 +3664,16 @@ const UI = (() => {
   const E = Util.esc;
   const hoy = () => Util.today();
   const view = () => document.getElementById('view');
+  /** Filtros de cada pantalla: un cambio redibuja; lo escrito espera 250 ms y conserva el cursor */
+  function filtro(clave, estado, alCambiar) {
+    let t = null;
+    const fijar = el => { const F = estado(); F[el.name] = el.value; if (alCambiar) alCambiar(F); };
+    CHANGES[clave] = el => { fijar(el); render(true); };
+    INPUTS[clave] = el => {
+      fijar(el); clearTimeout(t);
+      t = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $(`[data-input="${clave}"][name="${el.name}"]`); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250);
+    };
+  }
   const ACTIONS = {}, CHANGES = {}, INPUTS = {}, SUBMITS = {};
   const money = v => Util.money(v);
 
@@ -3700,24 +3869,14 @@ const UI = (() => {
   ACTIONS['respaldo-exportar'] = async () => {
     closePopover();
     try {
-      const txt = await Repo.exportarRespaldo(S.user.id);
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
-      a.download = `respaldo-techvalue-${hoy()}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      Util.descargar(await Repo.exportarRespaldo(S.user.id), `respaldo-techvalue-${hoy()}.json`);
       toast('Respaldo exportado. Guárdalo en una carpeta interna: contiene información confidencial.');
     } catch (e) { toast(e.message); }
   };
   ACTIONS['adoptar-seed'] = async () => {
     if (!confirm('Se reemplazarán los datos de este navegador por la versión nueva. Antes se descargará un respaldo de lo actual. ¿Continuar?')) return;
     try {
-      const txt = await Repo.adoptarSeedNuevo();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
-      a.download = `respaldo-version-anterior-${hoy()}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      Util.descargar(await Repo.adoptarSeedNuevo(), `respaldo-version-anterior-${hoy()}.json`);
       S.db = await Repo.snapshot(); S.user = null; guardarSesion(null); location.hash = '#/login'; toast('Versión nueva cargada. Ingresa con tu contraseña inicial.'); render();
     } catch (e) { toast(e.message); }
   };
@@ -4287,12 +4446,7 @@ const UI = (() => {
     return doc.guardar();
   }
   async function descargarPDFCotizacion(ctx) {
-    const blob = await pdfCotizacion(ctx);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `COT_${String(ctx.q.numero || 'cotizacion').replace(/[\\/:*?"<>|]+/g, '-')}.pdf`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    Util.descargar(await pdfCotizacion(ctx), `COT_${String(ctx.q.numero || 'cotizacion').replace(/[\\/:*?"<>|]+/g, '-')}.pdf`);
   }
   function mostrarPDF(ctx, borrador) {
     S.pdf = ctx;
@@ -4332,11 +4486,12 @@ const UI = (() => {
   ACTIONS['funnel-medida'] = el => { S.funnelMedida = el.dataset.v; render(true); };
 
   /* ---------- Lista de precios: búsqueda rápida (por escritura o por marca) ---------- */
+  // Se rehace solo si cambió la lista (no con cada cambio de datos); quien edita la lista lo invalida con S.catIdx = null
   function catIndex() {
     const db = S.db;
-    if (S.catIdx && S.catIdx.v === db._v && S.catIdx.n === db.catalogo.length) return S.catIdx.list;
+    if (S.catIdx && S.catIdx.ref === db.catalogo && S.catIdx.n === db.catalogo.length) return S.catIdx.list;
     const list = db.catalogo.map(p => ({ p, c: p.codigo.toLowerCase(), k: (p.codigo + ' ' + p.descripcion + ' ' + p.marca).toLowerCase() }));
-    S.catIdx = { v: db._v, n: db.catalogo.length, list };
+    S.catIdx = { ref: db.catalogo, n: db.catalogo.length, list };
     return list;
   }
   /** Coincidencias por código (empieza con) primero y luego por palabras en código/descripción/marca */
@@ -4464,7 +4619,7 @@ const UI = (() => {
           vendedorId: jef ? val(root, 'vendedorId') || null : vend ? S.user.id : null,
           contacto: { nombre: val(root, 'contactoNombre'), cargo: val(root, 'contactoCargo'), rol: val(root, 'contactoRol'), correo: val(root, 'contactoCorreo'), telefono: val(root, 'contactoTelefono') } }, S.user.id);
         toast(`Empresa ${c.razonSocial} registrada.`);
-        if (op.quedarse || !Rules.puede(S.user, 'ver_cuenta', c)) { S.agF.q = c.razonSocial; S.agF.vendedor = ''; if (location.hash === '#/contactos') refresh(); else go('contactos'); }
+        if (op.quedarse || !Rules.puede(S.user, 'ver_cuenta', c)) { S.agF.q = c.razonSocial; S.agF.vendedor = ''; S.agF.vista = 'todos'; if (location.hash === '#/contactos') refresh(); else go('contactos'); }
         else go('cuenta/' + c.id);
       } }],
     });
@@ -4583,12 +4738,6 @@ const UI = (() => {
       <br><a href="#" data-action="carpeta-olvidar">No usar carpeta en esta PC</a></div><button class="btn sm primary" data-action="carpeta-conectar">Conectar</button></div>`;
     return `<div class="alert info" style="margin-bottom:12px"><div class="small"><strong>Carpeta compartida del equipo.</strong> Elige la carpeta de red acordada (por ejemplo Z:\Ventas\Piloto); todos deben elegir la misma. Sin carpeta, los datos quedan solo en este navegador.</div><button class="btn sm primary" data-action="carpeta-elegir">Elegir carpeta…</button></div>`;
   }
-  function descargarTexto(txt, nombre) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
-    a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-  }
   async function conectarCarpeta(h) {
     try {
       const r = await Repo.revisarCarpeta(h);
@@ -4609,7 +4758,7 @@ const UI = (() => {
     toast(`Conectado a la carpeta ${h.name}.`);
     await render();
     if (anterior) {
-      descargarTexto(anterior, `respaldo-este-navegador-${hoy()}.json`);
+      Util.descargar(anterior, `respaldo-este-navegador-${hoy()}.json`);
       modal({ title: 'Registros de este navegador', body: `<p style="margin-top:0">Este navegador tenía registros propios que no están en la carpeta compartida. Se descargó un respaldo (<strong>respaldo-este-navegador-${hoy()}.json</strong>).</p><p>Desde ahora se trabaja con los datos de la carpeta. Si esos registros hacen falta, envía el respaldo a gerencia.</p>`, actions: [{ label: 'Entendido', cls: 'primary' }] });
     }
   }
@@ -4798,13 +4947,7 @@ const UI = (() => {
         </tbody></table></div>
       <p class="small muted">FACT: 0 = este mes · 1 = 30 días · 2 = 60 días · 3 = 90 días · 4 = 120 días (más de 90). Se calcula con la fecha estimada de OC + plazo de entrega; ya no se escribe a mano.</p>`;
   };
-  CHANGES['f'] = el => { S.filtros[el.name] = el.value; render(true); };
-  let tBuscar = null;
-  INPUTS['f'] = el => {
-    S.filtros[el.name] = el.value;
-    clearTimeout(tBuscar);
-    tBuscar = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="f"][name="q"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250);
-  };
+  filtro('f', () => S.filtros);
   ACTIONS['sort'] = el => { const c = el.dataset.col; S.orden = { col: c, dir: S.orden.col === c ? -S.orden.dir : 1 }; render(true); };
   ACTIONS['limpiar-filtros'] = () => { S.filtros = filtrosIniciales(); render(true); };
   ACTIONS['abrir'] = el => go('op/' + el.dataset.id);
@@ -4819,13 +4962,7 @@ const UI = (() => {
       ['Días desde último contacto', r => r.dias == null ? '' : r.dias], ['Próximo contacto', r => r.prox ? Util.fmtDate(r.prox) : ''], ['Fecha estimada OC', r => r.o.fechaOC ? Util.fmtDate(r.o.fechaOC) : ''],
       ['FACT', r => r.fact ? Config.HORIZONTES.find(x => x.id === r.fact).fact : ''], ['Horizonte', r => r.fact ? Rules.horizonteNombre(r.fact) : ''],
       ['Motivo de pérdida', r => r.o.motivoPerdida ? Rules.motivo(r.o.motivoPerdida).nombre + (r.o.motivoOtro ? ' - ' + r.o.motivoOtro : '') : '']];
-    const cell = v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const csv = '﻿' + [cols.map(c => cell(c[0])).join(';'), ...rows.map(r => cols.map(c => cell(c[1](r))).join(';'))].join('\r\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `oportunidades_${hoy()}.csv`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    Util.descargar(Util.csv([cols.map(c => c[0]), ...rows.map(r => cols.map(c => c[1](r)))]), `oportunidades_${hoy()}.csv`, 'text/csv;charset=utf-8');
     toast(`Se exportaron ${rows.length} filas a CSV (separador “;”, compatible con Excel).`);
   };
 
@@ -4994,13 +5131,9 @@ const UI = (() => {
       <button class="btn sm primary" data-action="doc-subir" data-id="${o.id}">${I('upload')} Subir documento</button></div>${docsListaHTML(o)}
       ${Repo.modo() === 'piloto' && !Repo.compartida() ? '<p class="small muted" style="margin:8px 0 0">Sin carpeta compartida, los archivos quedan solo en este navegador. Conecta la carpeta para que el equipo pueda descargarlos.</p>' : ''}</section>`;
   }
-  function descargarBlob(blob, nombre) {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre;
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  }
   ACTIONS['doc-bajar'] = async el => {
     const d = (S.db.documentos || []).find(x => x.id === el.dataset.doc); if (!d) return;
-    try { descargarBlob(await Repo.leerDocumento(d.id), d.nombre); } catch (e) { toast(e.message); }
+    try { Util.descargar(await Repo.leerDocumento(d.id), d.nombre); } catch (e) { toast(e.message); }
   };
   ACTIONS['doc-borrar'] = el => borrarDocumento(el, null);
   function borrarDocumento(el, volver) {
@@ -5097,6 +5230,8 @@ const UI = (() => {
     const d = S.nueva.d, it = d.items[i];
     Object.assign(it, { codigo: p.codigo, marca: p.marca, descripcion: p.descripcion, listaUSD: p.precio,
       valorUnit: d.moneda === 'PEN' ? Util.round2(p.precio * (+d.tc || Config.TC_REFERENCIA)) : p.precio });
+    // El campo enfocado aún tiene lo escrito a medias y dispara 'change' al redibujarse: se sincroniza antes
+    document.querySelectorAll(`#nq-form [data-nqi="${i}"]`).forEach(el => { if (el.type !== 'checkbox' && el.dataset.k in it) el.value = it[el.dataset.k] ?? ''; });
   }
   /* Lista desplegable de coincidencias bajo el campo de código */
   let acEstado = null;
@@ -6004,11 +6139,9 @@ const UI = (() => {
     if (el.dataset.t === 'cuentas') { S.ctaF = { estado: '__verificar', vendedor: '', q: '' }; location.hash = '#/cuentas'; }
     else { S.filtros = Object.assign(filtrosIniciales(), { etapa: 'verificar' }); location.hash = '#/oportunidades'; }
   };
-  CHANGES['ctaf'] = el => { S.ctaF[el.name] = el.value; render(true); };
-  let tCta = null;
-  INPUTS['ctaf'] = el => { S.ctaF[el.name] = el.value; clearTimeout(tCta); tCta = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="ctaf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  filtro('ctaf', () => S.ctaF);
   CHANGES['asignar-cuenta'] = async el => {
-    if (!Rules.puede(S.user, 'asignar_cuenta')) return;
+    if (!Rules.puede(S.user, 'asignar_clientes')) return;
     const c = cli(el.dataset.id), to = el.value;
     if (!to || to === c.vendedorId) return;
     const n = await Repo.reasignarCliente(c.id, to, S.user.id);
@@ -6081,23 +6214,29 @@ const UI = (() => {
   PAGES['contactos'] = async () => {
     const db = S.db, u = S.user, F = S.agF;
     if (!F.lim) F.lim = 30;
-    const nrm = x => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const nrm = Util.norm;
     let cs = clientesOrdenados();
     const totalK = db.clients.reduce((a, c) => a + c.contactos.length, 0);
-    if (F.vendedor) cs = cs.filter(c => F.vendedor === '__mias' ? c.vendedorId === u.id : F.vendedor === '__sin' ? !c.vendedorId : F.vendedor === '__conk' ? c.contactos.length : c.vendedorId === F.vendedor);
+    // Vendedor: "Mis clientes" (acceso rápido a su cartera para el seguimiento) o el directorio general de la empresa
+    const vend = u.rol === 'vendedor', mios = vend && F.vista !== 'todos', nMios = vend ? cs.filter(c => c.vendedorId === u.id).length : 0;
+    if (mios) cs = cs.filter(c => c.vendedorId === u.id);
+    else if (F.vendedor) cs = cs.filter(c => F.vendedor === '__mias' ? c.vendedorId === u.id : F.vendedor === '__sin' ? !c.vendedorId : F.vendedor === '__conk' ? c.contactos.length : c.vendedorId === F.vendedor);
     const t = nrm(F.q.trim());
     const enK = (c, k) => nrm([k.nombre, k.cargo, k.rol, k.correo, k.telefono].join(' ')).includes(t);
     if (t) cs = cs.filter(c => nrm([c.razonSocial, c.ruc, c.rubro, c.tipo, ...Rules.sedesDe(c).map(x => [x.nombre, x.direccion, x.ciudad, x.pais].join(' '))].join(' ')).includes(t) || c.contactos.some(k => enK(c, k)));
-    const vOpts = [...(u.rol === 'vendedor' ? [['__mias', 'Mis cuentas']] : []), ...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar'], ['__conk', 'Solo empresas con contactos']];
-    const puedeK = Rules.puede(u, 'agregar_contacto', {}), puedeC = Rules.puede(u, 'crear_cliente');
+    const vOpts = [...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar'], ['__conk', 'Solo empresas con contactos']];
+    const puedeK = Rules.puede(u, 'agregar_contacto', {}), puedeC = Rules.puede(u, 'crear_cliente'), asig = Rules.puede(u, 'asignar_clientes');
+    const vendOpts = asig ? options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre])) : '';
     const tarjeta = c => {
       const edC = Rules.puede(u, 'editar_contactos', c), sedes = Rules.sedesDe(c);
       const ks = t && !nrm([c.razonSocial, c.ruc].join(' ')).includes(t) ? c.contactos.slice().sort((a, b) => enK(c, b) - enK(c, a)) : c.contactos;
       return `<section class="card dir-emp">
         <div class="dir-head"><div style="min-width:0">
-          <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
+          <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${asig ? '' : c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
           <div class="small muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : '<span style="color:var(--warn)">Sin RUC</span>'} · ${E(c.tipo || 'Integrador')}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div></div>
-          <div class="btn-row">${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}</div></div>
+          <div class="btn-row">${asig ? `<select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" title="Vendedor asignado" style="width:auto;min-width:150px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${vendOpts.replace(`value="${c.vendedorId}"`, `value="${c.vendedorId}" selected`)}</select>` : ''}${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}</div></div>
+        ${mios ? (() => { const r = Rules.cuenta(db, c.id, hoy()); return `<div class="dir-seg">${estadoChip(r.estado)}<span class="small muted">Última cotización: ${r.ultimaCot ? `${Util.fmtDate(r.ultimaCot)} (hace ${r.diasSinCotizar} días)` : 'ninguna'} · Último contacto: ${r.ultimoContacto ? Util.fmtDate(r.ultimoContacto.fecha) : '—'} · ${r.abiertas} abiertas</span>
+          <span class="btn-row"><a class="btn sm" href="#/cuenta/${c.id}">Ver cuenta</a><button class="btn sm" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn sm primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Cotizar</button></span></div>`; })() : ''}
         <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
         ${ks.length ? `<div class="table-wrap"><table class="tbl dir-k"><thead><tr><th>Contacto</th><th>Cargo</th><th>Rol</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
           ${ks.map(k => `<tr${t && enK(c, k) ? ' class="dir-hit"' : ''}><td class="cell-main">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td><td class="small">${E(k.rol || '—')}</td>
@@ -6109,18 +6248,64 @@ const UI = (() => {
     view().innerHTML = `
       <div class="page-head"><div><h1>Directorio de clientes</h1><p class="muted">Común para todo el equipo · ${db.clients.length} empresas · ${totalK} contactos</p></div>
         <div class="btn-row">${puedeC ? `<button class="btn" data-action="cuenta-nueva" data-quedarse="1">${I('plus')} Agregar empresa</button>` : ''}${puedeK ? `<button class="btn primary" data-action="contacto-nuevo">${I('plus')} Agregar contacto</button>` : ''}</div></div>
+      ${vend ? `<div class="seg-toggle" role="group" aria-label="Vista del directorio" style="margin-bottom:10px"><button class="${mios ? 'active' : ''}" data-action="dir-vista" data-v="mios">Mis clientes (${nMios})</button><button class="${mios ? '' : 'active'}" data-action="dir-vista" data-v="todos">Todos los clientes (${db.clients.length})</button></div>` : ''}
       <div class="card" style="padding:12px"><div class="filters" style="margin:0">
-        <label class="field" style="flex:2 1 320px">Buscar<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Empresa, RUC, rubro, ciudad, contacto, correo o teléfono"></label>
-        <label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las empresas')}</select></label>
-      </div><div class="small muted" id="ag-count" style="margin-top:8px">${cs.length} empresa${cs.length === 1 ? '' : 's'}${u.rol === 'vendedor' && !F.vendedor ? ' · tus cuentas primero' : ''}</div></div>
-      <div class="stack" style="margin-top:12px">${cs.slice(0, F.lim).map(tarjeta).join('') || '<div class="card center muted">Sin empresas con estos filtros.</div>'}</div>
+        <label class="field" style="flex:2 1 320px">Buscar${mios ? ' en mis clientes' : ''}<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Empresa, RUC, rubro, ciudad, contacto, correo o teléfono"></label>
+        ${mios ? '' : `<label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las empresas')}</select></label>`}
+      </div>${asig ? `<div class="excel-bar"><span class="small"><strong>Asignación de cuentas y datos de clientes por Excel.</strong> Descarga la plantilla con los datos actuales, edítala y súbela; antes de aplicar verás los cambios.</span>
+        <span class="btn-row"><button class="btn sm" data-action="cli-plantilla">${I('download')} Descargar plantilla</button><button class="btn sm primary" data-action="cli-subir">${I('upload')} Subir datos y actualizar</button></span></div>
+        <input type="file" id="cli-file" accept=".xlsx,.csv" class="hidden">` : ''}<div class="small muted" id="ag-count" style="margin-top:8px">${cs.length} empresa${cs.length === 1 ? '' : 's'}${mios ? ' asignadas a ti' : vend && !F.vendedor ? ' · tus cuentas primero' : ''}</div></div>
+      <div class="stack" style="margin-top:12px">${cs.slice(0, F.lim).map(tarjeta).join('') || `<div class="card center muted">${mios ? `Ninguno de tus clientes coincide. <a href="#" data-action="dir-vista" data-v="todos">Buscar en todos los clientes</a>` : 'Sin empresas con estos filtros.'}</div>`}</div>
       ${cs.length > F.lim ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="dir-mas">Ver más empresas (${cs.length - F.lim} restantes)</button></div>` : ''}
-      <p class="small muted">El cargo, el rol y el rubro son para el registro interno: no salen en las cotizaciones. Cualquier usuario (salvo logística) agrega contactos; el vendedor de la cuenta, gerencia, finanzas y administración los editan.</p>`;
+      <p class="small muted">El cargo, el rol y el rubro son para el registro interno: no salen en las cotizaciones. Cualquier usuario (salvo logística) agrega contactos; el vendedor de la cuenta, gerencia, finanzas y administración los editan${asig ? '; la asignación de cuentas mueve también las oportunidades abiertas y en pausa' : ''}.</p>`;
+    const inp = $('#cli-file');
+    if (inp) inp.addEventListener('change', async () => {
+      const f = inp.files[0]; inp.value = '';
+      if (!f) return;
+      try { revisarCargaClientes(await ListaPrecios.leerArchivo(f), f.name); } catch (e) { toast('No se pudo leer el archivo: ' + e.message); }
+    });
   };
+  /* ---------- Carga masiva de clientes (plantilla Excel) ---------- */
+  ACTIONS['cli-plantilla'] = () => {
+    const db = S.db, ini = id => (usr(id) || {}).iniciales || '';
+    const cs = db.clients.slice().sort((a, b) => a.razonSocial.localeCompare(b.razonSocial, 'es'));
+    Util.descargar(Excel.libro([
+      { nombre: 'Clientes', fija: true, anchos: [16, 44, 12, 22, 40, 20, 16, 12], filas: [['RUC / ID fiscal', 'Razón social', 'Vendedor (iniciales)', 'Rubro', 'Dirección', 'Distrito / Comuna', 'Ciudad', 'País'],
+        ...cs.map(c => { const s = Rules.sedesDe(c)[0] || {}; return [c.ruc, c.razonSocial, ini(c.vendedorId), c.rubro, s.direccion, s.distrito, s.ciudad, s.pais || c.pais || 'Perú']; })] },
+      { nombre: 'Vendedores', fija: true, anchos: [12, 30, 34], filas: [['Iniciales', 'Nombre', 'Correo'], ...vendedores().map(v => [v.iniciales, v.nombre, v.correo || ''])] },
+      { nombre: 'Instrucciones', anchos: [110], filas: [['Cómo usar esta plantilla'],
+        ['1. La hoja "Clientes" trae los datos actuales: cambia solo lo que quieras actualizar y no cambies el orden de las columnas.'],
+        ['2. Para asignar o reasignar una cuenta, escribe en "Vendedor (iniciales)" las iniciales de la hoja Vendedores. La cuenta se lleva sus oportunidades abiertas y en pausa.'],
+        ['3. Para registrar un cliente nuevo, agrega una fila con RUC (11 dígitos; en otro país, su identificador fiscal) y razón social.'],
+        ['4. Las celdas vacías no borran datos: se mantienen los actuales. Puedes quitar las filas que no cambian.'],
+        ['5. En la plataforma: Directorio de clientes → "Subir datos y actualizar". Verás un resumen antes de aplicar los cambios.']] },
+    ]), `plantilla_clientes_${hoy()}.xlsx`);
+    toast('Plantilla descargada con los datos actuales de los clientes.');
+  };
+  ACTIONS['cli-subir'] = () => { const i = $('#cli-file'); if (i) i.click(); };
+  function revisarCargaClientes(hojas, archivo) {
+    const plan = Rules.planClientes(S.db, hojas);
+    if (plan.error) { toast(plan.error); return; }
+    const n = k => plan.filas.filter(f => f.tipo === k).length, nuevos = n('nuevo'), cambios = n('cambio'), errores = n('error');
+    const asign = plan.filas.filter(f => f.cambios.some(([k]) => k === 'vendedorId')).length;
+    const lista = plan.filas.filter(f => f.tipo !== 'igual');
+    modal({
+      title: 'Actualizar clientes desde Excel', wide: true,
+      body: `<p style="margin-top:0"><strong>${E(archivo)}</strong> · hoja ${E(plan.hoja)} · ${plan.filas.length} filas leídas en este navegador.</p>
+        <div class="btn-row" style="margin-bottom:10px"><span class="chip ok">${nuevos} nuevos</span><span class="chip info">${cambios} con cambios${asign ? ` (${asign} asignaciones)` : ''}</span><span class="chip">${n('igual')} sin cambios</span>${errores ? `<span class="chip bad">${errores} con error (no se aplican)</span>` : ''}</div>
+        ${lista.length ? `<div class="table-wrap" style="max-height:46vh"><table class="tbl"><thead><tr><th class="r">Fila</th><th>Cliente</th><th>Qué cambia</th></tr></thead><tbody>
+        ${lista.slice(0, 300).map(f => `<tr><td class="r small">${f.fila}</td><td class="small">${E(f.razonSocial)}</td><td class="small">${f.error ? `<span style="color:var(--bad)">${E(f.error)}</span>` : f.cambios.map(c => E(c[2])).join('<br>')}</td></tr>`).join('')}
+        </tbody></table></div>${lista.length > 300 ? `<p class="small muted">… y ${lista.length - 300} filas más.</p>` : ''}` : '<p class="muted">El archivo no trae cambios respecto a los datos actuales.</p>'}`,
+      actions: [{ label: 'Cancelar' }, ...(nuevos + cambios ? [{ label: `${I('upload')} Actualizar datos`, cls: 'primary', onClick: async () => {
+        const r = await Repo.importarClientes(hojas, S.user.id);
+        toast(`Clientes actualizados: ${r.nuevos} nuevos, ${r.actualizados} con datos corregidos, ${r.asignados} asignaciones${r.opps ? ` (${r.opps} oportunidades movidas)` : ''}${r.errores ? `, ${r.errores} filas con error omitidas` : ''}.`);
+        refresh();
+      } }] : [])],
+    });
+  }
+  ACTIONS['dir-vista'] = (el, e) => { if (e) e.preventDefault(); Object.assign(S.agF, { vista: el.dataset.v, vendedor: '', lim: 30 }); render(true); };
   ACTIONS['dir-mas'] = () => { S.agF.lim = (S.agF.lim || 30) + 30; refresh(); };
-  CHANGES['agf'] = el => { S.agF[el.name] = el.value; S.agF.lim = 30; render(true); };
-  let tAg = null;
-  INPUTS['agf'] = el => { S.agF[el.name] = el.value; S.agF.lim = 30; clearTimeout(tAg); tAg = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="agf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  filtro('agf', () => S.agF, F => { F.lim = 30; });
 
   /* =====================================================================
      LISTA DE PRECIOS — confidencial. Todos consultan; jefatura, finanzas y administración la mantienen.
@@ -6133,7 +6318,7 @@ const UI = (() => {
     view().innerHTML = `
       <div class="page-head"><div><h1>Lista de precios <span class="conf">${I('alert').replace('<svg', '<svg width="12" height="12"')} Confidencial · uso interno</span></h1>
         <p class="muted">${db.catalogo.length.toLocaleString('en-US')} productos · ${marcas.length} marcas · actualizada el ${Util.fmtDate(info.actualizado)}${info.por ? ' por ' + E(quien(info.por)) : ''}${info.archivo ? ' · ' + E(info.archivo) : ''}</p></div>
-        ${ed ? `<div class="btn-row"><button class="btn" data-action="cat-exportar">${I('download')} Exportar CSV</button><button class="btn" data-action="cat-importar">${I('upload')} Importar lista (Excel o CSV)</button><button class="btn primary" data-action="cat-producto">${I('plus')} Agregar producto</button></div>` : ''}</div>
+        ${ed ? `<div class="btn-row"><button class="btn" data-action="cat-plantilla">${I('download')} Descargar plantilla</button><button class="btn" data-action="cat-importar">${I('upload')} Subir datos y actualizar</button><button class="btn primary" data-action="cat-producto">${I('plus')} Agregar producto</button></div>` : ''}</div>
       <input type="file" id="cat-file" accept=".xlsx,.csv" class="hidden">
       ${info.origen === 'privado' ? `<div class="alert warn"><div><strong>Lista real cargada desde un archivo privado.</strong> Este archivo contiene precios confidenciales: no lo publiques ni lo compartas fuera de la empresa.</div></div>`
         : info.origen === 'demo' ? `<div class="alert info"><div><strong>Lista de demostración con precios ficticios.</strong> ${ed ? 'Puedes importar la lista real (Excel con una hoja por marca, o CSV): se lee en este navegador y no se sube a ningún servidor.' : 'Jefatura, finanzas o administración cargan y actualizan la lista real.'}</div></div>` : ''}
@@ -6172,12 +6357,12 @@ const UI = (() => {
         <div class="table-wrap"><table class="tbl"><thead><tr><th>Hoja</th><th>Marca</th><th class="r">Productos</th><th class="r">Omitidos sin precio</th></tr></thead><tbody>
         ${r.resumen.map(x => `<tr><td>${E(x.hoja)}</td><td>${E(x.marca)}</td><td class="r">${x.productos.toLocaleString('en-US')}</td><td class="r">${x.sinPrecio ? `<span class="chip warn">${x.sinPrecio}</span>` : 0}</td></tr>`).join('')}</tbody></table></div>
         <div class="stack" style="margin-top:12px">
-          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="reemplazar" checked><span><strong>Reemplazar las marcas del archivo</strong> — cada marca incluida queda exactamente como en el archivo (se quitan los productos que ya no figuran).</span></label>
-          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="completar"><span><strong>Solo agregar y actualizar precios</strong> — no se quita ningún producto.</span></label>
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="completar" checked><span><strong>Solo agregar y actualizar precios</strong> — no se quita ningún producto.</span></label>
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="modo" value="reemplazar"><span><strong>Reemplazar las marcas del archivo</strong> — cada marca incluida queda exactamente como en el archivo (se quitan los productos que ya no figuran).</span></label>
         </div>
         <p class="small muted">Las cotizaciones ya emitidas no cambian: guardan el precio con el que se cotizó.</p>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('upload')} Importar`, cls: 'primary', onClick: async root => {
-        const x = await Repo.importarCatalogo(r.items, val(root, 'modo'), S.user.id, archivo);
+        const x = await Repo.importarCatalogo(r.items, val(root, 'modo'), S.user.id, archivo); S.catIdx = null;
         S.catImport = null; S.catF = { q: '', marca: '' };
         toast(`Lista importada: ${x.agregados} nuevos, ${x.actualizados} actualizados, ${x.quitados} quitados.`); refresh();
       } }],
@@ -6193,7 +6378,7 @@ const UI = (() => {
         <label class="field"><span>Precio de lista USD (sin IGV) <span class="req">*</span></span><input type="number" min="0" step="0.01" name="precio" value="${E(p.precio || '')}"></label></div>
         <label class="field" style="margin-top:12px">Descripción<textarea name="descripcion">${E(p.descripcion || '')}</textarea></label>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        await Repo.guardarProducto({ id: id || null, marca: val(root, 'marca'), codigo: val(root, 'codigo'), descripcion: val(root, 'descripcion'), precio: val(root, 'precio') }, S.user.id);
+        await Repo.guardarProducto({ id: id || null, marca: val(root, 'marca'), codigo: val(root, 'codigo'), descripcion: val(root, 'descripcion'), precio: val(root, 'precio') }, S.user.id); S.catIdx = null;
         toast(id ? 'Producto actualizado.' : 'Producto agregado a la lista.'); refresh();
       } }],
     });
@@ -6204,25 +6389,30 @@ const UI = (() => {
     const p = S.db.catalogo.find(x => x.id === el.dataset.id);
     modal({ title: 'Quitar producto', body: `<p style="margin-top:0">¿Quitar <strong>${E(p.marca)} ${E(p.codigo)}</strong> de la lista de precios? Las cotizaciones ya emitidas no se afectan.</p>`,
       actions: [{ label: 'Cancelar' }, { label: 'Quitar', cls: 'bad', onClick: async () => {
-        const x = await Repo.quitarProducto(p.id, S.user.id);
-        toast(`${x.codigo} quitado de la lista.`, { undo: async () => { await Repo.guardarProducto(Object.assign({}, x, { id: null }), S.user.id); toast('Producto restaurado.'); refresh(); } });
+        const x = await Repo.quitarProducto(p.id, S.user.id); S.catIdx = null;
+        toast(`${x.codigo} quitado de la lista.`, { undo: async () => { await Repo.guardarProducto(Object.assign({}, x, { id: null }), S.user.id); S.catIdx = null; toast('Producto restaurado.'); refresh(); } });
         refresh();
       } }] });
   };
   ACTIONS['cat-marca'] = el => { S.catF.marca = S.catF.marca === el.dataset.m ? '' : el.dataset.m; render(true); };
-  ACTIONS['cat-exportar'] = () => {
-    const cell = v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const csv = '﻿' + ['Marca;Código;Descripción;Precio USD', ...S.db.catalogo.map(p => [p.marca, p.codigo, p.descripcion, p.precio].map(cell).join(';'))].join('\r\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `lista_precios_${hoy()}.csv`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    toast('Lista exportada (CSV reimportable). Es información confidencial.');
+  ACTIONS['cat-plantilla'] = () => {
+    const marcas = marcasCatalogo(), sel = S.catF.marca || '';
+    modal({ title: 'Descargar plantilla de la lista de precios',
+      body: `<label class="field">Contenido<select name="contenido">${options([['__todas', `Lista actual completa (${S.db.catalogo.length.toLocaleString('en-US')} productos)`], ...marcas.map(m => [m.marca, `Solo ${m.marca} (${m.n.toLocaleString('en-US')})`]), ['__vacia', 'Vacía (solo encabezados)']], sel || '__todas')}</select></label>
+        <p class="small muted">Columnas: Marca, Código, Descripción y Precio USD (sin IGV). Edita precios o agrega filas y súbela con "Subir datos y actualizar". El archivo contiene precios confidenciales.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('download')} Descargar`, cls: 'primary', onClick: root => {
+        const c = val(root, 'contenido'), ps = c === '__vacia' ? [] : c === '__todas' ? S.db.catalogo : S.db.catalogo.filter(p => p.marca === c);
+        Util.descargar(Excel.libro([
+          { nombre: 'Lista de precios', fija: true, anchos: [14, 28, 70, 14], filas: [['Marca', 'Código', 'Descripción', 'Precio USD'], ...ps.map(p => [p.marca, p.codigo, p.descripcion, p.precio])] },
+          { nombre: 'Instrucciones', anchos: [110], filas: [['Cómo usar esta plantilla'],
+            ['1. Una fila por producto: Marca, Código, Descripción y Precio USD sin IGV (número, con punto o coma decimal).'],
+            ['2. Para actualizar un precio, cambia la columna Precio USD; para agregar un producto, agrega una fila. Marca + Código identifican al producto.'],
+            ['3. En la plataforma: Lista de precios → "Subir datos y actualizar". Por defecto solo agrega y actualiza; no quita productos.'],
+            ['4. Las cotizaciones ya emitidas no cambian: guardan el precio con el que se cotizó.']] },
+        ]), `plantilla_lista_precios_${c === '__todas' || c === '__vacia' ? '' : c.replace(/[^\w-]+/g, '_') + '_'}${hoy()}.xlsx`);
+      } }] });
   };
-  CHANGES['catf'] = el => { S.catF[el.name] = el.value; render(true); };
-  let tCat = null;
-  INPUTS['catf'] = el => { S.catF[el.name] = el.value; clearTimeout(tCat); tCat = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="catf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  filtro('catf', () => S.catF);
 
   /* =====================================================================
      USUARIOS — gerencia, jefatura y administración del sistema
@@ -6341,15 +6531,13 @@ const UI = (() => {
           ${Config.POSTVENTA.map(p => `<td>${Rules.puedePaso(u, p.id, o, db) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${p.id}" value="${pv[p.id] || ''}" max="${hoy()}" aria-label="${E(p.nombre)}" style="min-width:130px">` : (pv[p.id] ? `<span class="chip ok">${Util.fmtDate(pv[p.id])}</span>` : '<span class="muted">—</span>')}</td>`).join('')}</tr>`; }).join('') || '<tr><td colspan="10" class="center muted" style="padding:20px">Nada pendiente.</td></tr>'}
       </tbody></table></div>`;
   };
-  CHANGES['pvf'] = el => { S.pvF[el.name] = el.value; render(true); };
-  let tPv = null;
-  INPUTS['pvf'] = el => { S.pvF[el.name] = el.value; clearTimeout(tPv); tPv = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="pvf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  filtro('pvf', () => S.pvF);
 
   /* ---------- Arranque ---------- */
   let tResize = null;
   async function boot() {
     await Repo.init();
-    SelfTest.run();
+    if (Repo.modo() !== 'piloto') SelfTest.run();   // en el piloto no se repite en cada arranque; se puede llamar a mano
     if (Repo.modo() === 'piloto') {
       S.db = await Repo.snapshot();
       if (AlmacenCompartido.soportado()) S.carpetaRecordada = await AlmacenCompartido.recordada();
