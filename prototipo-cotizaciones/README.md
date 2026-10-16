@@ -46,6 +46,7 @@ El mismo `index.html` funciona en dos modos:
 | Login | Usuarios de demo con clave `demo` | Usuario y contraseña propios; la primera vez obliga a cambiar la contraseña temporal |
 | Numeración de cotizaciones | Texto libre | Por Account Manager: `INICIALES-AAAA-0001` (p. ej. `NP-2026-0001`), reinicia cada año (`Rules.numeroAM`). Las `TV-AAAA-0001` anteriores se renumeran una vez al abrir la versión nueva (`Repo.migrar`) |
 | Datos de la empresa en el PDF | Ficticios, sin logo | Los reales y el logo (vienen en la data inicial y en `window.__PILOTO_EXTRA`, no en el código) |
+| Marca en el ingreso y la barra superior | "tv" | El logo de la empresa (mismo `window.__PILOTO_EXTRA.empresa.logo`) |
 | Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
 | Ejemplo simulado de PDF | Visible | Oculto (solo PDF reales) |
 

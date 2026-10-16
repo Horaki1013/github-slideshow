@@ -51,6 +51,9 @@ h3{font-size:14px;margin:0;font-weight:700}
 .logo{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.02em;white-space:nowrap;min-width:0}
 .logo-mark{width:30px;height:30px;border-radius:7px;background:#fff;color:var(--brand);display:grid;place-items:center;font-weight:800;font-size:15px;flex:none}
 .logo small{display:block;font-weight:400;opacity:.8;font-size:11px;letter-spacing:0}
+.logo-img{display:flex;align-items:center;height:36px;padding:4px 10px;background:#fff;border-radius:8px;flex:none}
+.logo-img img{height:100%;width:auto;display:block}
+.login-logo{height:56px;width:auto;flex:none}
 .logo-text{overflow:hidden;text-overflow:ellipsis}
 .demo-badge{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.35);border-radius:999px;padding:2px 8px;font-size:11px;white-space:nowrap}
 .topbar .spacer{flex:1}
@@ -4696,7 +4699,7 @@ const UI = (() => {
     const us = S.db.users;
     if (piloto()) {
       view().innerHTML = `<div class="login-wrap"><div class="card login-card">
-        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px"><div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${marcaLogin()}
           <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A. · Piloto Perú</div></div></div>
         ${carpetaHTML()}
         <form data-submit="login" class="stack" autocomplete="on"${S.carpetaRecordada && !Repo.compartida() ? ' inert style="opacity:.5"' : ''}>
@@ -4711,7 +4714,7 @@ const UI = (() => {
     }
     view().innerHTML = `<div class="login-wrap">
       <div class="card login-card">
-        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px"><div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${marcaLogin()}
           <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A.</div></div></div>
         <form data-submit="login" class="stack" autocomplete="off">
           <label class="field">Usuario<input type="text" name="usuario" placeholder="Ej.: cm" autocapitalize="none" autocomplete="off"></label>
@@ -4772,6 +4775,15 @@ const UI = (() => {
     await conectarCarpeta(h);
   };
   ACTIONS['carpeta-olvidar'] = async () => { await Repo.desconectarCarpeta(); S.carpetaRecordada = null; render(); };
+  /* Logo de la empresa (solo en el piloto, viene en el archivo privado): reemplaza a la marca "tv" en el ingreso y en la barra superior */
+  const logoEmpresa = () => (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa && window.__PILOTO_EXTRA.empresa.logo) || '';
+  const marcaLogin = () => logoEmpresa() ? `<img class="login-logo" src="${logoEmpresa()}" alt="Techvalue">` : '<div class="logo-mark" style="background:var(--brand);color:#fff;width:44px;height:44px;font-size:20px">tv</div>';
+  function aplicarLogo() {
+    const m = $('.topbar .logo-mark');
+    if (!logoEmpresa() || !m) return;
+    m.outerHTML = `<span class="logo-img"><img src="${logoEmpresa()}" alt="Techvalue"></span>`;
+    $('.topbar .logo-text').innerHTML = '<small>Seguimiento de cotizaciones</small>';
+  }
   function renderChromeLoggedOut() { $('#sidenav').innerHTML = ''; $('#bottomnav').innerHTML = ''; $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia'; }
   async function entrar(usuario, clave) {
     try {
@@ -6537,6 +6549,7 @@ const UI = (() => {
   let tResize = null;
   async function boot() {
     await Repo.init();
+    aplicarLogo();
     if (Repo.modo() !== 'piloto') SelfTest.run();   // en el piloto no se repite en cada arranque; se puede llamar a mano
     if (Repo.modo() === 'piloto') {
       S.db = await Repo.snapshot();
