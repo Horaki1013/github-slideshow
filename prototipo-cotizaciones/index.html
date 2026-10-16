@@ -381,6 +381,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .hoja .h-cond td.k{font-weight:700;width:24%}
 .hoja .h-foot{margin-top:18px;border-top:2px solid var(--brand);padding-top:6px;color:#555;font-size:9.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 /* Formulario de cotización: grilla de 12 columnas y subgrupos */
+.linkish{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-weight:600;cursor:pointer;text-align:left}
+.linkish:hover{text-decoration:underline}
+.step .s-doc{margin-top:6px;padding:2px 6px;min-height:24px;font-size:11.5px}
 .dir-emp{padding:14px 16px}
 .dir-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
 .dir-head h2{margin:0;font-size:15px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -541,6 +544,19 @@ const Config = {
 
   CANALES: ['WhatsApp','Llamada','Correo','Visita','Reunión'],
 
+  // Documentos de una oportunidad (post-venta). paso: el paso de post-venta que respalda
+  DOCUMENTOS: [
+    { id:'oc',         nombre:'OC del cliente',                              paso:'oc' },
+    { id:'propuesta',  nombre:'Cotización o propuesta aceptada',             paso:null },
+    { id:'pedido',     nombre:'Pedido a fábrica / proforma del proveedor',   paso:'pedido' },
+    { id:'transporte', nombre:'Guía aérea, BL o documentos de importación',  paso:'transito' },
+    { id:'recepcion',  nombre:'Informe de recepción o revisión de Soporte',  paso:'recibido' },
+    { id:'entrega',    nombre:'Guía de remisión o acta de entrega',          paso:'entregado' },
+    { id:'factura',    nombre:'Factura',                                     paso:'facturado' },
+    { id:'pago',       nombre:'Comprobante de pago o constancia de abono',   paso:'cobrado' },
+    { id:'otro',       nombre:'Otro',                                        paso:null },
+  ],
+  DOC_MAX_MB: 20,
   POSTVENTA: [
     { id:'oc',        nombre:'OC recibida' },
     { id:'pedido',    nombre:'Pedido a fábrica' },
@@ -2483,7 +2499,7 @@ const Rules = (() => {
     jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
     finanzas: ['proyeccion', 'facturado', 'postventa', 'contactos', 'catalogo', 'empresa'],
     logistica: ['postventa', 'contactos', 'catalogo'],
-    admin: ['usuarios', 'catalogo', 'contactos', 'empresa'],
+    admin: ['usuarios', 'postventa', 'catalogo', 'contactos', 'empresa'],
   };
   const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa' };
   function puede(user, accion, opp) {
@@ -2496,6 +2512,8 @@ const Rules = (() => {
       case 'ver_todo': return user.rol === 'jefatura' || user.rol === 'finanzas';
       // Cuentas (opp = cliente en estos casos)
       case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      // Documentos de una oportunidad: el AM dueño y las áreas que gestionan la post-venta
+      case 'documentos_opp': return ['jefatura', 'finanzas', 'admin', 'logistica'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'agregar_contacto': return user.rol !== 'logistica';   // la agenda es común: se agregan contactos a cualquier empresa
       case 'crear_cliente': return ['vendedor', 'jefatura', 'finanzas', 'admin'].includes(user.rol);
       case 'editar_contactos': return ['jefatura', 'finanzas', 'admin'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
@@ -2517,9 +2535,10 @@ const Rules = (() => {
     if (user.rol === 'jefatura') return true;
     const duenio = user.rol === 'vendedor' && opp.vendedorId === user.id;
     if (!(db && db.config && db.config.postventaPorArea)) return duenio;
+    if (['finanzas', 'admin'].includes(user.rol)) return true;   // administración y finanzas gestionan todos los pasos
     if (paso === 'oc') return duenio;
     if (['pedido', 'transito', 'recibido', 'entregado'].includes(paso)) return user.rol === 'logistica';
-    return user.rol === 'finanzas';
+    return false;
   }
   /** Numeración general de la empresa (piloto): PREFIJO-AAAA-0001, correlativa para todos */
   const numeroGeneral = (db, fecha) => db.numeracion ? `${db.numeracion.prefijo}-${String(fecha || Util.today()).slice(0, 4)}-${Util.pad(db.numeracion.siguiente, 4)}` : null;
@@ -2665,6 +2684,13 @@ const AlmacenCompartido = (() => {
         if (cb && cb.token === token) return true;
       }
     },
+    /** Documentos en documentos/<oportunidad>/ dentro de la carpeta compartida */
+    async guardarDoc(carpeta, nombre, blob) {
+      const d = await (await dir.getDirectoryHandle('documentos', { create: true })).getDirectoryHandle(carpeta, { create: true });
+      const h = await d.getFileHandle(nombre, { create: true }); const w = await h.createWritable(); await w.write(blob); await w.close();
+    },
+    async leerDoc(carpeta, nombre) { const d = await (await dir.getDirectoryHandle('documentos')).getDirectoryHandle(carpeta); return (await d.getFileHandle(nombre)).getFile(); },
+    async borrarDoc(carpeta, nombre) { try { const d = await (await dir.getDirectoryHandle('documentos')).getDirectoryHandle(carpeta); await d.removeEntry(nombre); } catch (e) { /* ya no estaba */ } },
     async liberar() {
       const l = await leerArchivo('bloqueo.json'), b = l && json(l.texto);
       if (b && b.token === token) await dir.removeEntry('bloqueo.json').catch(() => {});
@@ -2677,6 +2703,7 @@ const Repo = (() => {
   let modo = 'demo';                       // 'demo' (memoria) | 'piloto' (se guarda en el navegador)
   const estado = { guardado: null, error: null, pendiente: false, compartida: false, carpeta: '', remoto: null };
   let quien = '';                          // nombre del usuario que escribe (para el bloqueo y el registro en la carpeta)
+  const docsMemoria = new Map();           // documentos en la demo (no se guardan)
   const oyentesRemotos = [];
   let tGuardar = null;
   const oyentes = [];
@@ -2842,6 +2869,9 @@ const Repo = (() => {
       } else {
         if (siVacia === 'seed' || !db) db = desdeSeed(SEED());
         db._compartido = true;
+        for (const d of (db.documentos || []).filter(x => x.ubicacion === 'navegador')) {
+          try { const b = await Almacen.leer('doc:' + d.id); if (b) { await AlmacenCompartido.guardarDoc(d.oppId, d.archivo, b); d.ubicacion = 'carpeta'; } } catch (e) { /* queda en el navegador */ }
+        }
         await AlmacenCompartido.bloquear(quien);
         try { await AlmacenCompartido.escribir(db, quien, true); } finally { await AlmacenCompartido.liberar(); }
       }
@@ -2909,6 +2939,44 @@ const Repo = (() => {
       Object.assign(u, { telefono: t(datos.telefono), correo: t(datos.correo), cargo: t(datos.cargo) || u.cargo });
       touch();
       return u;
+    },
+    /* ---- Documentos de oportunidades: el archivo va aparte (carpeta compartida, navegador o memoria en la demo); en los datos solo la ficha ---- */
+    async subirDocumento(oppId, archivo, meta, usuarioId) {
+      const o = opp(oppId), u = usuarioDe(usuarioId);
+      if (!Rules.puede(u, 'documentos_opp', o)) fail('No puedes subir documentos a esta oportunidad.');
+      if (!archivo || !archivo.blob) fail('Elige un archivo.');
+      if (archivo.blob.size > Config.DOC_MAX_MB * 1024 * 1024) fail(`El archivo pesa más de ${Config.DOC_MAX_MB} MB.`);
+      const cat = Config.DOCUMENTOS.find(x => x.id === (meta && meta.categoria)) || Config.DOCUMENTOS[Config.DOCUMENTOS.length - 1];
+      const id = 'D-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const nombre = String(archivo.nombre || 'documento').replace(/[\\/:*?"<>|]+/g, '-').slice(-120), archivoNombre = `${id}__${nombre}`;
+      let ubicacion;
+      if (estado.compartida) { await AlmacenCompartido.guardarDoc(oppId, archivoNombre, archivo.blob); ubicacion = 'carpeta'; }
+      else if (modo === 'piloto') { await Almacen.escribir('doc:' + id, archivo.blob); ubicacion = 'navegador'; }
+      else { docsMemoria.set(id, archivo.blob); ubicacion = 'memoria'; }
+      const doc = { id, oppId, nombre, tipo: archivo.blob.type || '', tamano: archivo.blob.size, categoria: cat.id, paso: cat.paso, nota: String(meta && meta.nota || '').trim(), fecha: hoy(), en: new Date().toISOString(), usuarioId, ubicacion, archivo: archivoNombre };
+      db.documentos = (db.documentos || []).concat([doc]);
+      log(o, `Documento subido: ${nombre} (${cat.nombre}).`, usuarioId);
+      touch();
+      return doc;
+    },
+    /** Devuelve el archivo (Blob) de un documento */
+    async leerDocumento(docId) {
+      const d = (db.documentos || []).find(x => x.id === docId) || fail('Documento no encontrado.');
+      if (d.ubicacion === 'carpeta') { if (!estado.compartida) fail('Este documento está en la carpeta compartida: conéctala para descargarlo.'); return AlmacenCompartido.leerDoc(d.oppId, d.archivo); }
+      const b = d.ubicacion === 'navegador' ? await Almacen.leer('doc:' + d.id).catch(() => null) : docsMemoria.get(d.id);
+      if (!b) fail('El archivo quedó en el navegador de quien lo subió (sin carpeta compartida). Pídele que lo vuelva a subir con la carpeta conectada.');
+      return b;
+    },
+    async eliminarDocumento(docId, usuarioId) {
+      const d = (db.documentos || []).find(x => x.id === docId) || fail('Documento no encontrado.');
+      const u = usuarioDe(usuarioId);
+      if (!(u && (d.usuarioId === u.id || ['jefatura', 'admin'].includes(u.rol)))) fail('Solo quien lo subió, gerencia o administración pueden eliminarlo.');
+      if (d.ubicacion === 'carpeta' && estado.compartida) await AlmacenCompartido.borrarDoc(d.oppId, d.archivo);
+      else if (d.ubicacion === 'navegador') await Almacen.borrar('doc:' + d.id).catch(() => {});
+      else docsMemoria.delete(d.id);
+      db.documentos = db.documentos.filter(x => x.id !== docId);
+      log(opp(d.oppId), `Documento eliminado: ${d.nombre}.`, usuarioId);
+      touch();
     },
     async desconectarCarpeta() { await AlmacenCompartido.olvidar(); Object.assign(estado, { compartida: false, carpeta: '' }); avisar(); },
     /** Trae los cambios de otros usuarios (la UI lo llama cada pocos segundos) */
@@ -3288,7 +3356,7 @@ const Repo = (() => {
     },
   };
   // Todo método que no sea de lectura pasa por escrituraCompartida cuando hay carpeta conectada
-  const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'sesion',
+  const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'sesion', 'leerDocumento',
     'compartida', 'alCambioRemoto', 'revisarCarpeta', 'conectarCarpeta', 'desconectarCarpeta', 'refrescar', 'adoptarSeedNuevo']);
   Object.keys(api).forEach(k => {
     const f = api[k];
@@ -3507,9 +3575,9 @@ const UI = (() => {
     jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
     finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
     logistica: [['postventa', 'Post-venta', 'box'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
-    admin: [['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'catalogo', 'contactos'] };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'catalogo', 'contactos'] };
   const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
@@ -4826,6 +4894,7 @@ const UI = (() => {
       <div class="grid" style="grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);margin-top:14px;align-items:start" id="ficha-grid">
         <div class="stack">
           ${o.etapa === 'ganada' ? postventaHTML(o) : ''}
+          ${docsCardHTML(o)}
           <section class="card"><div class="card-head"><h2>Cotizaciones y revisiones</h2><span class="sub">${Rules.quotesOf(db, o).length} documento(s) · solo una vigente</span>
             ${ed && (abierta || o.etapa === 'pausa') ? `<button class="btn sm primary" data-action="crear-rev" data-id="${o.id}">${I('plus')} Crear revisión desde la vigente</button>` : ''}</div>
             ${Rules.quotesOf(db, o).slice().reverse().map(x => quoteHTML(x, ed)).join('')}</section>
@@ -4898,6 +4967,68 @@ const UI = (() => {
         </div>
       </div></article>`;
   }
+  /* ---------- Documentos de la oportunidad (OC, guías, actas, facturas…) para descargarlos cuando se necesiten ---------- */
+  const docsDe = oppId => (S.db.documentos || []).filter(d => d.oppId === oppId).sort((a, b) => String(b.en).localeCompare(String(a.en)));
+  const tamTxt = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const catNombre = id => (Config.DOCUMENTOS.find(c => c.id === id) || { nombre: 'Otro' }).nombre;
+  function docsListaHTML(o) {
+    const ds = docsDe(o.id);
+    if (!ds.length) return '<p class="small muted" style="margin:0">Aún no hay documentos.</p>';
+    return `<div class="table-wrap"><table class="tbl docs-tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>Subido</th><th class="r">Tamaño</th><th></th></tr></thead><tbody>
+      ${ds.map(d => { const up = usr(d.usuarioId), borra = d.usuarioId === S.user.id || ['jefatura', 'admin'].includes(S.user.rol);
+        return `<tr><td><button type="button" class="linkish" data-action="doc-bajar" data-doc="${d.id}" title="Descargar">${I('download').replace('<svg', '<svg width="14" height="14" style="vertical-align:-2px"')} ${E(d.nombre)}</button>${d.nota ? `<div class="cell-sub">${E(d.nota)}</div>` : ''}</td>
+          <td class="small">${E(catNombre(d.categoria))}</td><td class="small nowrap">${Util.fmtDate(d.fecha)} · ${E(up ? up.nombre : '—')}</td><td class="r small nowrap">${tamTxt(d.tamano || 0)}</td>
+          <td class="nowrap r"><button type="button" class="btn sm" data-action="doc-bajar" data-doc="${d.id}">Descargar</button>${borra ? ` <button type="button" class="btn sm ghost" data-action="doc-borrar" data-doc="${d.id}" aria-label="Eliminar">${I('x')}</button>` : ''}</td></tr>`; }).join('')}
+    </tbody></table></div>`;
+  }
+  function docsCardHTML(o) {
+    if (!Rules.puede(S.user, 'documentos_opp', o)) return '';
+    const n = docsDe(o.id).length;
+    return `<section class="card"><div class="card-head"><h2>Documentos</h2><span class="sub">${n ? n + ' archivo' + (n === 1 ? '' : 's') + ' · ' : ''}los ven el AM, gerencia, administración, finanzas y logística</span>
+      <button class="btn sm primary" data-action="doc-subir" data-id="${o.id}">${I('upload')} Subir documento</button></div>${docsListaHTML(o)}
+      ${Repo.modo() === 'piloto' && !Repo.compartida() ? '<p class="small muted" style="margin:8px 0 0">Sin carpeta compartida, los archivos quedan solo en este navegador. Conecta la carpeta para que el equipo pueda descargarlos.</p>' : ''}</section>`;
+  }
+  function descargarBlob(blob, nombre) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  ACTIONS['doc-bajar'] = async el => {
+    const d = (S.db.documentos || []).find(x => x.id === el.dataset.doc); if (!d) return;
+    try { descargarBlob(await Repo.leerDocumento(d.id), d.nombre); } catch (e) { toast(e.message); }
+  };
+  ACTIONS['doc-borrar'] = el => borrarDocumento(el, null);
+  function borrarDocumento(el, volver) {
+    const d = (S.db.documentos || []).find(x => x.id === el.dataset.doc); if (!d) return;
+    modal({ title: 'Eliminar documento', body: `<p style="margin-top:0">¿Eliminar <strong>${E(d.nombre)}</strong>? El archivo se borra para todo el equipo.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarDocumento(d.id, S.user.id); toast('Documento eliminado.'); refresh(); if (volver) setTimeout(() => abrirDocumentos(volver), 50); } }] });
+  }
+  /** Subir uno o varios archivos; el tipo sugiere el paso de post-venta que respalda */
+  function abrirSubirDocumento(oppId, paso, volver) {
+    const o = oppById(oppId);
+    const def = (Config.DOCUMENTOS.find(c => c.paso === paso) || {}).id || '';
+    modal({ title: 'Subir documento', body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · N° ${E((Rules.vigente(S.db, o) || {}).numero || o.id)}</p>
+      <div class="stack"><label class="field"><span>Archivo(s) <span class="req">*</span></span><input type="file" name="archivos" multiple><span class="field-hint">PDF, imagen, Excel, Word… hasta ${Config.DOC_MAX_MB} MB cada uno.</span></label>
+      <label class="field"><span>Tipo <span class="req">*</span></span><select name="categoria">${options(Config.DOCUMENTOS.map(c => [c.id, c.nombre]), def, 'Selecciona…')}</select></label>
+      <label class="field">Nota (opcional)<input type="text" name="nota" maxlength="200" placeholder="Ej.: OC 4500123456, factura F001-2345"></label></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('upload')} Subir`, cls: 'primary', onClick: async root => {
+        const files = [...(root.querySelector('[name=archivos]').files || [])], cat = val(root, 'categoria');
+        if (!files.length) { const e = new Error('Elige al menos un archivo.'); e.campos = { archivos: 'Obligatorio' }; throw e; }
+        if (!cat) { const e = new Error('Elige el tipo de documento.'); e.campos = { categoria: 'Obligatorio' }; throw e; }
+        for (const f of files) await Repo.subirDocumento(oppId, { nombre: f.name, blob: f }, { categoria: cat, nota: val(root, 'nota') }, S.user.id);
+        toast(files.length === 1 ? 'Documento subido.' : `${files.length} documentos subidos.`); refresh();
+        if (volver) setTimeout(() => abrirDocumentos(volver), 50);
+      } }] });
+  }
+  /** Lista de documentos en un modal (desde Post-venta, para las áreas que no abren la ficha) */
+  function abrirDocumentos(oppId) {
+    const o = oppById(oppId), sube = Rules.puede(S.user, 'documentos_opp', o);
+    modal({ title: 'Documentos', wide: true, body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · N° ${E((Rules.vigente(S.db, o) || {}).numero || o.id)} · ${E(usr(o.vendedorId).nombre)}</p>${docsListaHTML(o)}`,
+      onOpen: back => back.addEventListener('click', ev => { const b = ev.target.closest('[data-action^="doc-"]'); if (!b) return; ev.preventDefault(); ev.stopPropagation();
+        if (b.dataset.action === 'doc-bajar') ACTIONS['doc-bajar'](b); else if (b.dataset.action === 'doc-borrar') { closeModal(); borrarDocumento(b, oppId); } }),
+      actions: [{ label: 'Cerrar' }].concat(sube ? [{ label: `${I('upload')} Subir documento`, cls: 'primary', onClick: () => { setTimeout(() => abrirSubirDocumento(oppId, null, oppId), 30); } }] : []) });
+  }
+  ACTIONS['doc-subir'] = el => abrirSubirDocumento(el.dataset.id, el.dataset.paso || null);
+  ACTIONS['doc-ver'] = el => abrirDocumentos(el.dataset.id);
   function postventaHTML(o) {
     const pv = o.postventa || {};
     const puedeP = paso => Rules.puedePaso(S.user, paso, o, S.db), ed = Config.POSTVENTA.some(p => puedeP(p.id));
@@ -4909,6 +5040,7 @@ const UI = (() => {
         <div class="s-n">${pv[s.id] ? '✓' : i + 1}</div><div class="s-t">${E(s.nombre)}</div>
         ${puedeP(s.id) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${s.id}" value="${pv[s.id] || ''}" max="${hoy()}" aria-label="${E(s.nombre)}">` : `<div class="small">${Util.fmtDate(pv[s.id])}</div>`}
         ${s.id === 'facturado' && pv.facturaMonto ? `<div class="small muted" style="margin-top:4px">${money(pv.facturaMonto)}</div>` : ''}
+        ${(() => { const n = docsDe(o.id).filter(d => d.paso === s.id).length, sube = Rules.puede(S.user, 'documentos_opp', o); return n || sube ? `<button class="btn sm ghost s-doc" data-action="${sube ? 'doc-subir' : 'doc-ver'}" data-id="${o.id}" data-paso="${s.id}" title="${sube ? 'Adjuntar documento de este paso' : 'Ver documentos'}">📎 ${n ? n + ' doc.' : 'Adjuntar'}</button>` : ''; })()}
         ${s.id === 'cobrado' && !pv.cobrado ? `<div class="small muted" style="margin-top:4px">Estimado: ${cobro.filter(c => !c.cobrado).map(c => Util.fmtDate(c.fecha)).join(' y ') || '—'}</div>` : ''}
       </div>`).join('')}</div>
       <p class="small muted" style="margin-bottom:0">Condición de pago: ${E(Rules.condicion(q.condicionPago).nombre)} → ${E(Rules.condicion(q.condicionPago).regla)}.</p></section>`;
@@ -6181,24 +6313,30 @@ const UI = (() => {
   PAGES['postventa'] = async () => {
     const db = S.db, u = S.user, F = S.pvF;
     let rows = db.opps.filter(o => o.etapa === 'ganada' && (!F.vendedor || o.vendedorId === F.vendedor));
+    const tq = String(F.q || '').trim().toLowerCase();
+    if (tq) rows = rows.filter(o => { const c = cli(o.clienteId); return [c.razonSocial, c.ruc, ...Rules.quotesOf(db, o).map(q => q.numero)].join(' ').toLowerCase().includes(tq); });
     if (F.estado === 'pendientes') rows = rows.filter(o => !(o.postventa && o.postventa.cobrado));
     if (F.estado === 'logistica') rows = rows.filter(o => !(o.postventa && o.postventa.entregado));
     if (F.estado === 'facturar') rows = rows.filter(o => o.postventa && o.postventa.entregado && !o.postventa.facturado);
     rows.sort((a, b) => (Rules.fechaOCRef(b) || '') < (Rules.fechaOCRef(a) || '') ? -1 : 1);
     const total = rows.length; rows = rows.slice(0, 150);
     const porArea = db.config && db.config.postventaPorArea;
-    view().innerHTML = `<div class="page-head"><div><h1>Post-venta</h1><p class="muted">${porArea ? 'Logística marca pedido, tránsito, recepción y entrega; finanzas marca facturado y cobrado.' : 'Avance de las oportunidades ganadas.'}</p></div></div>
+    view().innerHTML = `<div class="page-head"><div><h1>Post-venta</h1><p class="muted">${porArea ? 'Administración y finanzas marcan todos los pasos; logística, pedido, tránsito, recepción y entrega. Los documentos (📎) quedan para descargarlos cuando se necesiten.' : 'Avance de las oportunidades ganadas.'}</p></div></div>
       <div class="card" style="padding:12px"><div class="filters" style="margin:0">
+        <label class="field" style="flex:2 1 260px">Buscar<input type="text" data-input="pvf" name="q" value="${E(F.q || '')}" placeholder="Cliente, RUC o N° de cotización"></label>
         <label class="field">Mostrar<select data-change="pvf" name="estado">${options([['pendientes', 'Pendientes de cobro'], ['logistica', 'Pendientes de entrega'], ['facturar', 'Entregadas sin facturar'], ['todas', 'Todas las ganadas']], F.estado)}</select></label>
         <label class="field">Account Manager<select data-change="pvf" name="vendedor">${options(db.users.filter(x => x.rol === 'vendedor').map(v => [v.id, v.iniciales + ' · ' + v.nombre]), F.vendedor, 'Todos')}</select></label>
       </div><div class="small muted" style="margin-top:8px">${total} oportunidades${total > rows.length ? ' · mostrando 150' : ''}</div></div>
-      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1250px"><thead><tr><th>Cliente / cotización</th><th>AM</th><th class="r">Monto</th>${Config.POSTVENTA.map(p => `<th>${E(p.nombre)}</th>`).join('')}</tr></thead><tbody>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1250px"><thead><tr><th>Cliente / cotización</th><th>AM</th><th class="r">Monto</th><th>Docs.</th>${Config.POSTVENTA.map(p => `<th>${E(p.nombre)}</th>`).join('')}</tr></thead><tbody>
         ${rows.map(o => { const pv = o.postventa || {}, q = Rules.vigente(db, o); return `<tr><td><div class="cell-main">${Rules.puede(u, 'ver_opp', o) ? `<a href="#/op/${o.id}" style="color:inherit">${E(cli(o.clienteId).razonSocial)}</a>` : E(cli(o.clienteId).razonSocial)}</div><div class="cell-sub">${E(q ? q.numero : '')}</div></td>
           <td>${vendTag(usr(o.vendedorId))}</td><td class="r num">${Util.money0(Rules.montoUSD(db, o))}</td>
+          <td><button class="btn sm" data-action="doc-ver" data-id="${o.id}" title="Ver, descargar y subir documentos">📎 ${(db.documentos || []).filter(d => d.oppId === o.id).length}</button></td>
           ${Config.POSTVENTA.map(p => `<td>${Rules.puedePaso(u, p.id, o, db) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${p.id}" value="${pv[p.id] || ''}" max="${hoy()}" aria-label="${E(p.nombre)}" style="min-width:130px">` : (pv[p.id] ? `<span class="chip ok">${Util.fmtDate(pv[p.id])}</span>` : '<span class="muted">—</span>')}</td>`).join('')}</tr>`; }).join('') || '<tr><td colspan="10" class="center muted" style="padding:20px">Nada pendiente.</td></tr>'}
       </tbody></table></div>`;
   };
   CHANGES['pvf'] = el => { S.pvF[el.name] = el.value; render(true); };
+  let tPv = null;
+  INPUTS['pvf'] = el => { S.pvF[el.name] = el.value; clearTimeout(tPv); tPv = setTimeout(async () => { const pos = el.selectionStart; await render(true); const n = $('[data-input="pvf"]'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
 
   /* ---------- Arranque ---------- */
   let tResize = null;

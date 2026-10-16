@@ -176,6 +176,24 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
   - Los agrega o edita el vendedor de la cuenta o jefatura. Finanzas solo consulta.
 - **Dashboard:** la tarjeta "Cartera de cuentas" muestra, por vendedor, cuentas activas, que no responden, sin contacto y sin asignar.
 
+## Post-venta y documentos de la oportunidad
+
+- **Quién marca los pasos (piloto):**
+  - Administración y finanzas marcan todos los pasos.
+  - Logística marca pedido, tránsito, recepción y entrega.
+  - El AM marca la OC.
+  - Gerencia marca todo.
+  - Administración tiene la pantalla Post-venta en su menú. La pantalla tiene buscador por cliente, RUC o N° de cotización.
+- **Documentos** (`Repo.subirDocumento`, `leerDocumento`, `eliminarDocumento`):
+  - Cada oportunidad guarda archivos: OC, propuesta, pedido a fábrica, documentos de importación, recepción, guía o acta de entrega, factura, comprobante de pago u otros, de hasta 20 MB.
+  - **Dónde se suben:** en la ficha ("Documentos" y 📎 en cada paso, con el tipo ya elegido) o desde Post-venta (columna 📎) para las áreas que no abren la ficha.
+  - **Quién:** los suben y descargan el AM de la oportunidad, gerencia, administración, finanzas y logística. Los borran quien los subió, gerencia o administración.
+- **El archivo se guarda aparte de los datos:**
+  - con carpeta compartida, en `documentos/<oportunidad>/`;
+  - sin carpeta, en el navegador (IndexedDB);
+  - en la demo, en memoria.
+  - En `datos.json` solo queda la ficha del documento (nombre, tipo, quién, cuándo). Al iniciar una carpeta con los datos de un navegador, sus documentos pasan a la carpeta.
+
 ## Directorio de clientes
 
 La pantalla "Directorio de clientes" (antes "Agenda de contactos") es común para todo el equipo:
