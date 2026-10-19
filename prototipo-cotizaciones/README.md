@@ -196,6 +196,11 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
   - en la demo, en memoria.
   - En `datos.json` solo queda la ficha del documento (nombre, tipo, quién, cuándo). Al iniciar una carpeta con los datos de un navegador, sus documentos pasan a la carpeta.
 
+## Lista de oportunidades (vendedores y gerencia)
+
+- **Orden por defecto:** de la cotización más reciente a la más antigua (columna "Cotizada"). Se puede reordenar por cualquier columna, como antes.
+- **Desplegable por fila (▸):** etapa, facturación estimada y próximo contacto, sin abrir la ficha. Entre etapas abiertas el cambio se guarda directo (conserva el próximo contacto y la OC). Ganada, perdida o en pausa abren su formulario de cierre. Solo el vendedor dueño edita; gerencia ve los datos.
+
 ## Visor de cotizaciones (áreas de post-venta)
 
 Finanzas, logística/soporte y administración tienen la pantalla **Cotizaciones**: todas las cotizaciones de los vendedores, **solo lectura**.
@@ -352,8 +357,9 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 
 **Segmento:** T1 si se facturaron más de 75K USD en los últimos 12 meses; T2 entre 10K y 75K; CO menos de 10K.
 
-**Proyección** (`proyeccion`, `fechaFactura`, `eventosCobro`, `horizonte`):
-- **Fecha estimada de factura** = fecha de OC + extremo mayor del plazo de entrega. Se asume que se factura al entregar.
+**Proyección** (`proyeccion`, `fechaFactura`, `eventosCobro`, `horizonte`, `fechaDeHorizonte`):
+- **Facturación estimada elegida por el vendedor.** Al cotizar es obligatorio elegir un horizonte, sin valor por defecto: dentro del mismo mes, próximos 30, 60 o 90 días, o 120 días a más. Se guarda en la oportunidad como fecha (`fechaFacturaEst`: fin de mes, u hoy + 30/60/90/120 días), así el horizonte avanza solo con el tiempo. Es un **dato interno**: no sale en el PDF. Se ajusta luego en la ficha o con el desplegable de cada fila en Oportunidades.
+- **Fecha estimada de factura** = la elegida por el vendedor; si no la eligió (oportunidades anteriores), fecha de OC + extremo mayor del plazo de entrega.
 - **Cobro por condición de pago:**
   - 100 % contra entrega y "Negociable con la OC": en la entrega.
   - Abono a cuenta bancaria: en la fecha de OC.
@@ -361,7 +367,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
   - Factura o cheque diferido a 30 días: factura + 30 días.
 - **Horizontes:**
   - Hasta fin de mes → "Este mes" (FACT 0).
-  - Luego, días desde hoy: ≤ 30 → FACT 1, ≤ 60 → FACT 2, ≤ 90 → FACT 3, más de 90 → "120 días" (FACT 4).
+  - Luego, días desde hoy: ≤ 30 → FACT 1, ≤ 60 → FACT 2, ≤ 90 → FACT 3, más de 90 → "120 días a más" (FACT 4).
   - Las fechas pasadas aún no facturadas o cobradas se muestran en "Este mes" marcadas como atrasadas.
 - Las ganadas entran al 100 % y las abiertas ponderadas. La facturación va sin IGV; la cobranza, con IGV.
 - En las ganadas con abono o 50 % de adelanto, el adelanto se considera cobrado al registrar la OC.

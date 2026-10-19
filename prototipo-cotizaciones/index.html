@@ -392,6 +392,13 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dir-head h2 a{color:inherit}
 .dir-seg{display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap;margin:8px 0 2px;padding:8px 10px;border-radius:8px;background:var(--surface-2)}
 .dir-seg .btn-row{margin-left:auto}
+.opp-quick td{background:var(--surface-2);padding:0!important}
+.opp-quick-in{position:sticky;left:0;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;padding:10px 14px;width:max-content;max-width:calc(100vw - 32px)}
+.opp-quick-in .field{min-width:190px;flex:0 1 230px;margin:0}
+.opp-quick-act{display:flex;gap:10px;align-items:center;align-self:center}
+tr.quick-open>td{border-bottom:0}
+.quick-btn{min-width:28px;padding:2px 6px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .excel-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2,transparent)}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
@@ -574,11 +581,11 @@ const Config = {
 
   // Horizontes de la columna FACT: antes de fin de mes, 30, 60, 90 y 120 días (más de 90)
   HORIZONTES: [
-    { id:'mes',  nombre:'Este mes',  fact:0 },
-    { id:'d30',  nombre:'30 días',   fact:1 },
-    { id:'d60',  nombre:'60 días',   fact:2 },
-    { id:'d90',  nombre:'90 días',   fact:3 },
-    { id:'d120', nombre:'120 días',  fact:4 },
+    { id:'mes',  nombre:'Este mes',  fact:0, dias:0,   opcion:'Dentro del mismo mes' },
+    { id:'d30',  nombre:'30 días',   fact:1, dias:30,  opcion:'En los próximos 30 días' },
+    { id:'d60',  nombre:'60 días',   fact:2, dias:60,  opcion:'En los próximos 60 días' },
+    { id:'d90',  nombre:'90 días',   fact:3, dias:90,  opcion:'En los próximos 90 días' },
+    { id:'d120', nombre:'120 días',  fact:4, dias:120, opcion:'En 120 días a más' },
   ],
 
   // Nombre de hoja o marca en la lista de precios → nombre en el sistema
@@ -2212,9 +2219,10 @@ const Rules = (() => {
   }
   const maxSemanas = id => (plazo(id) || { maxSemanas: 0 }).maxSemanas;
   const fechaOCRef = opp => opp.etapa === 'ganada' ? ((opp.postventa && opp.postventa.oc) || opp.fechaOC) : opp.fechaOC;
-  /** Fecha estimada de factura = fecha de OC + extremo mayor del plazo de entrega (se factura al entregar) */
+  /** Fecha estimada de factura: la que eligió el vendedor (horizonte FACT); si no la eligió, fecha de OC + extremo mayor del plazo de entrega */
   function fechaFactura(db, opp) {
     if (opp.postventa && opp.postventa.facturado) return opp.postventa.facturado;
+    if (opp.fechaFacturaEst) return opp.fechaFacturaEst;
     const oc = fechaOCRef(opp), q = vigente(db, opp);
     if (!oc || !q) return null;
     return Util.addDays(oc, maxSemanas(q.plazo) * 7);
@@ -2243,6 +2251,8 @@ const Rules = (() => {
     if (d <= 90) return 'd90';
     return 'd120';
   }
+  /** Horizonte elegido por el vendedor → fecha estimada de factura (fin de mes, o hoy + 30/60/90/120 días) */
+  const fechaDeHorizonte = (id, hoy = Util.today()) => { const h = Config.HORIZONTES.find(x => x.id === id); return !h ? null : h.dias ? Util.addDays(hoy, h.dias) : Util.endOfMonth(hoy); };
   const horizonteNombre = id => id ? Config.HORIZONTES.find(h => h.id === id).nombre : 'Sin fecha';
   const BASE_COBRO = { oc: 'en la OC', entrega: 'contra entrega', factura: 'factura' };
 
@@ -2537,6 +2547,7 @@ const Rules = (() => {
     else if (p.proxContacto < hoy) e.proxContacto = 'No puede estar en el pasado.';
     if (!p.fechaOC) e.fechaOC = 'Elige la fecha estimada de OC (no tiene valor por defecto).';
     else if (p.fechaOC < hoy) e.fechaOC = 'No puede estar en el pasado.';
+    if (!Config.HORIZONTES.some(h => h.id === p.facturacion)) e.facturacion = 'Elige cuándo estimas facturar (no tiene valor por defecto).';
     return e;
   }
   /** Invariantes de una oportunidad (el Repo las exige antes de guardar) */
@@ -2676,7 +2687,7 @@ const Rules = (() => {
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
   return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, aUSD, quoteNetoUSD,
-    quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte,
+    quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, rucValido, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes };
@@ -3251,6 +3262,12 @@ const Repo = (() => {
         if (Rules.esAbierta(o) && !patch.proxContacto) fail('Ninguna oportunidad abierta puede quedar sin próximo contacto.');
         if (patch.proxContacto && patch.proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.');
       }
+      if ('facturacion' in patch) {
+        if (!Config.HORIZONTES.some(h => h.id === patch.facturacion)) fail('Elige un horizonte de facturación válido.');
+        patch = Object.assign({}, patch, { fechaFacturaEst: Rules.fechaDeHorizonte(patch.facturacion, hoy()) });
+        delete patch.facturacion;
+        log(o, `Facturación estimada: ${Rules.horizonteNombre(Rules.horizonte(patch.fechaFacturaEst, hoy()))} (${Util.fmtDate(patch.fechaFacturaEst)})`, usuarioId);
+      }
       Object.assign(o, patch);
       if ('fechaOC' in patch) log(o, `Fecha estimada de OC: ${Util.fmtDate(patch.fechaOC)}`, usuarioId);
       guardar(o);
@@ -3497,7 +3514,7 @@ const Repo = (() => {
         q.oppId = o.id;
         db.quotes.push(q);
         if (o.etapa === 'pausa') Object.assign(o, { etapa: p.etapa || 'e1', fechaReactivacion: null });
-        Object.assign(o, { proxContacto: p.proxContacto, fechaOC: p.fechaOC, pendiente: false });
+        Object.assign(o, { proxContacto: p.proxContacto, fechaOC: p.fechaOC, fechaFacturaEst: Rules.fechaDeHorizonte(p.facturacion, hoy()), pendiente: false });
         log(o, `${q.tipo === 'revision' ? 'Revisión ' + q.revision : 'Alternativa con otra marca'} enviada (N° ${q.numero}).`, usuarioId);
       } else {
         let proyectoId = p.proyectoId;
@@ -3506,7 +3523,7 @@ const Repo = (() => {
           db.projects.push(pr); proyectoId = pr.id;
         }
         o = { id: 'OP-' + (++db.seq.opp), clienteId, proyectoId, vendedorId: p.vendedorId, etapa: p.etapa || 'e1', fechaInicio: p.fechaEmision, fechaOC: p.fechaOC,
-          proxContacto: p.proxContacto, motivoPerdida: null, motivoOtro: '', fechaReactivacion: null, fechaCierre: null, postventa: null, origen: p.origen, pendiente: false };
+          fechaFacturaEst: Rules.fechaDeHorizonte(p.facturacion, hoy()), proxContacto: p.proxContacto, motivoPerdida: null, motivoOtro: '', fechaReactivacion: null, fechaCierre: null, postventa: null, origen: p.origen, pendiente: false };
         db.opps.push(o);
         if (db.contadores) db.contadores[p.vendedorId] = (db.contadores[p.vendedorId] || 0) + 1; // solo para sugerir el siguiente número en la demo
         q.oppId = o.id;
@@ -3568,6 +3585,14 @@ const SelfTest = (() => {
         cb.length === 2 && Rules.horizonte(cb[0].fecha, hoy) === 'mes' && cb[0].monto === 5900 && Rules.horizonte(cb[1].fecha, hoy) === 'd60' &&
         Rules.horizonte('2026-10-31', hoy) === 'mes' && Rules.horizonte('2026-11-05', hoy) === 'd30' && Rules.horizonte('2027-02-01', hoy) === 'd120' &&
         Math.abs(pf.tot.total.d60 - 15000) < 0.01 && Math.abs(pc.tot.total.d90 - 8850) < 0.01 && Math.abs(pc.tot.total.mes - 4425) < 0.01;
+    }],
+    ['Facturación estimada elegida por el vendedor prevalece sobre OC + plazo', () => {
+      const hoy = '2026-10-19', db = miniDb();
+      const a = addOpp(db, { etapa: 'e4', fechaOC: hoy, fechaFacturaEst: Rules.fechaDeHorizonte('mes', hoy) }, { plazo: '6-8' });
+      const b = addOpp(db, { etapa: 'e4', fechaOC: hoy, fechaFacturaEst: Rules.fechaDeHorizonte('d120', hoy) }, { plazo: '6-8' });
+      return Rules.fechaFactura(db, a) === '2026-10-31' && Rules.horizonte(Rules.fechaFactura(db, a), hoy) === 'mes' &&
+        Rules.horizonte(Rules.fechaFactura(db, b), hoy) === 'd120' && Config.HORIZONTES.every(h => h.id === 'mes' || Rules.horizonte(Rules.fechaDeHorizonte(h.id, hoy), hoy) === h.id) &&
+        Object.keys(Rules.validarCotizacion({ facturacion: 'd60' }, hoy)).indexOf('facturacion') < 0 && 'facturacion' in Rules.validarCotizacion({}, hoy);
     }],
     ['Tasa de cierre excluye "ganó otro integrador" y las pausas', () => {
       const db = miniDb();
@@ -3652,7 +3677,7 @@ const SelfTest = (() => {
 const UI = (() => {
   const S = {
     user: null, db: null, ruta: null,
-    filtros: null, orden: { col: 'prox', dir: 1 },
+    filtros: null, orden: { col: 'fecCot', dir: -1 }, oppQuick: null,
     proy: { tipo: 'facturacion', vendedor: '', condicion: '' },
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
@@ -4062,6 +4087,14 @@ const UI = (() => {
   };
 
   /* ---------- Acciones rápidas de seguimiento ---------- */
+  /** Horizonte de facturación vigente de una oportunidad (solo si el vendedor lo eligió) y opciones del selector */
+  const factDe = o => o.fechaFacturaEst ? Rules.horizonte(o.fechaFacturaEst, hoy()) : '';
+  const factOpts = (sel, ph) => options(Config.HORIZONTES.map(h => [h.id, h.opcion]), sel, ph);
+  CHANGES['fact-est'] = async el => {
+    if (!el.value || !oppEditable(el.dataset.id)) return;
+    try { await Repo.actualizarOpp(el.dataset.id, { facturacion: el.value }, S.user.id); toast(`Facturación estimada: ${Config.HORIZONTES.find(h => h.id === el.value).opcion.toLowerCase()}.`); } catch (e) { toast(e.message); }
+    refresh();
+  };
   function oppEditable(id) {
     const o = oppById(id);
     if (!o || !Rules.puede(S.user, 'editar_opp', o)) { toast('Solo el vendedor asignado puede actualizar esta oportunidad.'); return null; }
@@ -4864,6 +4897,8 @@ const UI = (() => {
   /* =====================================================================
      8.3 OPORTUNIDADES — tabla equivalente al FUP, con filtros, orden y CSV
      ===================================================================== */
+  /** Fecha de la última cotización enviada en la oportunidad (las cotizaciones ya vienen ordenadas por fecha) */
+  const ultimaCot = o => { const qs = Rules.quotesOf(S.db, o); return qs.length ? qs[qs.length - 1].fechaEmision : o.fechaInicio; };
   function filasOpps() {
     const db = S.db, h = hoy(), F = S.filtros;
     const term = F.q.trim().toLowerCase();
@@ -4891,13 +4926,14 @@ const UI = (() => {
       rows.push({ o, q, c, p, cliente: c.razonSocial, proyecto: projName(p), marca: Rules.marcaPrincipal(q), items: Rules.resumenItems(q),
         monto: Rules.montoUSD(db, o), prob: o.etapa === 'pausa' ? -1 : Rules.prob(o.etapa), pond: Rules.ponderado(db, o), ult,
         dias: ult ? Util.diffDays(ult, h) : null, prox: o.proxContacto, fecFac, fact: Rules.horizonte(fecFac, h), vend: usr(o.vendedorId),
-        numero: q ? q.numero : '', alertas: Rules.alertasOpp(db, o, h) });
+        numero: q ? q.numero : '', fecCot: ultimaCot(o), alertas: Rules.alertasOpp(db, o, h) });
     });
     const { col, dir } = S.orden;
     const key = r => {
       switch (col) {
         case 'prox': return r.prox || (Rules.esAbierta(r.o) ? '0000' : '9999');
         case 'fact': return r.fecFac || '9999';
+        case 'fecCot': return r.fecCot || '';
         case 'vend': return r.vend.iniciales;
         case 'etapa': return r.prob;
         default: return r[col] == null ? -Infinity : r[col];
@@ -4914,7 +4950,16 @@ const UI = (() => {
     const proyectos = [...new Set(visibles.map(o => o.proyectoId))].map(proj).filter(p => p.tipo !== 'directa').sort((a, b) => a.nombre.localeCompare(b.nombre));
     const th = (col, label, cls) => `<th class="sortable ${cls || ''}" data-action="sort" data-col="${col}" aria-sort="${S.orden.col === col ? (S.orden.dir > 0 ? 'ascending' : 'descending') : 'none'}">${label}${S.orden.col === col ? (S.orden.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
     const etapaOpts = [['abiertas', 'Abiertas (funnel)'], ['todas', 'Todas'], ['cerradas', 'Cerradas y en pausa'], ...Config.ETAPAS.map(e => [e.id, e.nombre]), ...(visibles.some(o => o.verificar) ? [['verificar', 'A verificar por gerencia']] : [])];
-    const h = hoy();
+    const h = hoy(), ncol = jef ? 14 : 13;
+    /* Desplegable de la fila: etapa, facturación estimada y próximo contacto sin abrir la ficha */
+    const rapido = r => { const o = r.o, ab = Rules.esAbierta(o), ed = Rules.puede(S.user, 'editar_opp', o);
+      return `<tr class="opp-quick"><td colspan="${ncol}"><div class="opp-quick-in">
+        <label class="field">Etapa${ed && (ab || o.etapa === 'pausa') ? `<select data-change="etapa-rapida" data-id="${o.id}">${options([...Rules.ETAPAS_ABIERTAS.map(e => [e, `${Rules.etapa(e).nombre} (${Util.pct(Rules.prob(e))})`]), ['ganada', 'Ganada'], ['perdida', 'Perdida'], ['pausa', 'En pausa']], o.etapa)}</select>` : `<div class="v">${etapaHTML(o.etapa)}</div>`}</label>
+        <label class="field">Facturación estimada${ed && (ab || o.etapa === 'ganada') && !(o.postventa && o.postventa.facturado) ? `<select data-change="fact-est" data-id="${o.id}">${factOpts(factDe(o), 'Sin elegir…')}</select>` : `<div class="v">${r.fact ? Rules.horizonteNombre(r.fact) : '—'}</div>`}
+          <span class="field-hint">${r.fecFac ? 'Factura estimada ' + Util.fmtDate(r.fecFac) + (o.fechaFacturaEst ? '' : ' (OC + plazo; elige un horizonte)') : 'Sin fecha'}</span></label>
+        ${ed && ab ? `<label class="field">Próximo contacto<input type="date" data-change="prox" data-id="${o.id}" min="${h}" value="${o.proxContacto || ''}"></label>` : ''}
+        <div class="opp-quick-act"><span class="small muted">Ponderado ${money(r.pond)}</span><button class="btn sm" data-action="abrir" data-id="${o.id}">Abrir ficha</button></div>
+      </div></td></tr>`; };
     view().innerHTML = `
       <div class="page-head"><div><h1>Oportunidades</h1><p class="muted">${jef ? 'Todo el equipo' : 'Tus oportunidades'} · columnas equivalentes al FUP</p></div>
         <div class="btn-row">${S.user.rol === 'vendedor' ? `<a class="btn primary" href="#/nueva">${I('plus')} Nueva cotización</a>` : ''}<button class="btn" data-action="csv">${I('download')} Exportar vista a CSV</button></div></div>
@@ -4936,15 +4981,17 @@ const UI = (() => {
       </div>
       <div class="table-wrap" style="margin-top:12px;max-height:calc(100vh - 210px)">
         <table class="tbl" id="opp-table"><thead><tr>
-          ${jef ? th('vend', 'Vend.') : ''}${th('cliente', 'Cliente')}${th('proyecto', 'Proyecto')}${th('marca', 'Marca')}<th>Ítems</th>
+          <th style="width:34px"><span class="sr-only">Detalle</span></th>${jef ? th('vend', 'Vend.') : ''}${th('fecCot', 'Cotizada')}${th('cliente', 'Cliente')}${th('proyecto', 'Proyecto')}${th('marca', 'Marca')}<th>Ítems</th>
           ${th('monto', 'Monto USD', 'r')}${th('etapa', 'Prob. · Etapa')}${th('pond', 'Ponderado', 'r')}${th('ult', 'Últ. contacto')}${th('dias', 'Días', 'r')}${th('prox', 'Próx. contacto')}${th('fact', 'FACT')}
         </tr></thead><tbody>
         ${rows.map(r => {
           const al = r.alertas.find(a => a.tipo === 'atrasado' || a.tipo === 'sin_proximo');
           const proxCell = r.prox ? `<span class="${r.prox < h ? 'chip ' + (al && al.escalado ? 'bad' : 'warn') : r.prox === h ? 'chip info' : ''}">${Util.fmtDate(r.prox)}</span>` :
             (Rules.esAbierta(r.o) ? '<span class="chip bad">Sin definir</span>' : '<span class="muted">—</span>');
-          return `<tr class="clickable" data-action="abrir" data-id="${r.o.id}" tabindex="0">
-            ${jef ? `<td>${vendTag(r.vend)}</td>` : ''}
+          const abierto = S.oppQuick === r.o.id;
+          return `<tr class="clickable${abierto ? ' quick-open' : ''}" data-action="abrir" data-id="${r.o.id}" tabindex="0">
+            <td><button type="button" class="btn sm ghost quick-btn" data-action="opp-quick" data-id="${r.o.id}" aria-expanded="${abierto}" title="Etapa y facturación estimada">${abierto ? '▾' : '▸'}</button></td>
+            ${jef ? `<td>${vendTag(r.vend)}</td>` : ''}<td class="nowrap">${Util.fmtDate(r.fecCot)}</td>
             <td class="c-w"><div class="cell-main">${E(r.cliente)} ${segHTML(r.c.id)}</div><div class="cell-sub">${E(r.numero)}${r.o.pendiente ? ' · <span class="chip warn">Por completar</span>' : ''}</div></td>
             <td class="c-w"><div>${E(r.proyecto)}</div><div class="cell-sub">${E(r.p.tipo === 'directa' ? '' : r.p.usuarioFinal)}</div></td>
             <td class="nowrap">${E(r.marca)}</td><td class="small">${E(r.items)}</td>
@@ -4954,9 +5001,18 @@ const UI = (() => {
             <td class="nowrap">${Util.fmtDate(r.ult)}</td><td class="r num">${r.dias == null ? '—' : r.dias}</td>
             <td class="nowrap">${proxCell}</td>
             <td class="nowrap">${r.fact ? `<span title="Factura estimada ${Util.fmtDate(r.fecFac)}">${Config.HORIZONTES.find(x => x.id === r.fact).fact} · ${Rules.horizonteNombre(r.fact)}</span>` : '<span class="muted">—</span>'}</td>
-          </tr>`; }).join('') || `<tr><td colspan="13" class="center muted" style="padding:24px">No hay oportunidades con estos filtros.</td></tr>`}
+          </tr>${abierto ? rapido(r) : ''}`; }).join('') || `<tr><td colspan="${ncol}" class="center muted" style="padding:24px">No hay oportunidades con estos filtros.</td></tr>`}
         </tbody></table></div>
-      <p class="small muted">FACT: 0 = este mes · 1 = 30 días · 2 = 60 días · 3 = 90 días · 4 = 120 días (más de 90). Se calcula con la fecha estimada de OC + plazo de entrega; ya no se escribe a mano.</p>`;
+      <p class="small muted">FACT: 0 = este mes · 1 = 30 días · 2 = 60 días · 3 = 90 días · 4 = 120 días a más. Lo elige el vendedor al cotizar o con ▸ en cada fila (dato interno, no sale en el PDF); si no lo eligió, se estima con la fecha de OC + plazo de entrega. Orden por defecto: de la cotización más reciente a la más antigua.</p>`;
+  };
+  ACTIONS['opp-quick'] = el => { S.oppQuick = S.oppQuick === el.dataset.id ? null : el.dataset.id; refresh(); };
+  /* Cambio rápido de etapa: entre etapas abiertas se guarda directo (conserva próximo contacto y OC); ganada, perdida o pausa piden sus datos */
+  CHANGES['etapa-rapida'] = async el => {
+    const o = oppEditable(el.dataset.id), nueva = el.value; if (!o || nueva === o.etapa) return;
+    const prox = o.proxContacto && o.proxContacto >= hoy() ? o.proxContacto : null;
+    if (!Rules.etapa(nueva).abierta || o.etapa === 'pausa' || !prox) { el.value = o.etapa; abrirCambioEtapa(o.id, nueva); return; }
+    try { await Repo.cambiarEtapa(o.id, nueva, { proxContacto: prox, fechaOC: o.fechaOC, nota: '' }, S.user.id); toast(`Etapa: ${Rules.etapa(nueva).nombre}.`); } catch (e) { toast(e.message); }
+    refresh();
   };
   filtro('f', () => S.filtros);
   ACTIONS['sort'] = el => { const c = el.dataset.col; S.orden = { col: c, dir: S.orden.col === c ? -S.orden.dir : 1 }; render(true); };
@@ -5039,7 +5095,9 @@ const UI = (() => {
           <div class="fact"><div class="l">Ponderado</div><div class="v">${money(Rules.ponderado(db, o))}</div></div>
           <div class="fact"><div class="l">Próximo contacto ${abierta && !o.proxContacto ? '<span class="chip bad">Falta</span>' : ''}</div>${proxCampo}</div>
           <div class="fact"><div class="l">Fecha estimada de OC</div>${ocCampo}</div>
-          <div class="fact"><div class="l">Factura estimada</div><div class="v">${o.postventa && o.postventa.facturado ? 'Facturada ' + Util.fmtDate(fecFac) : fecFac && (abierta || o.etapa === 'ganada') ? Util.fmtDate(fecFac) + ' · ' + Rules.horizonteNombre(Rules.horizonte(fecFac, h)) : '—'}</div></div>
+          <div class="fact"><div class="l">Factura estimada</div>${ed && (abierta || o.etapa === 'ganada') && !(o.postventa && o.postventa.facturado)
+            ? `<select data-change="fact-est" data-id="${o.id}" aria-label="Facturación estimada">${factOpts(factDe(o), 'Sin elegir…')}</select><div class="small muted">${fecFac ? Util.fmtDate(fecFac) + (o.fechaFacturaEst ? '' : ' · OC + plazo') : ''}</div>`
+            : `<div class="v">${o.postventa && o.postventa.facturado ? 'Facturada ' + Util.fmtDate(fecFac) : fecFac && (abierta || o.etapa === 'ganada') ? Util.fmtDate(fecFac) + ' · ' + Rules.horizonteNombre(Rules.horizonte(fecFac, h)) : '—'}</div>`}</div>
           <div class="fact"><div class="l">Último contacto</div><div class="v">${Util.fmtDate(ult)}${ult ? ` <span class="small muted">(${Util.diffDays(ult, h)} días)</span>` : ''}</div></div>
         </div>
         ${quick}
@@ -5291,7 +5349,7 @@ const UI = (() => {
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
       condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
-      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', referencia: '', numAuto: false };
+      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
     if (S.db.numeracion) return Rules.numeroAM(S.db, u, hoy());
@@ -5563,6 +5621,7 @@ const UI = (() => {
           <span class="field-hint">${E(Rules.etapa(d.etapa).criterio)}</span><span id="nq-grande">${grandeHTML(d, usd)}</span></label>
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" data-nq="proxContacto" min="${hoy()}" value="${d.proxContacto}"><span class="field-hint">Sugerido: 3 días hábiles (${Util.fmtDate(Util.addBizDays(hoy(), 3))}).</span></label>
         <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" data-nq="fechaOC" min="${hoy()}" value="${d.fechaOC}"><span class="field-hint">La eliges tú; no tiene valor por defecto.</span></label>
+        <label class="field"><span>Facturación estimada <span class="req">*</span></span><select name="facturacion" data-nq="facturacion">${factOpts(d.facturacion, 'Elige…')}</select><span class="field-hint">Dato interno para la proyección: no sale en el PDF.</span></label>
       </div>`)}
       <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-action="nq-cancelar">Cancelar</button>
         ${plat ? `<button type="button" class="btn" data-action="nq-preview">${I('file')} Vista previa PDF</button>` : ''}
@@ -5717,7 +5776,7 @@ const UI = (() => {
       validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', distrito: q.clienteDistrito || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
       contactoCorreo: q.contactoCorreo || '', contactoTelefono: q.contactoTelefono || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
-      fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', numAuto: true });
+      fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', facturacion: factDe(o), numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
     go('nueva');
   };
@@ -5730,7 +5789,7 @@ const UI = (() => {
       validezDias: d.validezDias, plazo: d.plazo, items: d.items, descuento: d.descuento, descuentoTipo: d.descuentoTipo, descuentoPct: d.descuentoPct,
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
-      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
+      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, facturacion: d.facturacion, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
       contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', distrito: d.distrito || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', referencia: d.referencia || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
