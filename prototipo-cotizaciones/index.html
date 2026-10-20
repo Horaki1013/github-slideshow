@@ -258,7 +258,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .step input{min-height:32px;padding:4px 6px;font-size:12px}
 
 /* Modal y toast */
-.modal-back{position:fixed;inset:0;background:rgba(15,23,33,.48);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal-back{position:fixed;inset:0;background:rgba(15,23,33,.48);z-index:115;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal{background:var(--surface);border-radius:12px;box-shadow:var(--shadow-lg);width:min(560px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column}
 .modal.wide{width:min(820px,100%)}
 .modal > header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px}
@@ -399,6 +399,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 tr.quick-open>td{border-bottom:0}
 .quick-btn{min-width:28px;padding:2px 6px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.cc-box{margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.cc-box h3{margin:0 0 6px;font-size:14px}
+.cc-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .excel-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2,transparent)}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
@@ -3922,9 +3925,32 @@ const UI = (() => {
     closePopover();
     const u = S.user, f = (n, l, t) => `<label class="field">${l}<input type="${t || 'text'}" name="${n}" value="${E(u[n] || '')}"></label>`;
     modal({ title: 'Mis datos', body: `<p class="small muted" style="margin-top:0">Salen en el PDF de tus cotizaciones ("Emitido por"). Tu rol, meta e iniciales los cambia gerencia o administración.</p>
-      <div class="form-grid">${f('telefono', 'Teléfono', 'tel')}${f('correo', 'Correo', 'email')}${f('cargo', 'Cargo')}</div>`,
-      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { await Repo.guardarMisDatos(u.id, { telefono: val(root, 'telefono'), correo: val(root, 'correo'), cargo: val(root, 'cargo') }); S.user = Repo.sesion(u.id); toast('Tus datos se actualizaron.'); render(true); } }] });
+      <div class="form-grid">${f('telefono', 'Teléfono', 'tel')}${f('correo', 'Correo', 'email')}${f('cargo', 'Cargo')}</div>
+      ${u.rol === 'vendedor' ? `<section class="cc-box"><h3>Carpeta de cotizaciones</h3>
+        ${CarpetaCot.soportado() ? `<p class="small muted" style="margin:0 0 8px">Elige una carpeta de tu PC una sola vez: cada cotización que registres se guarda ahí sola, como <em>N° de cotización - Cliente.pdf</em>, y también se copia el PDF de las cotizaciones ya enviadas que registres. Nunca se sobrescribe un archivo.</p>
+          <div class="cc-row"><span id="cc-estado" class="small">Revisando…</span><button type="button" class="btn sm" data-cc="elegir">Elegir carpeta…</button><button type="button" class="btn sm ghost hidden" data-cc="quitar">Dejar de usar</button></div>
+          <label class="field" style="margin-top:8px">Subcarpetas<select data-cc="sub">${options([['ninguna', 'Ninguna (todo en la carpeta elegida)'], ['mes', 'Por año-mes (2026-10)'], ['cliente', 'Por cliente']], 'ninguna')}</select></label>
+          <p class="small muted" style="margin:8px 0 0">${I('alert').replace('<svg', '<svg width="12" height="12"')} Si eliges una carpeta dentro de tu carpeta de <strong>OneDrive</strong> (sincronizada en tu PC), los PDF quedan respaldados en OneDrive automáticamente.</p>`
+        : '<p class="small" style="margin:0">Tu navegador no permite guardar en una carpeta elegida: los PDF se descargan como siempre. Para usar esta opción, abre la plataforma en <strong>Chrome</strong> o <strong>Edge</strong>.</p>'}</section>` : ''}`,
+      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { await Repo.guardarMisDatos(u.id, { telefono: val(root, 'telefono'), correo: val(root, 'correo'), cargo: val(root, 'cargo') }); S.user = Repo.sesion(u.id); toast('Tus datos se actualizaron.'); render(true); } }],
+      onOpen: root => { if (u.rol === 'vendedor' && CarpetaCot.soportado()) configCarpeta(root); } });
   };
+  /** Mis datos → Carpeta de cotizaciones: se aplica al momento (no depende del botón Guardar) */
+  async function configCarpeta(root) {
+    const est = root.querySelector('#cc-estado'), quitar = root.querySelector('[data-cc="quitar"]'), sub = root.querySelector('[data-cc="sub"]');
+    const pintar = async () => {
+      const c = await CarpetaCot.config();
+      est.innerHTML = c ? `Guardando en <strong>${E(c.nombre)}</strong>${(await CarpetaCot.permiso(c.h, false)) ? '' : ' · <span style="color:var(--warn)">el navegador pedirá confirmar el permiso</span>'}` : '<span class="muted">Sin carpeta: los PDF se descargan.</span>';
+      quitar.classList.toggle('hidden', !c); sub.disabled = !c; sub.value = (c && c.sub) || 'ninguna';
+    };
+    root.querySelector('[data-cc="elegir"]').addEventListener('click', async () => {
+      try { const c = await CarpetaCot.elegir(); toast(`Carpeta elegida: ${c.nombre}.`); } catch (e) { if (e.name !== 'AbortError') toast('No se pudo usar esa carpeta: ' + e.message); }
+      pintar();
+    });
+    quitar.addEventListener('click', async () => { await CarpetaCot.borrar(); toast('Los PDF volverán a descargarse.'); pintar(); });
+    sub.addEventListener('change', async () => { const c = await CarpetaCot.config(); if (c) { c.sub = sub.value; await CarpetaCot.guardarConfig(c); toast('Subcarpetas actualizadas.'); } });
+    pintar();
+  }
   function abrirCambioClave(obligatorio) {
     modal({
       title: obligatorio ? 'Crea tu contraseña personal' : 'Cambiar contraseña',
@@ -4480,11 +4506,74 @@ const UI = (() => {
     for (let i = 0; i < total; i++) doc.enPagina(i).texto(total > 1 ? `${i + 1} de ${total}` : '1', R, doc.H - 28, { t: 6.5, color: GRIS, align: 'right' });
     return doc.guardar();
   }
-  async function descargarPDFCotizacion(ctx) {
-    Util.descargar(await pdfCotizacion(ctx), `COT_${String(ctx.q.numero || 'cotizacion').replace(/[\\/:*?"<>|]+/g, '-')}.pdf`);
+  /* ---------- Carpeta de cotizaciones del vendedor (Chrome y Edge): los PDF se guardan solos en una carpeta de su PC ----------
+     El acceso a la carpeta se recuerda en este navegador, por usuario. En la versión final puede reemplazarse por OneDrive (Microsoft Graph). */
+  const CarpetaCot = (() => {
+    const clave = () => 'carpeta-cot:' + S.user.id;
+    const soportado = () => typeof window.showDirectoryPicker === 'function' && Almacen.disponible();
+    async function config() { if (!S.user || !soportado()) return null; try { return await Almacen.leer(clave()); } catch (e) { return null; } }
+    const guardarConfig = c => Almacen.escribir(clave(), c);
+    async function elegir() {
+      const h = await window.showDirectoryPicker({ id: 'cotizaciones', mode: 'readwrite' }), c = Object.assign((await config()) || { sub: 'ninguna' }, { h, nombre: h.name });
+      await guardarConfig(c); return c;
+    }
+    async function permiso(h, pedir) {
+      const o = { mode: 'readwrite' };
+      if ((await h.queryPermission(o)) === 'granted') return true;
+      if (!pedir) return false;
+      try { return (await h.requestPermission(o)) === 'granted'; } catch (e) { return false; }   // sin un clic reciente el navegador no deja preguntar
+    }
+    /** Nombre válido en Windows: sin \ / : * ? " < > | ni caracteres de control, sin punto o espacio al final */
+    const limpiar = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').replace(/^[\s.]+|[\s.]+$/g, '').slice(0, 120) || 'sin nombre';
+    const archivoDe = async (dir, n) => { try { return await (await dir.getFileHandle(n)).getFile(); } catch (e) { return null; } };
+    /** Guarda sin sobrescribir nunca: si el nombre existe con otro contenido, agrega (2), (3)…; si es el mismo archivo, no lo duplica */
+    async function guardar(blob, q, cliente, pedir) {
+      const c = await config(); if (!c || !c.h) return null;
+      if (!(await permiso(c.h, pedir))) { const e = new Error('Falta confirmar el permiso de la carpeta.'); e.permiso = true; throw e; }
+      const sub = c.sub === 'mes' ? String(q.fechaEmision || Util.today()).slice(0, 7) : c.sub === 'cliente' && cliente ? limpiar(cliente.razonSocial) : '';
+      const dir = sub ? await c.h.getDirectoryHandle(sub, { create: true }) : c.h;
+      const base = limpiar(`${q.numero || 'cotizacion'} - ${cliente ? cliente.razonSocial : 'cliente'}`), ruta = n => [c.nombre, sub, n].filter(Boolean).join('/');
+      for (let i = 1; ; i++) {
+        const n = i === 1 ? base + '.pdf' : `${base} (${i}).pdf`, f = await archivoDe(dir, n);
+        if (f && f.size === blob.size) return { ruta: ruta(n), ya: true };
+        if (f) continue;
+        const w = await (await dir.getFileHandle(n, { create: true })).createWritable();
+        await w.write(blob); await w.close();
+        return { ruta: ruta(n) };
+      }
+    }
+    return { soportado, config, elegir, permiso, guardar, guardarConfig, borrar: () => Almacen.borrar(clave()) };
+  })();
+  const AVISO_CARPETA = 'Para que tus PDF se guarden solos, elige tu carpeta de cotizaciones en "Mis datos" (menú de tu nombre, arriba a la derecha; Chrome o Edge).';
+  /** Guarda un PDF en la carpeta del vendedor. Devuelve true si quedó en la carpeta (o se pidió permiso con un aviso) y false si no hay carpeta */
+  async function guardarEnCarpeta(blob, q, cliente) {
+    try {
+      const r = await CarpetaCot.guardar(blob, q, cliente, true);
+      if (!r) return false;
+      toast(r.ya ? `Ya estaba en tu carpeta: ${r.ruta}` : `PDF guardado en tu carpeta: ${r.ruta}`);
+      return true;
+    } catch (e) {
+      if (!e.permiso) { toast('No se pudo guardar en tu carpeta (' + e.message + ').'); return false; }
+      const c = await CarpetaCot.config();
+      modal({ title: 'Confirma el acceso a tu carpeta', body: `<p style="margin-top:0">El navegador pide confirmar que la plataforma puede guardar en <strong>${E(c.nombre)}</strong> (suele pedirlo al abrirlo de nuevo).</p><p class="small muted">Pulsa <strong>Permitir y guardar</strong> y, en el aviso del navegador, elige "Permitir" (o "Permitir siempre").</p>`,
+        actions: [{ label: 'Ahora no' }, { label: `${I('check')} Permitir y guardar`, cls: 'primary', onClick: async () => {
+          if (!(await CarpetaCot.permiso(c.h, true))) { toast('Sin permiso: el PDF no se guardó en la carpeta. Puedes descargarlo con "Descargar PDF".'); return; }
+          const r = await CarpetaCot.guardar(blob, q, cliente, false);
+          toast(r.ya ? `Ya estaba en tu carpeta: ${r.ruta}` : `PDF guardado en tu carpeta: ${r.ruta}`);
+        } }] });
+      return true;
+    }
+  }
+  /** Cotización recién registrada en la plataforma: su PDF se guarda solo en la carpeta del vendedor */
+  async function guardarCotizacionRegistrada(quoteId) {
+    S.db = await Repo.snapshot();
+    const q = S.db.quotes.find(x => x.id === quoteId), o = q && oppById(q.oppId);
+    if (!o) return;
+    const cliente = cli(o.clienteId);
+    if (!(await guardarEnCarpeta(await pdfCotizacion({ q, cliente, contacto: q.contacto, proyecto: proj(o.proyectoId), vendedor: usr(o.vendedorId) }), q, cliente))) toast(AVISO_CARPETA, { ms: 7000 });
   }
   function mostrarPDF(ctx, borrador) {
-    S.pdf = ctx;
+    S.pdf = ctx; S.pdfBorrador = !!borrador;
     $('#print-root').innerHTML = `<div class="pdf-back" role="dialog" aria-modal="true" aria-label="Cotización en PDF">
       <div class="pdf-toolbar"><span class="sim-label">${borrador ? 'Vista previa · aún no registrada' : 'PDF generado por la plataforma'}</span>
         <button class="btn primary" data-action="pdf-descargar">${I('download')} Descargar PDF</button>
@@ -4494,7 +4583,16 @@ const UI = (() => {
   }
   const mostrarPDFCotizacion = q => { const o = oppById(q.oppId); mostrarPDF({ q, cliente: cli(o.clienteId), contacto: q.contacto, proyecto: proj(o.proyectoId), vendedor: usr(o.vendedorId) }, false); };
   ACTIONS['ver-pdf'] = el => mostrarPDFCotizacion(S.db.quotes.find(x => x.id === el.dataset.q));
-  ACTIONS['pdf-descargar'] = async () => { if (!S.pdf) return; try { await descargarPDFCotizacion(S.pdf); toast('PDF descargado.'); } catch (e) { toast('No se pudo generar el PDF: ' + e.message); } };
+  ACTIONS['pdf-descargar'] = async () => {
+    if (!S.pdf) return;
+    const vend = !S.pdfBorrador && S.user.rol === 'vendedor';
+    try {
+      const blob = await pdfCotizacion(S.pdf);
+      if (vend && (await guardarEnCarpeta(blob, S.pdf.q, S.pdf.cliente))) return;
+      Util.descargar(blob, `COT_${String(S.pdf.q.numero || 'cotizacion').replace(/[\\/:*?"<>|]+/g, '-')}.pdf`);
+      toast(vend ? 'PDF descargado. ' + (CarpetaCot.soportado() ? AVISO_CARPETA : 'Con Chrome o Edge puedes elegir una carpeta para que se guarden solos.') : 'PDF descargado.', { ms: vend ? 7000 : 5000 });
+    } catch (e) { toast('No se pudo generar el PDF: ' + e.message); }
+  };
   ACTIONS['pdf-close'] = () => { $('#print-root').innerHTML = ''; S.pdf = null; };
   ACTIONS['pdf-enviar'] = () => toast(`Simulación: se enviaría a ${S.pdf && S.pdf.contacto ? S.pdf.contacto : 'el contacto'} desde tu Outlook, con copia al buzón común de ventas.`);
 
@@ -5481,7 +5579,7 @@ const UI = (() => {
   function leerPDFs(files) { S.nueva.cola = files.slice(1); S.nueva.total = files.length; S.nueva.hechos = 0; leerArchivo(files[0]); }
   async function leerArchivo(file) {
     const N = S.nueva;
-    Object.assign(N, { fase: 'leyendo', archivo: file.name, error: '', errorArchivo: '', lectura: null });
+    Object.assign(N, { fase: 'leyendo', archivo: file.name, file, error: '', errorArchivo: '', lectura: null });
     render(true);
     try {
       const pags = await LectorPDF.leer(await file.arrayBuffer());
@@ -5795,9 +5893,11 @@ const UI = (() => {
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
     try {
       const r = await Repo.registrarCotizacion(p, S.user.id);
+      const original = N.tab === 'pdf' && !N.manual && N.file;   // PDF ya enviado: se copia a la carpeta del vendedor
+      if (original) { S.db = await Repo.snapshot(); const q = S.db.quotes.find(x => x.id === r.quoteId), o = oppById(r.oppId); guardarEnCarpeta(original, q, cli(o.clienteId)); }
       if (N.cola && N.cola.length) { toast(`Cotización ${p.numero} registrada. Sigue el siguiente PDF.`); siguienteDeCola(); return; }
       S.nueva = null;
-      if (p.origen === 'plataforma') S.pdfPendiente = r.quoteId;
+      if (p.origen === 'plataforma') { S.pdfPendiente = r.quoteId; guardarCotizacionRegistrada(r.quoteId); }
       toast(p.origen === 'plataforma' ? 'Cotización registrada y PDF generado.' : p.modo === 'revision' ? 'Revisión registrada y marcada como vigente.' : p.modo === 'alternativa' ? 'Alternativa registrada en la oportunidad.' : 'Cotización registrada. Ya está en tu seguimiento.');
       go('op/' + r.oppId);
     } catch (e) {

@@ -201,6 +201,28 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
 - **Orden por defecto:** de la cotización más reciente a la más antigua (columna "Cotizada"). Se puede reordenar por cualquier columna, como antes.
 - **Desplegable por fila (▸):** etapa, facturación estimada y próximo contacto, sin abrir la ficha. Entre etapas abiertas el cambio se guarda directo (conserva el próximo contacto y la OC). Ganada, perdida o en pausa abren su formulario de cierre. Solo el vendedor dueño edita; gerencia ve los datos.
 
+## Carpeta de cotizaciones del vendedor
+
+Cada vendedor puede elegir, una sola vez, una carpeta de su PC donde se guardan sus cotizaciones (`CarpetaCot`, con la API de acceso a archivos `showDirectoryPicker`, en Chrome y Edge). Se configura en **Mis datos → Carpeta de cotizaciones**.
+
+- **Qué se guarda:**
+  - Al registrar una cotización en la plataforma, su PDF se guarda solo, sin diálogo de descarga.
+  - Al registrar un PDF ya enviado, se copia el archivo original.
+  - "Descargar PDF" también guarda en la carpeta.
+- **Nombre:** `N° de cotización - Cliente.pdf`, sin caracteres inválidos en Windows.
+  - Subcarpetas opcionales: ninguna (por defecto), por año-mes o por cliente.
+  - **Nunca sobrescribe.** Las revisiones tienen su propio número (`-R1`, `-R2`). Si ya existe un archivo con otro contenido, se guarda como "… (2).pdf". Si es el mismo archivo, no se duplica.
+- **Permiso:** la referencia a la carpeta se recuerda en el navegador de esa PC, por usuario (IndexedDB). Si el navegador vuelve a pedir permiso, aparece un aviso con el botón **Permitir y guardar**.
+- **Sin soporte** (Firefox, Safari) **o sin carpeta elegida:** el PDF se descarga como antes, con un mensaje que explica cómo configurarla.
+- **OneDrive:** si la carpeta elegida está dentro de la carpeta sincronizada de OneDrive, los PDF quedan respaldados automáticamente.
+- Es personal: no hay una carpeta común. Las demás áreas consultan y descargan las cotizaciones desde el visor.
+
+**Para la versión final (preparado, no implementado): guardar directamente en OneDrive con Microsoft Graph.**
+1. Registrar la aplicación en **Microsoft Entra ID** (App registrations): tipo SPA, con la URL de la plataforma como redirect URI.
+2. Permiso delegado **`Files.ReadWrite`** de Microsoft Graph, y `offline_access` para mantener la sesión. Consentimiento del administrador del tenant si la política lo exige.
+3. Inicio de sesión con MSAL.js y subida con `PUT /me/drive/root:/Cotizaciones/{subcarpeta}/{archivo}.pdf:/content` (o una sesión de carga para archivos de más de 4 MB). Usar `@microsoft.graph.conflictBehavior=rename` para no sobrescribir.
+4. En el código basta reemplazar `CarpetaCot.guardar` por la subida a Graph: el nombre del archivo, las subcarpetas y la regla de no sobrescribir ya están resueltos.
+
 ## Visor de cotizaciones (áreas de post-venta)
 
 Finanzas, logística/soporte y administración tienen la pantalla **Cotizaciones**: todas las cotizaciones de los vendedores, **solo lectura**.
