@@ -201,6 +201,46 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
 - **Orden por defecto:** de la cotización más reciente a la más antigua (columna "Cotizada"). Se puede reordenar por cualquier columna, como antes.
 - **Desplegable por fila (▸):** etapa, facturación estimada y próximo contacto, sin abrir la ficha. Entre etapas abiertas el cambio se guarda directo (conserva el próximo contacto y la OC). Ganada, perdida o en pausa abren su formulario de cierre. Solo el vendedor dueño edita; gerencia ve los datos.
 
+## Leads y origen de las oportunidades
+
+Un **lead** es una consulta que todavía no es oportunidad. Toda oportunidad nueva tiene un **origen**.
+
+**Orígenes** (lista cerrada en `Config.ORIGENES`; jefatura puede renombrarlos, desactivarlos o agregar otros en "Orígenes y reglas"):
+- HubSpot · formulario web de ventas, HubSpot · chat de anuncios web, HubSpot · chatbot de la web, Facebook (vía HubSpot) y LinkedIn (vía HubSpot).
+- Lead de fabricante, con la **marca** obligatoria.
+- Cliente existente, Prospección del vendedor, Referido y Otro (con **texto** obligatorio).
+
+**Bandeja de leads** (menú de jefatura; los vendedores ven "Mis leads"):
+- **Campos:** llegada (fecha y hora), origen, marca, empresa, RUC, contacto, correo, teléfono, producto o necesidad, mensaje original, vendedor y estado.
+- **Estados:** nuevo → asignado → contactado → convertido en oportunidad, o descartado con motivo de lista (duplicado, spam, sin perfil, fuera de zona, solo información, otro).
+- **Asignación:** la hace jefatura. La bandeja **sugiere** (★) al vendedor que ya tiene la empresa en su cartera: por RUC, por el dominio del correo (excepto gmail, hotmail y similares) o por razón social (`Rules.sugerirVendedor`). Se puede reasignar.
+- **Vendedor:** recibe la notificación en la campana, registra el primer contacto y pulsa **Cotizar**. Se abre Nueva cotización con la empresa y el contacto del lead; al registrarla, el lead pasa a "Convertido" y su origen queda en la oportunidad.
+- **Historial:** cada cambio (registro, asignación, reasignación, contacto, descarte, conversión, correcciones) queda en el lead con fecha, hora y usuario. Los cambios de orígenes y reglas, en `configLog`; el origen de una oportunidad, en su historial.
+
+**Cómo entran los leads:**
+- **Registro manual** (formulario).
+- **Pegar un correo de fabricante** (`Rules.clasificarCorreo`): con el remitente, el asunto y el cuerpo reconoce la marca por el dominio del remitente (también subdominios y extensiones de país: `us.moxa.com`, `moxa.com.tw`). Si el correo fue reenviado, la reconoce por el nombre de la marca junto con una palabra clave (lead, opportunity, referral, inquiry, RFQ, deal registration). Prellena empresa, contacto, correo, teléfono, producto y RUC.
+  - Dominios por defecto (a confirmar con correos reales y editables por jefatura): moxa.com, advantech.com, zenitel.com, blackbox.com, inhandnetworks.com, tosibox.com, pulspower.com, absopulse.com, transcend-info.com, hms-networks.com, anybus.com, teracomsystems.com, winmate.com, yaskawa.com.
+- **Importación de un CSV o Excel exportado de HubSpot:**
+  - Mapeo de columnas, que reconoce solo los nombres habituales (Create Date, First Name, Last Name, Email, Phone Number, Company Name, Original Source, Message).
+  - La fuente de HubSpot se traduce a origen (Facebook, LinkedIn, chatbot, anuncios, formulario); si no se reconoce, se usa el origen elegido para el archivo.
+  - Vista previa y **detección de duplicados**: mismo correo (o, sin correo, misma empresa y contacto) que un lead existente o que una fila anterior. No se importan, salvo que se pida.
+
+**Origen en las oportunidades:**
+- En Nueva cotización es obligatorio **solo al crear una oportunidad** (no en revisiones ni alternativas). Desde un lead se completa solo. Es dato interno: no sale en el PDF.
+- Las oportunidades anteriores aparecen como "Sin origen" y se completan desde su ficha (vendedor dueño o jefatura).
+- El CSV de Oportunidades incluye la columna Origen.
+
+**Indicadores** (sección nueva al final del Dashboard, últimos 6 meses, con el filtro de vendedor del Dashboard; `Rules.indicadoresLeads`):
+- Leads por origen y por mes, con el detalle por marca de los leads de fabricante.
+- Conversión por origen: leads, convertidos, lead → oportunidad, oportunidades (incluidas las creadas sin lead), ganadas, tasa de cierre, monto de oportunidades, monto ganado y facturado.
+- Por vendedor: leads asignados por origen, tiempo promedio de la llegada a la asignación y de la asignación al primer contacto, leads sin atender y convertidos.
+- **Leads sin atender por más de 48 horas hábiles:** alerta en el Dashboard y en la campana de jefatura. "Horas hábiles" cuenta solo días hábiles (lunes a viernes, sin feriados de Perú), 24 horas por día: 48 h hábiles = 2 días hábiles desde la llegada sin primer contacto.
+
+**Para la versión final (documentado, no implementado):**
+- **HubSpot:** una app privada con el permiso `crm.objects.contacts.read` (y `crm.objects.deals.read` si se usan negocios). Un webhook o una consulta periódica (`/crm/v3/objects/contacts` filtrando por fecha de creación) crea el lead con el mismo mapeo y la misma detección de duplicados que la importación.
+- **Buzón de leads de fabricantes:** leer el buzón con Microsoft Graph (`Mail.Read`, suscripción a cambios del buzón) o con un flujo de n8n, y aplicar `clasificarCorreo` con las mismas reglas editables. Los correos clasificados entran a la bandeja como "nuevo" para que jefatura los asigne.
+
 ## Carpeta de cotizaciones del vendedor
 
 Cada vendedor puede elegir, una sola vez, una carpeta de su PC donde se guardan sus cotizaciones (`CarpetaCot`, con la API de acceso a archivos `showDirectoryPicker`, en Chrome y Edge). Se configura en **Mis datos → Carpeta de cotizaciones**.

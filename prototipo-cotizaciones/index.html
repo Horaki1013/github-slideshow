@@ -402,6 +402,14 @@ tr.quick-open>td{border-bottom:0}
 .cc-box{margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
 .cc-box h3{margin:0 0 6px;font-size:14px}
 .cc-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.lead-kpis{display:flex;gap:8px;flex-wrap:wrap}
+.lead-kpi{display:flex;gap:8px;align-items:center;border:1px solid var(--border);background:var(--surface);border-radius:10px;padding:8px 12px;cursor:pointer;font:inherit;color:var(--text)}
+.lead-kpi.act{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.lead-msg{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:240px;overflow:auto;margin:0}
+.imp-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.dash-h3{font-size:14px;margin:16px 0 6px}
+.tbl tr.sub-row td{color:var(--text-2);padding-top:3px;padding-bottom:3px}
+.tbl tr.tot td{font-weight:700;border-top:2px solid var(--border-2)}
 .excel-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2,transparent)}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
@@ -595,7 +603,37 @@ const Config = {
   MARCA_ALIAS: { 'MOXA': 'Moxa', 'ADVANTECH': 'Advantech', 'BLACKBOX': 'Black Box', 'BLACK BOX': 'Black Box', 'ZENITEL': 'Zenitel', 'HMS': 'HMS/Anybus',
     'HMS/ANYBUS': 'HMS/Anybus', 'ANYBUS': 'HMS/Anybus', 'INHAND': 'InHand', 'TOSIBOX': 'Tosibox', 'PULS': 'Puls', 'REIGN POWER': 'Reign Power', 'ATEN': 'ATEN',
     'MICROHARD': 'Microhard', 'MEAN WELL': 'Mean Well', 'ABSOPULSE': 'Absopulse', 'WINMATE': 'Winmate', 'TRANSCEND': 'Transcend' },
-  MARCAS: ['Moxa','Advantech','Black Box','Zenitel','Puls','InHand','Tosibox','HMS/Anybus','Mean Well','Absopulse','Winmate','Transcend'],
+  MARCAS: ['Moxa','Advantech','Black Box','Zenitel','Puls','InHand','Tosibox','HMS/Anybus','Mean Well','Absopulse','Winmate','Transcend','Teracom','Yaskawa'],
+
+  // Origen de leads y oportunidades: lista cerrada (jefatura puede renombrar, desactivar o agregar). "marca" y "texto" piden un subcampo obligatorio
+  ORIGENES: [
+    { id:'hs_form',     nombre:'HubSpot · formulario web de ventas' },
+    { id:'hs_ads',      nombre:'HubSpot · chat de anuncios web' },
+    { id:'hs_bot',      nombre:'HubSpot · chatbot de la web' },
+    { id:'facebook',    nombre:'Facebook (vía HubSpot)' },
+    { id:'linkedin',    nombre:'LinkedIn (vía HubSpot)' },
+    { id:'fabricante',  nombre:'Lead de fabricante', marca:true },
+    { id:'cliente',     nombre:'Cliente existente' },
+    { id:'prospeccion', nombre:'Prospección del vendedor' },
+    { id:'referido',    nombre:'Referido' },
+    { id:'otro',        nombre:'Otro', texto:true },
+  ],
+  ESTADOS_LEAD: {
+    nuevo:      { nombre:'Nuevo',      cls:'info' },
+    asignado:   { nombre:'Asignado',   cls:'warn' },
+    contactado: { nombre:'Contactado', cls:'' },
+    convertido: { nombre:'Convertido', cls:'ok' },
+    descartado: { nombre:'Descartado', cls:'' },
+  },
+  MOTIVOS_DESCARTE: [['duplicado','Duplicado'], ['spam','Spam'], ['sin_perfil','Sin perfil'], ['fuera_zona','Fuera de zona'], ['solo_info','Solo información'], ['otro','Otro']],
+  LEAD_SIN_ATENDER_H: 48,             // horas hábiles (solo días hábiles) sin primer contacto → alerta a jefatura
+  // Correos de fabricante: dominio del remitente → marca (a confirmar con correos reales) y palabras clave. Jefatura los edita
+  REGLAS_LEAD: {
+    dominios: [['moxa.com','Moxa'], ['advantech.com','Advantech'], ['zenitel.com','Zenitel'], ['blackbox.com','Black Box'], ['inhandnetworks.com','InHand'], ['tosibox.com','Tosibox'],
+      ['pulspower.com','Puls'], ['absopulse.com','Absopulse'], ['transcend-info.com','Transcend'], ['hms-networks.com','HMS/Anybus'], ['anybus.com','HMS/Anybus'], ['teracomsystems.com','Teracom'],
+      ['winmate.com','Winmate'], ['yaskawa.com','Yaskawa']],
+    palabras: ['lead', 'opportunity', 'referral', 'inquiry', 'RFQ', 'deal registration'],
+  },
   UNIDADES: ['Und','Kit','Lic','Mts','Glb'],
 
   // Feriados nacionales de Perú (fijos, MM-DD). Jueves y Viernes Santo se calculan.
@@ -623,9 +661,7 @@ const Util = (() => {
   }
   const iso = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   const parse = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
-  let fixedToday = null;
-  const today = () => fixedToday || iso(new Date());
-  const setToday = s => { fixedToday = s; };
+  const today = () => iso(new Date());
   const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
   const diffDays = (a, b) => Math.round((parse(b) - parse(a)) / 86400000); // b − a
   function easter(y) {
@@ -717,6 +753,21 @@ const Util = (() => {
     return H.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
   }
   const normNum = s => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/N[°º]/g, '');
+  /** Fecha y hora local "AAAA-MM-DDTHH:MM" (llegada de leads y su seguimiento) */
+  const ahora = () => { const d = new Date(); return `${today()}T${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}`; };
+  const fmtFechaHora = s => !s ? '—' : fmtDate(s.slice(0, 10)) + (s.length > 10 ? ' ' + s.slice(11, 16) : '');
+  /** Horas transcurridas contando solo días hábiles (lunes a viernes sin feriados), 24 h por día: "48 horas hábiles" = 2 días hábiles */
+  function horasHabiles(desde, hasta) {
+    if (!desde || !hasta || hasta <= desde) return 0;
+    const t = s => new Date(s.length > 10 ? s : s + 'T00:00').getTime();
+    let h = 0;
+    for (let d = desde.slice(0, 10); d <= hasta.slice(0, 10); d = addDays(d, 1)) {
+      if (!isBizDay(d)) continue;
+      const ini = Math.max(t(desde), t(d)), fin = Math.min(t(hasta), t(addDays(d, 1)));
+      if (fin > ini) h += (fin - ini) / 36e5;
+    }
+    return h;
+  }
   /** Texto para comparar y buscar: sin tildes, en minúsculas y con espacios simples */
   const norm = s => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
   /** Descarga un Blob o un texto como archivo */
@@ -728,9 +779,9 @@ const Util = (() => {
   }
   /** CSV con separador ";" y BOM, para que Excel lo abra con tildes */
   const csv = filas => '\uFEFF' + filas.map(r => r.map(v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n');
-  return { rng, iso, parse, today, setToday, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
+  return { rng, iso, today, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
     endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, pct,
-    round2, esc, sum, groupBy, normNum, pad, nf2, sha256, norm, descargar, csv };
+    round2, esc, sum, groupBy, normNum, pad, nf2, sha256, norm, descargar, csv, ahora, fmtFechaHora, horasHabiles };
 })();
 
 /* =====================================================================
@@ -2146,7 +2197,44 @@ const DemoData = (() => {
     db.seq.producto = db.catalogo.length + 1;
     db.catalogoInfo = { actualizado: addDays(hoy, -20), por: 'u7', origen: 'demo' };
     db.catalogoLog = [{ fecha: addDays(hoy, -20), usuarioId: 'u7', accion: `Lista de precios de demostración cargada (${db.catalogo.length} productos ficticios)` }];
+    leadsDemo(db, hoy);
     return db;
+  }
+
+  /** Leads ficticios de los últimos 4 meses y origen en parte de las oportunidades (para ver la bandeja y los indicadores en la demo) */
+  function leadsDemo(db, hoy) {
+    const r = Util.rng(SEED + 11), pick = a => a[Math.floor(r() * a.length)], pad = Util.pad;
+    const masHoras = (s, h) => { const d = new Date(s); d.setMinutes(d.getMinutes() + Math.round(h * 60)); return `${Util.iso(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const vend = db.users.filter(u => u.rol === 'vendedor'), jef = db.users.find(u => u.rol === 'jefatura');
+    const ORIG = ['hs_form', 'hs_form', 'hs_form', 'hs_ads', 'hs_bot', 'hs_bot', 'fabricante', 'fabricante', 'fabricante', 'facebook', 'linkedin', 'referido', 'cliente', 'prospeccion', 'otro'];
+    const NECES = ['Switches industriales para planta', 'Gateway Modbus a Ethernet', 'Intercomunicadores para túnel', 'Conversores serie a Ethernet', 'Router 4G para telemetría', 'Fuentes DIN de 24 V', 'Panel PC para sala de control'];
+    const NOMBRES = ['Carla Ríos', 'Jorge Paredes', 'Lucía Torres', 'Miguel Salas', 'Rosa Quispe', 'Andrés Vela', 'Paola Núñez', 'Diego Campos'];
+    const NUEVAS = ['Minera Andes Norte S.A.C. (ficticia)', 'Agroindustrias del Sur S.A. (ficticia)', 'Terminal Seco Callao S.A.C. (ficticia)', 'Energía Solar Arequipa S.A.C. (ficticia)', 'Textiles Lima Norte S.A. (ficticia)'];
+    db.leads = []; db.seq.lead = 1;
+    for (let i = 0; i < 46; i++) {
+      const dias = Math.floor(r() * 120), c = r() < 0.55 ? pick(db.clients) : null, oid = pick(ORIG), contacto = pick(NOMBRES), necesidad = pick(NECES);
+      const llegada = `${Util.addDays(hoy, -dias)}T${pad(dias ? 8 + Math.floor(r() * 10) : 8)}:${pad(Math.floor(r() * 60))}`;
+      const l = { id: 'L-' + (db.seq.lead++), llegada, origen: { id: oid, marca: oid === 'fabricante' ? pick(['Moxa', 'Moxa', 'Advantech', 'Zenitel', 'Black Box']) : '', texto: oid === 'otro' ? 'Feria tecnológica' : '' },
+        empresa: c ? c.razonSocial : pick(NUEVAS), ruc: c ? c.ruc : '', contacto, correo: contacto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(' ', '.') + '@ejemplo.pe',
+        telefono: '9' + String(10000000 + Math.floor(r() * 89999999)), necesidad, mensaje: `Buenos días, quisiera una cotización: ${necesidad.toLowerCase()}. Gracias.`,
+        estado: 'nuevo', vendedorId: null, asignadoEn: null, contactadoEn: null, oppId: null, via: oid.startsWith('hs') || oid === 'facebook' || oid === 'linkedin' ? 'hubspot' : oid === 'fabricante' ? 'correo' : 'manual',
+        registradoPor: jef.id, historial: [] };
+      l.historial.push({ fecha: llegada, usuarioId: jef.id, texto: 'Registrado (demostración)' });
+      if (dias > 1 || r() < 0.4) {
+        l.vendedorId = (c && c.vendedorId) || pick(vend).id; l.asignadoEn = masHoras(llegada, 1 + r() * 20); l.estado = 'asignado';
+        l.historial.push({ fecha: l.asignadoEn, usuarioId: jef.id, texto: 'Asignado (demostración)' });
+        if (dias > 3 && r() < 0.85) {
+          l.contactadoEn = masHoras(l.asignadoEn, 1 + r() * 40); l.estado = 'contactado';
+          l.historial.push({ fecha: l.contactadoEn, usuarioId: l.vendedorId, texto: 'Contacto por WhatsApp (demostración)' });
+          const o = c && dias > 8 && r() < 0.6 && db.opps.find(x => x.clienteId === c.id && !x.origenOpp && x.fechaInicio >= llegada.slice(0, 10));
+          if (o) { Object.assign(l, { estado: 'convertido', oppId: o.id, vendedorId: o.vendedorId }); o.origenOpp = Object.assign({ leadId: l.id }, l.origen); }
+          else if (dias > 8 && r() < 0.2) Object.assign(l, { estado: 'descartado', motivoDescarte: pick(['solo_info', 'sin_perfil', 'duplicado']), motivoOtro: '' });
+        }
+      }
+      db.leads.push(l);
+    }
+    // Oportunidades sin lead: la mayoría con un origen directo; el resto queda "Sin origen" para completar
+    db.opps.forEach(o => { if (!o.origenOpp && r() < 0.7) o.origenOpp = r() < 0.15 ? { id: 'fabricante', marca: pick(['Moxa', 'Advantech']) } : { id: pick(['cliente', 'cliente', 'cliente', 'prospeccion', 'referido', 'hs_form']) }; });
   }
 
   return { generate, CATALOGO, SEED };
@@ -2490,7 +2578,15 @@ const Rules = (() => {
       const a = alertaCuenta(db, c, hoy);
       if (a) out.push({ cliente: c, alerta: a });
     });
-    const orden = { sin_proximo: 0, atrasado: 1, primer_seguimiento: 2, hoy: 3, por_vencer: 4, oc_vencida: 5, reactivar: 6, cuenta_inactiva: 7 };
+    // Leads: el vendedor ve los que tiene asignados sin primer contacto; jefatura, los nuevos por asignar y los que pasan de 48 horas hábiles sin atender
+    const ya = hoy === Util.today() ? Util.ahora() : hoy + 'T23:59';
+    (db.leads || []).forEach(l => {
+      if (!leadPendiente(l)) return;
+      const h = horasSinAtender(l, ya), tarde = h > Config.LEAD_SIN_ATENDER_H, txt = `Lead sin atender: ${Math.floor(h)} h hábiles`;
+      if (user.rol === 'vendedor') { if (l.vendedorId === user.id && l.estado === 'asignado') out.push({ lead: l, alerta: { tipo: 'lead', nivel: tarde ? 'bad' : 'warn', texto: tarde ? txt : 'Lead asignado: registra el primer contacto' } }); }
+      else if (l.estado === 'nuevo' || tarde) out.push({ lead: l, alerta: { tipo: 'lead', nivel: tarde ? 'bad' : 'info', texto: tarde ? txt : 'Lead nuevo por asignar' } });
+    });
+    const orden = { lead: -1, sin_proximo: 0, atrasado: 1, primer_seguimiento: 2, hoy: 3, por_vencer: 4, oc_vencida: 5, reactivar: 6, cuenta_inactiva: 7 };
     return out.sort((a, b) => orden[a.alerta.tipo] - orden[b.alerta.tipo] || (b.alerta.dias || 0) - (a.alerta.dias || 0));
   }
   function saludSeguimiento(db, { vendedorId = null, hoy = Util.today() } = {}) {
@@ -2576,8 +2672,8 @@ const Rules = (() => {
 
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
-    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
+    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
     finanzas: ['proyeccion', 'facturado', 'postventa', 'cotizaciones', 'contactos', 'catalogo', 'empresa'],
     logistica: ['postventa', 'cotizaciones', 'contactos', 'catalogo'],
     admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos', 'empresa'],
@@ -2601,6 +2697,8 @@ const Rules = (() => {
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
       case 'asignar_cuenta': return user.rol === 'jefatura';
+      case 'gestionar_leads': return user.rol === 'jefatura';   // registra, importa y asigna leads; edita orígenes y reglas
+      case 'ver_leads': return user.rol === 'jefatura' || user.rol === 'vendedor';
       case 'asignar_clientes': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // asignación de cuentas y carga de clientes por Excel
       // Lista de precios: todos la consultan; solo jefatura, finanzas y administración la modifican
       case 'ver_catalogo': return true;
@@ -2685,15 +2783,101 @@ const Rules = (() => {
     }
     return { hoja: hoja.name, filas, error: null };
   }
+  /* ---------- Origen de las oportunidades y bandeja de leads ---------- */
+  const origenes = db => (db.config && db.config.origenes) || Config.ORIGENES;
+  const origenDe = (db, id) => origenes(db).find(x => x.id === id) || Config.ORIGENES.find(x => x.id === id) || null;
+  function origenNombre(db, o) {
+    if (!o || !o.id) return 'Sin origen';
+    const x = origenDe(db, o.id);
+    return (x ? x.nombre : o.id) + (o.marca ? ' · ' + o.marca : '') + (o.texto ? ' · ' + o.texto : '');
+  }
+  function validarOrigen(db, o) {
+    const x = o && o.id && origenDe(db, o.id);
+    if (!x) return 'Indica el origen de la oportunidad.';
+    if (x.marca && !String(o.marca || '').trim()) return 'Indica la marca del fabricante que envió el lead.';
+    if (x.texto && !String(o.texto || '').trim()) return 'Describe el origen.';
+    return null;
+  }
+  const reglasLead = db => (db.config && db.config.reglasLead) || Config.REGLAS_LEAD;
+  const DOMINIOS_GENERICOS = ['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'live.com', 'icloud.com', 'yahoo.es', 'hotmail.es', 'outlook.es', 'msn.com'];
+  const dominioDe = correo => { const m = /@([\w.-]+)/.exec(String(correo || '')); return m ? m[1].toLowerCase().replace(/\.+$/, '') : ''; };
+  /** moxa.com coincide con moxa.com, us.moxa.com y moxa.com.tw */
+  const dominioCoincide = (host, d) => !!host && (host === d || host.endsWith('.' + d) || host.startsWith(d + '.'));
+  const escRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** Correo pegado: ¿es un lead de fabricante? Marca por dominio del remitente (o por nombre de marca + palabra clave si fue reenviado) y datos del cliente */
+  function clasificarCorreo(db, { remitente = '', asunto = '', cuerpo = '' }) {
+    const R = reglasLead(db), host = dominioDe(remitente), bajo = (asunto + '\n' + cuerpo).toLowerCase();
+    const regla = R.dominios.find(([d]) => dominioCoincide(host, d.toLowerCase()));
+    const palabras = R.palabras.filter(p => new RegExp('\\b' + escRx(p.toLowerCase()) + '\\b').test(bajo));
+    let marca = regla ? regla[1] : '';
+    if (!marca && palabras.length) marca = [...new Set(R.dominios.map(d => d[1]))].find(m => new RegExp('\\b' + escRx(m.toLowerCase()) + '\\b').test(bajo)) || '';
+    const campo = rx => { const m = rx.exec(cuerpo); return m ? m[1].trim().replace(/\s+/g, ' ').slice(0, 200) : ''; };
+    const deMarca = h => h === host || R.dominios.some(([d]) => dominioCoincide(h, d.toLowerCase()));
+    const correos = (cuerpo.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g) || []).filter(c => !deMarca(dominioDe(c)));
+    const nombre = campo(/^[ \t]*(?:contact(?:o)?(?: name)?|full name|name|nombre(?: completo)?|first name)[ \t]*[:：][ \t]*(.+)$/im), apellido = campo(/^[ \t]*(?:last name|apellidos?)[ \t]*[:：][ \t]*(.+)$/im);
+    return {
+      esFabricante: !!marca, marca, porDominio: !!regla, dominio: host, palabras,
+      empresa: campo(/^[ \t]*(?:company(?: name)?|empresa|compa[ñn][ií]a|organi[sz]ation|account(?: name)?|raz[oó]n social|customer|cliente)[ \t]*[:：][ \t]*(.+)$/im),
+      contacto: [nombre, apellido].filter(Boolean).join(' '),
+      correo: campo(/^[ \t]*(?:e-?mail|correo(?: electr[oó]nico)?)[ \t]*[:：][ \t]*([\w.+-]+@[\w.-]+)/im) || correos[0] || '',
+      telefono: campo(/^[ \t]*(?:phone(?: number)?|tel[eé]fono|tel|mobile|m[oó]vil|celular|whatsapp)[ \t]*[:：][ \t]*(\+?[\d][\d\s().-]{5,})/im),
+      necesidad: campo(/^[ \t]*(?:products?(?: of interest)?|productos?|model(?:o)?|part(?: number)?|requirement|requerimiento|interest(?:ed in)?|necesidad|project|proyecto|application|aplicaci[oó]n)[ \t]*[:：][ \t]*(.+)$/im)
+        || String(asunto).replace(/^\s*((re|rv|fw|fwd|tr)\s*:\s*)+/i, '').trim(),
+      ruc: (/\b(?:10|20)\d{9}\b/.exec(cuerpo) || [''])[0],
+    };
+  }
+  /** Sugerencia de vendedor: el que ya tiene la empresa en su cartera (por RUC, por dominio del correo o por razón social) */
+  function sugerirVendedor(db, l) {
+    const activo = id => db.users.some(u => u.id === id && u.rol === 'vendedor' && u.activo !== false);
+    const de = (c, motivo) => c && c.vendedorId && activo(c.vendedorId) ? { vendedorId: c.vendedorId, clienteId: c.id, motivo } : null;
+    const ruc = String(l.ruc || '').trim(), dom = dominioDe(l.correo), n = Util.norm(l.empresa);
+    return (ruc && de(db.clients.find(c => c.ruc === ruc), 'por RUC'))
+      || (dom && !DOMINIOS_GENERICOS.includes(dom) && de(db.clients.find(c => c.vendedorId && c.contactos.some(k => dominioDe(k.correo) === dom)), `por el dominio ${dom}`))
+      || (n && de(db.clients.find(c => Util.norm(c.razonSocial) === n), 'por razón social')) || null;
+  }
+  const leadPendiente = l => l.estado === 'nuevo' || l.estado === 'asignado';
+  /** Horas hábiles desde la llegada sin primer contacto (0 si ya se atendió) */
+  const horasSinAtender = (l, ahora) => leadPendiente(l) ? Util.horasHabiles(l.llegada, ahora) : 0;
+  /** Indicadores de leads y origen (dashboard de jefatura). Leads por fecha de llegada; oportunidades por fecha de inicio */
+  function indicadoresLeads(db, { desde, hasta, vendedorId = null, ahora = Util.ahora() } = {}) {
+    const enRango = f => !!f && f.slice(0, 10) >= desde && f.slice(0, 10) <= hasta;
+    const leads = (db.leads || []).filter(l => enRango(l.llegada) && (!vendedorId || l.vendedorId === vendedorId));
+    const meses = [];
+    for (let m = desde.slice(0, 7); m <= hasta.slice(0, 7); m = Util.addMonths(m + '-01', 1).slice(0, 7)) meses.push(m);
+    const porOrigen = {}, porVend = {};
+    const fila = id => porOrigen[id] = porOrigen[id] || { meses: {}, marcas: {}, leads: 0, convertidos: 0, opps: 0, ganadas: 0, montoOpps: 0, montoGanado: 0, facturado: 0 };
+    leads.forEach(l => {
+      const f = fila(l.origen.id), mk = l.llegada.slice(0, 7);
+      f.leads++; f.meses[mk] = (f.meses[mk] || 0) + 1;
+      if (l.origen.marca) { const m = f.marcas[l.origen.marca] = f.marcas[l.origen.marca] || { total: 0, meses: {} }; m.total++; m.meses[mk] = (m.meses[mk] || 0) + 1; }
+      if (l.estado === 'convertido') f.convertidos++;
+      if (!l.vendedorId) return;
+      const v = porVend[l.vendedorId] = porVend[l.vendedorId] || { leads: 0, origenes: {}, tAsig: [], tCont: [], sinAtender: 0, convertidos: 0 };
+      v.leads++; v.origenes[l.origen.id] = (v.origenes[l.origen.id] || 0) + 1;
+      if (l.asignadoEn) v.tAsig.push(Util.horasHabiles(l.llegada, l.asignadoEn));
+      if (l.asignadoEn && l.contactadoEn) v.tCont.push(Util.horasHabiles(l.asignadoEn, l.contactadoEn));
+      if (horasSinAtender(l, ahora) > Config.LEAD_SIN_ATENDER_H) v.sinAtender++;
+      if (l.estado === 'convertido') v.convertidos++;
+    });
+    db.opps.filter(o => enRango(o.fechaInicio) && (!vendedorId || o.vendedorId === vendedorId)).forEach(o => {
+      const f = fila((o.origenOpp && o.origenOpp.id) || 'sin'), m = montoUSD(db, o);
+      f.opps++; f.montoOpps += m;
+      if (o.etapa === 'ganada') { f.ganadas++; f.montoGanado += m; }
+      if (o.postventa && o.postventa.facturado) f.facturado += o.postventa.facturaMonto || m;
+    });
+    const sinAtender = leads.filter(l => horasSinAtender(l, ahora) > Config.LEAD_SIN_ATENDER_H);
+    return { meses, porOrigen, porVend, sinAtender, leads };
+  }
   const rolNombre = u => (u && Config.ROLES[u.rol]) || (u && u.rol) || '';
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
-  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, aUSD, quoteNetoUSD,
-    quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, maxSemanas, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
+  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, quoteNetoUSD,
+    quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, rucValido, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
-    siguienteRevision, numeroDuplicado, hermanos, RUTAS, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes };
+    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
+    origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads };
 })();
 
 /* =====================================================================
@@ -2876,6 +3060,40 @@ const Repo = (() => {
   const opp = id => db.opps.find(o => o.id === id) || fail('Oportunidad no encontrada.');
   const log = (o, nota, usuarioId) => db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Sistema', nota, proxContacto: o.proxContacto || null, usuarioId, auto: true });
   const guardar = o => { const e = Rules.validarOportunidad(o); if (e) fail(e); touch(); };
+  /* Leads: cada cambio queda en el historial del lead (quién, cuándo, qué) */
+  const leadsDb = () => { if (!db.leads) db.leads = []; if (!db.seq.lead) db.seq.lead = 1; return db.leads; };
+  const leadPorId = id => leadsDb().find(l => l.id === id) || fail('Lead no encontrado.');
+  const hlead = (l, texto, usuarioId) => l.historial.push({ fecha: Util.ahora(), usuarioId, texto });
+  const nombreU = id => (usuarioDe(id) || {}).nombre || '—';
+  const CAMPOS_LEAD = ['empresa', 'ruc', 'contacto', 'correo', 'telefono', 'necesidad', 'mensaje'];
+  function datosLead(d) {
+    const t = v => String(v == null ? '' : v).trim(), x = {};
+    CAMPOS_LEAD.forEach(k => { x[k] = t(d[k]).slice(0, k === 'mensaje' ? 8000 : 300); });
+    x.origen = { id: d.origen && d.origen.id, marca: t(d.origen && d.origen.marca), texto: t(d.origen && d.origen.texto) };
+    const e = Rules.validarOrigen(db, x.origen);
+    if (e) fail(e.replace('de la oportunidad', 'del lead'), { origenId: e });
+    if (!x.empresa && !x.contacto && !x.correo) fail('Indica al menos la empresa, el contacto o el correo.', { empresa: 'Obligatorio' });
+    if (x.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x.correo)) fail('Correo no válido.', { correo: 'Correo no válido' });
+    return x;
+  }
+  function asignarA(l, vendedorId, usuarioId) {
+    if (!db.users.some(u => u.id === vendedorId && u.rol === 'vendedor')) fail('Elige un vendedor.');
+    const antes = l.vendedorId;
+    l.vendedorId = vendedorId;
+    if (!l.asignadoEn) l.asignadoEn = Util.ahora();
+    if (l.estado === 'nuevo') l.estado = 'asignado';
+    hlead(l, antes ? `Reasignado: ${nombreU(antes)} → ${nombreU(vendedorId)}` : `Asignado a ${nombreU(vendedorId)}`, usuarioId);
+  }
+  function nuevoLead(d, usuarioId, via) {
+    leadsDb();
+    const x = datosLead(d), l = Object.assign({ id: 'L-' + (db.seq.lead++), llegada: /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(d.llegada || '') ? d.llegada : Util.ahora(), estado: 'nuevo',
+      vendedorId: null, asignadoEn: null, contactadoEn: null, oppId: null, via: via || 'manual', registradoPor: usuarioId, historial: [] }, x);
+    leadsDb().push(l);
+    hlead(l, `Registrado (${{ manual: 'a mano', hubspot: 'importación de HubSpot', correo: 'correo de fabricante pegado' }[l.via] || l.via}) · ${Rules.origenNombre(db, l.origen)}`, usuarioId);
+    if (d.vendedorId) asignarA(l, d.vendedorId, usuarioId);
+    return l;
+  }
+  const puedeTrabajarLead = (l, usuarioId) => { const u = usuarioDe(usuarioId); if (!u || !(Rules.puede(u, 'gestionar_leads') || (u.rol === 'vendedor' && l.vendedorId === u.id))) fail('Este lead está asignado a otro vendedor.'); };
   /** Asigna la cuenta y mueve con ella sus oportunidades abiertas y en pausa; devuelve cuántas movió */
   function moverCliente(c, vendedorId, usuarioId, como) {
     c.vendedorId = vendedorId;
@@ -3441,6 +3659,86 @@ const Repo = (() => {
       touch();
       return n;
     },
+    /** POST /leads — registro manual o desde un correo de fabricante (jefatura) */
+    async crearLead(d, usuarioId, via) {
+      exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura registran leads.');
+      const l = nuevoLead(d, usuarioId, via === 'correo' ? 'correo' : 'manual');
+      touch(); return l;
+    },
+    /** POST /leads/importar — CSV exportado de HubSpot (ya mapeado y sin duplicados elegidos por jefatura) */
+    async importarLeads(filas, usuarioId) {
+      exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura importan leads.');
+      const errores = [];
+      let n = 0;
+      filas.forEach((d, i) => { try { nuevoLead(d, usuarioId, 'hubspot'); n++; } catch (e) { errores.push(`Fila ${d.fila || i + 1}: ${e.message}`); } });
+      if (n) touch();
+      return { importados: n, errores };
+    },
+    /** PATCH /leads/:id — corrige datos (jefatura) */
+    async editarLead(id, d, usuarioId) {
+      exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura editan leads.');
+      const l = leadPorId(id), x = datosLead(d), cambios = [];
+      CAMPOS_LEAD.forEach(k => { if (x[k] !== l[k]) cambios.push(k); });
+      if (Rules.origenNombre(db, x.origen) !== Rules.origenNombre(db, l.origen)) cambios.push('origen');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(d.llegada || '') && d.llegada !== l.llegada) { cambios.push('llegada'); l.llegada = d.llegada; }
+      Object.assign(l, x);
+      if (cambios.length) { hlead(l, 'Datos corregidos: ' + cambios.join(', '), usuarioId); touch(); }
+      if (d.vendedorId && d.vendedorId !== l.vendedorId) { asignarA(l, d.vendedorId, usuarioId); touch(); }
+      return l;
+    },
+    /** PATCH /leads/:id/vendedor — jefatura asigna o reasigna */
+    async asignarLead(id, vendedorId, usuarioId) {
+      exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura asignan leads.');
+      const l = leadPorId(id);
+      if (['convertido', 'descartado'].includes(l.estado)) fail('Este lead ya está cerrado.');
+      if (l.vendedorId === vendedorId) return l;
+      asignarA(l, vendedorId, usuarioId); touch(); return l;
+    },
+    /** POST /leads/:id/contactos — primer contacto (y siguientes) del vendedor */
+    async contactarLead(id, { canal, nota }, usuarioId) {
+      const l = leadPorId(id); puedeTrabajarLead(l, usuarioId);
+      if (['convertido', 'descartado'].includes(l.estado)) fail('Este lead ya está cerrado.');
+      if (!l.contactadoEn) l.contactadoEn = Util.ahora();
+      l.estado = 'contactado';
+      hlead(l, `Contacto por ${canal || 'WhatsApp'}${String(nota || '').trim() ? ': ' + String(nota).trim() : ''}`, usuarioId);
+      touch(); return l;
+    },
+    /** POST /leads/:id/descartar — con motivo de la lista */
+    async descartarLead(id, motivo, otro, usuarioId) {
+      const l = leadPorId(id); puedeTrabajarLead(l, usuarioId);
+      const m = Config.MOTIVOS_DESCARTE.find(x => x[0] === motivo);
+      if (!m) fail('Elige el motivo del descarte.', { motivo: 'Obligatorio' });
+      if (motivo === 'otro' && !String(otro || '').trim()) fail('Describe el motivo.', { motivoOtro: 'Obligatorio' });
+      Object.assign(l, { estado: 'descartado', motivoDescarte: motivo, motivoOtro: String(otro || '').trim() });
+      hlead(l, `Descartado: ${m[1]}${l.motivoOtro ? ' — ' + l.motivoOtro : ''}`, usuarioId);
+      touch(); return l;
+    },
+    /** PUT /config/leads — orígenes y reglas para correos de fabricante (jefatura) */
+    async guardarConfigLeads({ origenes, reglas }, usuarioId) {
+      exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura editan los orígenes y las reglas.');
+      const t = v => String(v == null ? '' : v).trim();
+      const os = (origenes || []).map(o => ({ id: t(o.id) || 'o-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), nombre: t(o.nombre), ...(o.marca ? { marca: true } : {}), ...(o.texto ? { texto: true } : {}), ...(o.inactivo ? { inactivo: true } : {}) }));
+      if (os.some(o => !o.nombre)) fail('Cada origen necesita un nombre.');
+      if (!os.some(o => !o.inactivo)) fail('Debe quedar al menos un origen activo.');
+      const dom = (reglas.dominios || []).map(([d, m]) => [t(d).toLowerCase().replace(/^@/, ''), t(m)]).filter(([d, m]) => d && m);
+      if (dom.some(([d]) => !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d))) fail('Revisa los dominios: deben ser como moxa.com.');
+      db.config = db.config || {};
+      db.config.origenes = os;
+      db.config.reglasLead = { dominios: dom, palabras: (reglas.palabras || []).map(t).filter(Boolean) };
+      (db.configLog = db.configLog || []).unshift({ fecha: Util.ahora(), usuarioId, accion: `Orígenes (${os.filter(o => !o.inactivo).length} activos) y reglas de correos (${dom.length} dominios) actualizados` });
+      touch();
+    },
+    /** PATCH /oportunidades/:id/origen — completar el origen (oportunidades antiguas "Sin origen") */
+    async origenOportunidad(oppId, origen, usuarioId) {
+      const o = opp(oppId), u = usuarioDe(usuarioId);
+      if (!u || !(u.rol === 'jefatura' || (u.rol === 'vendedor' && o.vendedorId === u.id))) fail('Solo el vendedor de la oportunidad o jefatura definen su origen.');
+      const x = { id: origen && origen.id, marca: String((origen && origen.marca) || '').trim(), texto: String((origen && origen.texto) || '').trim() };
+      const e = Rules.validarOrigen(db, x); if (e) fail(e, { origenId: e });
+      const antes = Rules.origenNombre(db, o.origenOpp);
+      o.origenOpp = Object.assign({}, o.origenOpp && o.origenOpp.leadId ? { leadId: o.origenOpp.leadId } : {}, x);
+      log(o, `Origen: ${antes} → ${Rules.origenNombre(db, o.origenOpp)}`, usuarioId);
+      touch(); return o;
+    },
     /** POST /clientes/importar — carga de la plantilla Excel: asigna cuentas, actualiza datos y registra clientes nuevos */
     async importarClientes(hojas, usuarioId) {
       exigir(usuarioId, 'asignar_clientes', 'Solo gerencia, jefatura, finanzas o administración actualizan clientes por Excel.');
@@ -3466,6 +3764,11 @@ const Repo = (() => {
     async registrarCotizacion(p, usuarioId) {
       const errs = Rules.validarCotizacion(p, hoy());
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
+      const esNueva = !((p.modo === 'revision' || p.modo === 'alternativa') && p.oppDestinoId);
+      const lead = p.leadId ? leadPorId(p.leadId) : null;
+      if (lead) puedeTrabajarLead(lead, usuarioId);
+      const origenOpp = lead ? Object.assign({ leadId: lead.id }, lead.origen) : p.origenOpp && { id: p.origenOpp.id, marca: String(p.origenOpp.marca || '').trim(), texto: String(p.origenOpp.texto || '').trim() };
+      if (esNueva) { const eo = Rules.validarOrigen(db, origenOpp); if (eo) fail(eo, { origenId: eo }); }
       let clienteId = p.clienteId;
       if (!clienteId) {
         const ex = db.clients.find(c => c.ruc === p.clienteNuevo.ruc);
@@ -3533,6 +3836,12 @@ const Repo = (() => {
         db.quotes.push(q);
         db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: p.fechaEmision, canal: 'Correo', nota: `Cotización enviada (N° ${q.numero}) — ${p.origen === 'plataforma' ? 'cotizada en la plataforma (PDF generado)' : p.origen === 'pdf' ? 'registrada desde el PDF' : 'registrada manualmente'}.`, proxContacto: o.proxContacto, usuarioId: 'sistema', auto: true });
       }
+      if (esNueva || (lead && !(o.origenOpp && o.origenOpp.id))) o.origenOpp = origenOpp;
+      if (lead) {   // el lead pasa a oportunidad: queda enlazado y cuenta como primer contacto si no lo había
+        Object.assign(lead, { estado: 'convertido', oppId: o.id, contactadoEn: lead.contactadoEn || Util.ahora(), asignadoEn: lead.asignadoEn || Util.ahora(), vendedorId: lead.vendedorId || p.vendedorId });
+        hlead(lead, `Convertido en oportunidad ${o.id} (cotización N° ${q.numero})`, usuarioId);
+        log(o, `Oportunidad creada desde el lead ${lead.id} (${Rules.origenNombre(db, lead.origen)}).`, usuarioId);
+      }
       guardar(o);
       return { oppId: o.id, quoteId: q.id };
     },
@@ -3588,6 +3897,29 @@ const SelfTest = (() => {
         cb.length === 2 && Rules.horizonte(cb[0].fecha, hoy) === 'mes' && cb[0].monto === 5900 && Rules.horizonte(cb[1].fecha, hoy) === 'd60' &&
         Rules.horizonte('2026-10-31', hoy) === 'mes' && Rules.horizonte('2026-11-05', hoy) === 'd30' && Rules.horizonte('2027-02-01', hoy) === 'd120' &&
         Math.abs(pf.tot.total.d60 - 15000) < 0.01 && Math.abs(pc.tot.total.d90 - 8850) < 0.01 && Math.abs(pc.tot.total.mes - 4425) < 0.01;
+    }],
+    ['Correo de fabricante: marca por dominio (o por nombre si fue reenviado) y datos del cliente', () => {
+      const db = miniDb();
+      const a = Rules.clasificarCorreo(db, { remitente: 'Leads <leads@us.moxa.com>', asunto: 'New lead: RFQ', cuerpo: 'Company: Minera X SAC\nFirst Name: Ana\nLast Name: Perez\nEmail: ana@minerax.pe\nPhone: +51 999 111 222\nProduct: EDS-408A' });
+      const b = Rules.clasificarCorreo(db, { remitente: 'vendedor@techvalue.pe', asunto: 'Fw: Advantech lead registration', cuerpo: 'Empresa: Agro Sur\nContacto: Luis' });
+      const c = Rules.clasificarCorreo(db, { remitente: 'alguien@gmail.com', asunto: 'Hola', cuerpo: 'Quisiera precios' });
+      return a.esFabricante && a.marca === 'Moxa' && a.porDominio && a.empresa === 'Minera X SAC' && a.contacto === 'Ana Perez' && a.correo === 'ana@minerax.pe' && a.necesidad === 'EDS-408A' &&
+        b.esFabricante && b.marca === 'Advantech' && !b.porDominio && b.empresa === 'Agro Sur' && !c.esFabricante;
+    }],
+    ['Leads: horas hábiles, vendedor sugerido e indicadores que cuadran con la bandeja', () => {
+      const db = miniDb();
+      db.users.push({ id: 't2', rol: 'vendedor' });
+      db.clients = [{ id: 'c1', ruc: '20000000001', razonSocial: 'Uno SAC', vendedorId: 't1', contactos: [{ correo: 'jefe@uno.pe' }] }, { id: 'c2', ruc: '20000000002', razonSocial: 'Dos SAC', vendedorId: 't2', contactos: [] }];
+      const L = (id, o, estado, extra) => Object.assign({ id, llegada: '2026-10-05T10:00', origen: { id: o }, estado, vendedorId: 't1', asignadoEn: '2026-10-05T12:00', contactadoEn: null, historial: [] }, extra);
+      db.leads = [L('l1', 'hs_form', 'convertido', { contactadoEn: '2026-10-06T10:00', oppId: 'o1' }), L('l2', 'hs_form', 'asignado'), L('l3', 'referido', 'descartado'), L('l4', 'hs_form', 'nuevo', { vendedorId: null, asignadoEn: null, llegada: '2026-10-19T08:00' })];
+      addOpp(db, { etapa: 'ganada', fechaInicio: '2026-10-06', origenOpp: { id: 'hs_form', leadId: 'l1' } });
+      addOpp(db, { etapa: 'e3', fechaInicio: '2026-10-07', origenOpp: { id: 'cliente' } });
+      addOpp(db, { etapa: 'e3', fechaInicio: '2026-10-07' });
+      const I = Rules.indicadoresLeads(db, { desde: '2026-10-01', hasta: '2026-10-31', ahora: '2026-10-20T10:00' }), f = I.porOrigen.hs_form;
+      return Util.horasHabiles('2026-10-16T17:00', '2026-10-19T09:00') === 16 && Util.horasHabiles('2026-10-07T10:00', '2026-10-09T10:00') === 24 &&
+        Rules.sugerirVendedor(db, { ruc: '20000000002' }).vendedorId === 't2' && Rules.sugerirVendedor(db, { correo: 'x@uno.pe' }).vendedorId === 't1' && !Rules.sugerirVendedor(db, { correo: 'x@gmail.com' }) &&
+        I.leads.length === 4 && f.leads === 3 && f.convertidos === 1 && f.opps === 1 && f.ganadas === 1 && f.montoGanado === 10000 && I.porOrigen.referido.leads === 1 &&
+        I.porOrigen.cliente.opps === 1 && I.porOrigen.sin.opps === 1 && I.sinAtender.length === 1 && I.sinAtender[0].id === 'l2' && I.porVend.t1.leads === 3 && Math.round(I.porVend.t1.tCont[0]) === 22;
     }],
     ['Facturación estimada elegida por el vendedor prevalece sobre OC + plazo', () => {
       const hoy = '2026-10-19', db = miniDb();
@@ -3685,7 +4017,7 @@ const UI = (() => {
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
     expand: {}, pvF: { estado: 'pendientes', vendedor: '' },
-    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, cotF: { q: '', vendedor: '', etapa: '', lim: 50 }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
+    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, cotF: { q: '', vendedor: '', etapa: '', lim: 50 }, leadF: { estado: 'pendientes', origen: '', vendedor: '', q: '' }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -3771,14 +4103,14 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
     finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
     logistica: [['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
     admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
   };
   const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'cotizaciones', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', cotizaciones: 'Cotizaciones', usuarios: 'Usuarios', empresa: 'Empresa' };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', cotizaciones: 'Cotizaciones', leads: 'Leads', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -3852,8 +4184,11 @@ const UI = (() => {
   ACTIONS['toggle-bell'] = () => {
     if (S.popover === 'bell') return closePopover();
     const al = Rules.alertasUsuario(S.db, S.user, hoy()), jef = S.user.rol === 'jefatura';
-    const titulo = jef ? 'Escalados y cuentas sin cotizar' : 'Tus alertas';
-    const item = x => x.opp ? `<a class="pop-item" href="#/op/${x.opp.id}" style="text-decoration:none;color:inherit">
+    const titulo = jef ? 'Leads, escalados y cuentas sin cotizar' : 'Tus alertas';
+    const item = x => x.lead ? `<a class="pop-item" href="#/leads" style="text-decoration:none;color:inherit">
+        <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(x.lead.empresa || x.lead.contacto || x.lead.correo)}</strong>${jef && x.lead.vendedorId ? vendTag(usr(x.lead.vendedorId)) : ''}</div>
+        <div class="small muted">Lead · ${E(Rules.origenNombre(S.db, x.lead.origen))}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
+      : x.opp ? `<a class="pop-item" href="#/op/${x.opp.id}" style="text-decoration:none;color:inherit">
         <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(cli(x.opp.clienteId).razonSocial)}</strong>${jef ? vendTag(usr(x.opp.vendedorId)) : ''}</div>
         <div class="small muted">${E(projName(proj(x.opp.proyectoId)))}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
       : `<a class="pop-item" href="#/cuenta/${x.cliente.id}" style="text-decoration:none;color:inherit">
@@ -3974,7 +4309,7 @@ const UI = (() => {
     await Repo.reset();
     S.db = await Repo.snapshot();
     S.user = S.db.users.find(u => u.id === id) || null;
-    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 };
+    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' };
     toast('Datos de demo restablecidos.');
     render();
   };
@@ -4920,7 +5255,7 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.catF = { q: '', marca: '' }; S.expand = {};
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.catF = { q: '', marca: '' }; S.expand = {};
       if (piloto()) guardarSesion(S.user.id);
       if (S.user.debeCambiar && piloto()) { location.hash = '#/' + Rules.INICIO[S.user.rol]; await render(); abrirCambioClave(true); return; }
       go(Rules.INICIO[S.user.rol]);
@@ -5126,6 +5461,7 @@ const UI = (() => {
       ['Ponderado USD', r => n(r.pond)], ['Etapa', r => Rules.etapa(r.o.etapa).nombre], ['Fecha inicio', r => Util.fmtDate(r.o.fechaInicio)], ['Último contacto', r => Util.fmtDate(r.ult)],
       ['Días desde último contacto', r => r.dias == null ? '' : r.dias], ['Próximo contacto', r => r.prox ? Util.fmtDate(r.prox) : ''], ['Fecha estimada OC', r => r.o.fechaOC ? Util.fmtDate(r.o.fechaOC) : ''],
       ['FACT', r => r.fact ? Config.HORIZONTES.find(x => x.id === r.fact).fact : ''], ['Horizonte', r => r.fact ? Rules.horizonteNombre(r.fact) : ''],
+      ['Origen', r => Rules.origenNombre(S.db, r.o.origenOpp)],
       ['Motivo de pérdida', r => r.o.motivoPerdida ? Rules.motivo(r.o.motivoPerdida).nombre + (r.o.motivoOtro ? ' - ' + r.o.motivoOtro : '') : '']];
     Util.descargar(Util.csv([cols.map(c => c[0]), ...rows.map(r => cols.map(c => c[1](r)))]), `oportunidades_${hoy()}.csv`, 'text/csv;charset=utf-8');
     toast(`Se exportaron ${rows.length} filas a CSV (separador “;”, compatible con Excel).`);
@@ -5193,6 +5529,8 @@ const UI = (() => {
           <div class="fact"><div class="l">Ponderado</div><div class="v">${money(Rules.ponderado(db, o))}</div></div>
           <div class="fact"><div class="l">Próximo contacto ${abierta && !o.proxContacto ? '<span class="chip bad">Falta</span>' : ''}</div>${proxCampo}</div>
           <div class="fact"><div class="l">Fecha estimada de OC</div>${ocCampo}</div>
+          <div class="fact"><div class="l">Origen</div><div class="v small">${o.origenOpp && o.origenOpp.id ? E(Rules.origenNombre(db, o.origenOpp)) : '<span class="chip warn">Sin origen</span>'}${o.origenOpp && o.origenOpp.leadId ? ` · lead ${E(o.origenOpp.leadId)}` : ''}</div>
+            ${S.user.rol === 'jefatura' || ed ? `<button class="btn sm ghost" data-action="opp-origen" data-id="${o.id}">${o.origenOpp && o.origenOpp.id ? 'Cambiar' : 'Completar'}</button>` : ''}</div>
           <div class="fact"><div class="l">Factura estimada</div>${ed && (abierta || o.etapa === 'ganada') && !(o.postventa && o.postventa.facturado)
             ? `<select data-change="fact-est" data-id="${o.id}" aria-label="Facturación estimada">${factOpts(factDe(o), 'Sin elegir…')}</select><div class="small muted">${fecFac ? Util.fmtDate(fecFac) + (o.fechaFacturaEst ? '' : ' · OC + plazo') : ''}</div>`
             : `<div class="v">${o.postventa && o.postventa.facturado ? 'Facturada ' + Util.fmtDate(fecFac) : fecFac && (abierta || o.etapa === 'ganada') ? Util.fmtDate(fecFac) + ' · ' + Rules.horizonteNombre(Rules.horizonte(fecFac, h)) : '—'}</div>`}</div>
@@ -5447,7 +5785,7 @@ const UI = (() => {
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
       condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
-      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', referencia: '', numAuto: false };
+      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
   }
   function numeroSugerido(u) {
     if (S.db.numeracion) return Rules.numeroAM(S.db, u, hoy());
@@ -5714,7 +6052,7 @@ const UI = (() => {
             <span>Como <strong>alternativa con otra marca</strong> dentro de ${o.id} (no reemplaza a la vigente)</span></label>`).join('')}
           <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="radio" name="modo" data-nq-modo="nueva"${d.modo === 'nueva' ? ' checked' : ''}><span>Como <strong>oportunidad nueva</strong></span></label>
         </div></div></div>` : ''}`)}
-      ${sec(5, 'Seguimiento', `<div class="form-grid">
+      ${sec(5, 'Seguimiento', `<div class="form-grid">${origenNqHTML(d)}
         <label class="field"><span>Etapa <span class="req">*</span></span><select data-nq="etapa" data-nq-render="1">${options(Rules.ETAPAS_ABIERTAS.map(e => [e, `${Rules.etapa(e).nombre} (${Util.pct(Rules.prob(e))})`]), d.etapa)}</select>
           <span class="field-hint">${E(Rules.etapa(d.etapa).criterio)}</span><span id="nq-grande">${grandeHTML(d, usd)}</span></label>
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" data-nq="proxContacto" min="${hoy()}" value="${d.proxContacto}"><span class="field-hint">Sugerido: 3 días hábiles (${Util.fmtDate(Util.addBizDays(hoy(), 3))}).</span></label>
@@ -5725,6 +6063,12 @@ const UI = (() => {
         ${plat ? `<button type="button" class="btn" data-action="nq-preview">${I('file')} Vista previa PDF</button>` : ''}
         <button type="submit" class="btn primary">${I('check')} ${plat ? 'Registrar y generar PDF' : 'Registrar cotización'}</button></div>
     </form>`;
+  }
+  /** Origen de la oportunidad (dato interno, no sale en el PDF): obligatorio al crear una oportunidad; en revisiones ya lo tiene */
+  function origenNqHTML(d) {
+    const l = d.leadId && (S.db.leads || []).find(x => x.id === d.leadId);
+    if (l) return `<div class="alert info" style="grid-column:1/-1;margin:0"><div>Desde el lead <strong>${E(l.id)}</strong> · origen: <strong>${E(Rules.origenNombre(S.db, l.origen))}</strong>. Al registrar, el lead pasa a "Convertido" y su origen queda en la oportunidad.</div></div>`;
+    return d.modo === 'nueva' ? origenCampos({ id: d.origenId, marca: d.origenMarca, texto: d.origenTexto }, true) : '';
   }
   function dupHTML(dup) {
     if (!dup.length) return '';
@@ -5887,7 +6231,7 @@ const UI = (() => {
       validezDias: d.validezDias, plazo: d.plazo, items: d.items, descuento: d.descuento, descuentoTipo: d.descuentoTipo, descuentoPct: d.descuentoPct,
       proyectoId: d.proyectoSel && d.proyectoSel !== '__nuevo' ? d.proyectoSel : '',
       proyectoNuevo: d.proyectoSel === '__nuevo' ? d.proyectoNuevo : null,
-      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, facturacion: d.facturacion, origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
+      modo: d.modo, oppDestinoId: d.oppDestinoId, etapa: d.etapa, proxContacto: d.proxContacto, fechaOC: d.fechaOC, facturacion: d.facturacion, origenOpp: { id: d.origenId, marca: d.origenMarca, texto: d.origenTexto }, leadId: d.leadId || '', origen: N.tab === 'pdf' ? 'pdf' : 'plataforma',
       contactoCorreo: d.contactoCorreo || '', contactoTelefono: d.contactoTelefono || '', direccion: d.direccion || '', distrito: d.distrito || '', ciudad: d.ciudad || '', pais: d.pais || '', condicionEspecial: d.condicionEspecial || '', referencia: d.referencia || '', rucCompletar: d.rucCompletar || '', archivo: N.archivo || '' };
     if (!p.clienteId && !p.clienteNuevo) p.clienteNuevo = null;
     if (p.modo !== 'nueva' && !p.proyectoId) p.modo = 'nueva';
@@ -6031,7 +6375,8 @@ const UI = (() => {
             <td>${os.map(o => `<div class="nowrap" style="margin-bottom:3px"><a href="#/op/${o.id}" style="text-decoration:none;color:inherit">${vendTag(usr(o.vendedorId))} ${E(cli(o.clienteId).razonSocial)}</a> · ${etapaHTML(o.etapa)}</div>`).join('')}</td>
             <td>${g ? `<span class="chip ok">Ganado por ${E(cli(g.clienteId).razonSocial)}</span>` : `<span class="chip info">En curso · ${os.filter(o => Rules.esAbierta(o)).length} abiertas</span>`}</td></tr>`; }).join('')}
         </tbody></table></div>` : '<p class="muted">No hay proyectos con varios integradores.</p>'}
-      </section>`;
+      </section>
+      ${leadsDashHTML(vid)}`;
   };
   CHANGES['dash'] = el => { S.dash.vendedor = el.value; render(true); };
   PAGES['ranking'] = async () => {
@@ -6230,8 +6575,8 @@ const UI = (() => {
     let cuerpo = '';
     if (S.notif.tab === 'alertas') {
       const al = Rules.alertasUsuario(S.db, u, h);
-      cuerpo = `<div class="list-card"><header><h2>${jef ? 'Escalados y cuentas sin cotizar' : 'Alertas activas'}</h2><span class="count ${al.length ? 'bad' : ''}">${al.length}</span><span class="hint">Lo mismo que muestra la campana</span></header>
-        ${al.length ? al.map(x => x.cliente ? cuentaItem(x.cliente, x.alerta, !jef) : jef ? `<div class="op-item"><a class="op-main" href="#/op/${x.opp.id}"><div class="op-title">${E(cli(x.opp.clienteId).razonSocial)} ${vendTag(usr(x.opp.vendedorId))}</div><div class="op-sub">${E(projName(proj(x.opp.proyectoId)))} · ${E(usr(x.opp.vendedorId).nombre)}</div><div class="op-meta">${etapaHTML(x.opp.etapa)} <span class="chip">${money(Rules.montoUSD(S.db, x.opp))}</span>${alertChip(x.alerta)}</div></a></div>` : opItem(x.opp, x.alerta)).join('') : '<div class="list-empty">Sin alertas.</div>'}</div>`;
+      cuerpo = `<div class="list-card"><header><h2>${jef ? 'Leads, escalados y cuentas sin cotizar' : 'Alertas activas'}</h2><span class="count ${al.length ? 'bad' : ''}">${al.length}</span><span class="hint">Lo mismo que muestra la campana</span></header>
+        ${al.length ? al.map(x => x.lead ? `<div class="op-item"><a class="op-main" href="#/leads"><div class="op-title">${E(x.lead.empresa || x.lead.contacto || x.lead.correo)} ${x.lead.vendedorId ? vendTag(usr(x.lead.vendedorId)) : ''}</div><div class="op-sub">Lead ${E(x.lead.id)} · ${E(Rules.origenNombre(S.db, x.lead.origen))} · llegó ${Util.fmtFechaHora(x.lead.llegada)}</div><div class="op-meta">${alertChip(x.alerta)}</div></a></div>` : x.cliente ? cuentaItem(x.cliente, x.alerta, !jef) : jef ? `<div class="op-item"><a class="op-main" href="#/op/${x.opp.id}"><div class="op-title">${E(cli(x.opp.clienteId).razonSocial)} ${vendTag(usr(x.opp.vendedorId))}</div><div class="op-sub">${E(projName(proj(x.opp.proyectoId)))} · ${E(usr(x.opp.vendedorId).nombre)}</div><div class="op-meta">${etapaHTML(x.opp.etapa)} <span class="chip">${money(Rules.montoUSD(S.db, x.opp))}</span>${alertChip(x.alerta)}</div></a></div>` : opItem(x.opp, x.alerta)).join('') : '<div class="list-empty">Sin alertas.</div>'}</div>`;
     } else if (S.notif.tab === 'diario') {
       cuerpo = selV + correoDiario(v);
     } else if (S.notif.tab === 'semanal') {
@@ -6741,6 +7086,309 @@ const UI = (() => {
       </tbody></table></div>`;
   };
   filtro('pvf', () => S.pvF);
+
+  /* =====================================================================
+     LEADS — bandeja: registro (a mano, correo de fabricante o CSV de HubSpot), asignación,
+     primer contacto y conversión en oportunidad. Jefatura gestiona; el vendedor trabaja los suyos.
+     ===================================================================== */
+  const estadoLead = l => { const e = Config.ESTADOS_LEAD[l.estado]; return `<span class="chip ${e.cls}">${e.nombre}</span>`; };
+  const VIA_LEAD = { manual: 'Registro manual', hubspot: 'Importado de HubSpot', correo: 'Correo de fabricante' };
+  const origenesActivos = () => Rules.origenes(S.db).filter(o => !o.inactivo);
+  const marcasLead = () => [...new Set([...Config.MARCAS, ...Rules.reglasLead(S.db).dominios.map(d => d[1]), 'Otra'])];
+  const fmtH = x => x == null ? '—' : x < 1 ? '< 1 h' : Math.round(x) + ' h';
+  const prom = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+  /** Origen con su subcampo obligatorio (marca del fabricante u "Otro"). nq: dentro del formulario de cotización (campos del borrador) */
+  function origenCampos(o, nq) {
+    const x = Rules.origenDe(S.db, o && o.id), a = k => nq ? ` data-nq="${k}"` : '';
+    return `<label class="field"><span>Origen${nq ? ' de la oportunidad' : ''} <span class="req">*</span></span><select name="origenId" data-origen-sel${a('origenId')}>${options(origenesActivos().map(y => [y.id, y.nombre]), o && o.id, 'Elige…')}</select>${nq ? '<span class="field-hint">De dónde vino. Dato interno: no sale en el PDF.</span>' : ''}</label>
+      <label class="field${x && x.marca ? '' : ' hidden'}" data-origen-marca><span>Marca del fabricante <span class="req">*</span></span><select name="origenMarca"${a('origenMarca')}>${options(marcasLead().map(m => [m, m]), o && o.marca, 'Elige…')}</select></label>
+      <label class="field${x && x.texto ? '' : ' hidden'}" data-origen-texto><span>¿Cuál? <span class="req">*</span></span><input type="text" name="origenTexto"${a('origenTexto')} value="${E((o && o.texto) || '')}"></label>`;
+  }
+  function bindOrigen(root) {
+    root.addEventListener('change', e => {
+      if (!e.target.matches('[data-origen-sel]')) return;
+      const x = Rules.origenDe(S.db, e.target.value);
+      root.querySelector('[data-origen-marca]').classList.toggle('hidden', !(x && x.marca));
+      root.querySelector('[data-origen-texto]').classList.toggle('hidden', !(x && x.texto));
+    });
+  }
+  const origenDeModal = root => ({ id: val(root, 'origenId'), marca: val(root, 'origenMarca'), texto: val(root, 'origenTexto') });
+
+  PAGES['leads'] = async () => {
+    const db = S.db, u = S.user, jef = Rules.puede(u, 'gestionar_leads'), F = S.leadF, ya = Util.ahora(), LIM = Config.LEAD_SIN_ATENDER_H;
+    const tarde = l => Rules.horasSinAtender(l, ya) > LIM;
+    const todos = (db.leads || []).filter(l => jef || l.vendedorId === u.id);
+    let ls = todos;
+    if (F.estado === 'pendientes') ls = ls.filter(l => ['nuevo', 'asignado', 'contactado'].includes(l.estado));
+    else if (F.estado === 'sin_atender') ls = ls.filter(tarde);
+    else if (F.estado) ls = ls.filter(l => l.estado === F.estado);
+    if (F.origen) ls = ls.filter(l => l.origen.id === F.origen);
+    if (jef && F.vendedor) ls = ls.filter(l => F.vendedor === '__sin' ? !l.vendedorId : l.vendedorId === F.vendedor);
+    const t = Util.norm(F.q);
+    if (t) ls = ls.filter(l => Util.norm([l.id, l.empresa, l.ruc, l.contacto, l.correo, l.telefono, l.necesidad, l.origen.marca].join(' ')).includes(t));
+    ls = ls.slice().sort((a, b) => b.llegada.localeCompare(a.llegada));
+    const n = f => todos.filter(f).length;
+    const kpis = jef
+      ? [['nuevo', 'Nuevos sin asignar', n(l => l.estado === 'nuevo'), 'info'], ['asignado', 'Asignados sin contactar', n(l => l.estado === 'asignado'), 'warn'], ['sin_atender', `Sin atender +${LIM} h hábiles`, n(tarde), 'bad'], ['convertido', 'Convertidos en oportunidad', n(l => l.estado === 'convertido'), 'ok']]
+      : [['asignado', 'Por contactar', n(l => l.estado === 'asignado'), 'warn'], ['contactado', 'En contacto', n(l => l.estado === 'contactado'), 'info'], ['sin_atender', `Sin atender +${LIM} h hábiles`, n(tarde), 'bad'], ['convertido', 'Convertidos', n(l => l.estado === 'convertido'), 'ok']];
+    const vend = vendedores();
+    const filaLead = l => {
+      const abierto = !['convertido', 'descartado'].includes(l.estado), propio = l.vendedorId === u.id, h = Rules.horasSinAtender(l, ya);
+      let celdaV = l.vendedorId ? `${vendTag(usr(l.vendedorId))}` : '<span class="muted">Sin asignar</span>';
+      if (jef && abierto) {
+        const sg = Rules.sugerirVendedor(db, l);
+        celdaV = `<select data-change="lead-asignar" data-id="${l.id}" aria-label="Vendedor del lead" style="min-width:150px">${l.vendedorId ? '' : `<option value="" selected>${sg ? 'Asignar… (sugerido ' + E(usr(sg.vendedorId).iniciales) + ')' : 'Asignar…'}</option>`}
+          ${vend.map(v => `<option value="${v.id}"${v.id === l.vendedorId ? ' selected' : ''}>${sg && sg.vendedorId === v.id ? '★ ' : ''}${E(v.iniciales + ' · ' + v.nombre)}</option>`).join('')}</select>
+          ${sg && !l.vendedorId ? `<div class="cell-sub">★ ${E(usr(sg.vendedorId).nombre)}: ya tiene la cuenta (${E(sg.motivo)})</div>` : ''}`;
+      }
+      const acc = [`<button class="btn sm" data-action="lead-ver" data-id="${l.id}">Ver</button>`];
+      if (abierto && propio && u.rol === 'vendedor') acc.push(`<button class="btn sm" data-action="lead-contactar" data-id="${l.id}">${I('phone')} Contacto</button>`, `<button class="btn sm primary" data-action="lead-convertir" data-id="${l.id}">${I('plus')} Cotizar</button>`);
+      if (abierto && (jef || propio)) acc.push(`<button class="btn sm ghost" data-action="lead-descartar" data-id="${l.id}">Descartar</button>`);
+      return `<tr>
+        <td class="nowrap">${Util.fmtFechaHora(l.llegada)}${Rules.leadPendiente(l) ? `<div class="cell-sub"><span class="${h > LIM ? 'chip bad' : ''}">${Math.floor(h)} h hábiles sin atender</span></div>` : ''}</td>
+        <td class="small">${E(Rules.origenNombre(db, l.origen))}<div class="cell-sub">${E(VIA_LEAD[l.via] || '')}</div></td>
+        <td><div class="cell-main">${E(l.empresa || '—')}</div><div class="cell-sub">${l.ruc ? 'RUC ' + E(l.ruc) : ''}</div></td>
+        <td class="small">${E(l.contacto || '—')}<div class="cell-sub">${l.correo ? `<a href="mailto:${E(l.correo)}">${E(l.correo)}</a>` : ''}${l.correo && l.telefono ? ' · ' : ''}${E(l.telefono || '')}</div></td>
+        <td class="small">${E((l.necesidad || '').slice(0, 90))}${(l.necesidad || '').length > 90 ? '…' : ''}</td>
+        <td>${celdaV}</td>
+        <td class="nowrap">${estadoLead(l)}${l.oppId ? `<div class="cell-sub"><a href="#/op/${l.oppId}">${E(l.oppId)}</a></div>` : ''}</td>
+        <td><div class="btn-row" style="flex-wrap:nowrap">${acc.join('')}</div></td></tr>`;
+    };
+    view().innerHTML = `
+      <div class="page-head"><div><h1>${jef ? 'Bandeja de leads' : 'Mis leads'}</h1><p class="muted">${jef ? 'Consultas que aún no son oportunidad: asígnalas y sigue su atención' : 'Consultas asignadas a ti: registra el primer contacto y cotiza'}</p></div>
+        ${jef ? `<div class="btn-row"><button class="btn" data-action="lead-config">Orígenes y reglas</button><button class="btn" data-action="lead-importar">${I('upload')} Importar CSV de HubSpot</button><button class="btn" data-action="lead-correo">${I('mail')} Pegar correo de fabricante</button><button class="btn primary" data-action="lead-nuevo">${I('plus')} Registrar lead</button></div>` : ''}</div>
+      <div class="lead-kpis">${kpis.map(([k, l, v, c]) => `<button class="lead-kpi${F.estado === k ? ' act' : ''}" data-action="lead-kpi" data-e="${k}"><span class="chip ${v ? c : ''}">${v}</span>${E(l)}</button>`).join('')}</div>
+      <div class="card" style="padding:12px;margin-top:12px"><div class="filters" style="margin:0">
+        <label class="field" style="flex:2 1 260px">Buscar<input type="text" data-input="leadf" name="q" value="${E(F.q)}" placeholder="Empresa, RUC, contacto, correo, producto o marca"></label>
+        <label class="field">Estado<select data-change="leadf" name="estado">${options([['pendientes', 'Pendientes (nuevos, asignados y en contacto)'], ['sin_atender', `Sin atender +${LIM} h hábiles`], ...Object.entries(Config.ESTADOS_LEAD).map(([k, e]) => [k, e.nombre])], F.estado, 'Todos')}</select></label>
+        <label class="field">Origen<select data-change="leadf" name="origen">${options(Rules.origenes(db).map(o => [o.id, o.nombre]), F.origen, 'Todos')}</select></label>
+        ${jef ? `<label class="field">Vendedor<select data-change="leadf" name="vendedor">${options([['__sin', 'Sin asignar'], ...vend.map(v => [v.id, v.iniciales + ' · ' + v.nombre])], F.vendedor, 'Todos')}</select></label>` : ''}
+      </div><div class="small muted" style="margin-top:8px">${ls.length} lead${ls.length === 1 ? '' : 's'} · del más reciente al más antiguo</div></div>
+      <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1180px"><thead><tr><th>Llegada</th><th>Origen</th><th>Empresa</th><th>Contacto</th><th>Producto o necesidad</th><th>Vendedor</th><th>Estado</th><th></th></tr></thead><tbody>
+        ${ls.slice(0, 200).map(filaLead).join('') || `<tr><td colspan="8" class="center muted" style="padding:22px">${todos.length ? 'Sin leads con estos filtros.' : jef ? 'Aún no hay leads. Regístralos a mano, pega un correo de fabricante o importa el CSV de HubSpot.' : 'No tienes leads asignados.'}</td></tr>`}
+      </tbody></table></div>
+      <p class="small muted">"Horas hábiles" cuenta solo días hábiles (lunes a viernes, sin feriados): ${LIM} h hábiles = ${LIM / 24} días hábiles desde la llegada sin primer contacto. ${jef ? 'La ★ sugiere al vendedor que ya tiene la empresa en su cartera (por RUC, dominio del correo o razón social).' : 'Al cotizar desde un lead, el origen pasa a la oportunidad.'}</p>`;
+  };
+  filtro('leadf', () => S.leadF);
+  ACTIONS['lead-kpi'] = el => { S.leadF.estado = S.leadF.estado === el.dataset.e ? 'pendientes' : el.dataset.e; render(true); };
+  CHANGES['lead-asignar'] = async el => {
+    if (!el.value) return;
+    try { const l = await Repo.asignarLead(el.dataset.id, el.value, S.user.id); toast(`Lead ${l.id} asignado a ${usr(el.value).nombre}. Le llega la notificación.`); } catch (e) { toast(e.message); }
+    refresh();
+  };
+  const leadDe = id => (S.db.leads || []).find(l => l.id === id);
+  ACTIONS['lead-ver'] = el => {
+    const l = leadDe(el.dataset.id); if (!l) return;
+    const jef = Rules.puede(S.user, 'gestionar_leads'), dato = (k, v) => `<div class="fact"><div class="l">${k}</div><div class="v small">${v || '—'}</div></div>`;
+    modal({ title: `Lead ${l.id} · ${l.empresa || l.contacto || l.correo}`, wide: true,
+      body: `<div class="facts" style="margin-top:0">${dato('Llegada', Util.fmtFechaHora(l.llegada))}${dato('Origen', E(Rules.origenNombre(S.db, l.origen)))}${dato('Estado', estadoLead(l) + (l.motivoDescarte ? ' ' + E((Config.MOTIVOS_DESCARTE.find(m => m[0] === l.motivoDescarte) || [])[1] || '') : ''))}
+        ${dato('Empresa', E(l.empresa) + (l.ruc ? ' · RUC ' + E(l.ruc) : ''))}${dato('Contacto', E([l.contacto, l.correo, l.telefono].filter(Boolean).join(' · ')))}${dato('Vendedor', l.vendedorId ? E(usr(l.vendedorId).nombre) : 'Sin asignar')}
+        ${dato('Asignado', Util.fmtFechaHora(l.asignadoEn))}${dato('Primer contacto', Util.fmtFechaHora(l.contactadoEn))}${dato('Oportunidad', l.oppId ? `<a href="#/op/${l.oppId}" data-modal-close>${E(l.oppId)}</a>` : '')}</div>
+        <h3 style="font-size:14px;margin:14px 0 6px">Producto o necesidad</h3><div class="small">${E(l.necesidad || '—')}</div>
+        ${l.mensaje ? `<h3 style="font-size:14px;margin:14px 0 6px">Mensaje original</h3><pre class="lead-msg">${E(l.mensaje)}</pre>` : ''}
+        <h3 style="font-size:14px;margin:14px 0 6px">Historial</h3><ul class="timeline">${l.historial.slice().reverse().map(x => `<li><div class="t-date">${Util.fmtFechaHora(x.fecha)}</div><div>${E(x.texto)}<div class="small muted">${E(x.usuarioId && usr(x.usuarioId) ? usr(x.usuarioId).nombre : 'Sistema')}</div></div></li>`).join('')}</ul>`,
+      actions: [{ label: 'Cerrar' }, ...(jef && !['convertido', 'descartado'].includes(l.estado) ? [{ label: 'Editar datos', cls: 'primary', onClick: () => { abrirLead(l); return false; } }] : [])] });
+  };
+  /** Formulario de lead: registro manual, desde un correo pegado (prellenado) o edición */
+  function abrirLead(l, { via = 'manual', aviso = '' } = {}) {
+    const editar = !!(l && l.id), d = l || {}, ahoraLocal = Util.ahora();
+    const f = (n, lab, t, extra) => `<label class="field">${lab}<input type="${t || 'text'}" name="${n}" value="${E(d[n] || '')}" ${extra || ''}></label>`;
+    const root = modal({ title: editar ? `Editar lead ${l.id}` : via === 'correo' ? 'Lead desde correo de fabricante' : 'Registrar lead', wide: true,
+      body: `${aviso}<div class="form-grid">
+        <label class="field"><span>Llegada <span class="req">*</span></span><input type="datetime-local" name="llegada" value="${E((d.llegada || ahoraLocal).slice(0, 16))}"></label>
+        ${origenCampos(d.origen)}
+        ${f('empresa', 'Empresa')}${f('ruc', 'RUC (si se conoce)', 'text', 'inputmode="numeric" maxlength="11"')}${f('contacto', 'Contacto')}${f('correo', 'Correo', 'email')}${f('telefono', 'Teléfono', 'tel')}
+        <label class="field" style="grid-column:1/-1">Producto o necesidad<input type="text" name="necesidad" value="${E(d.necesidad || '')}"></label>
+        <label class="field" style="grid-column:1/-1">Mensaje original<textarea name="mensaje" rows="4">${E(d.mensaje || '')}</textarea></label>
+        <label class="field"><span>Vendedor</span><select name="vendedorId">${options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre]), d.vendedorId, 'Sin asignar por ahora')}</select><span class="field-hint" id="lead-sug"></span></label>
+      </div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} ${editar ? 'Guardar cambios' : 'Registrar lead'}`, cls: 'primary', onClick: async r => {
+        const x = { llegada: val(r, 'llegada'), origen: origenDeModal(r), vendedorId: val(r, 'vendedorId') };
+        ['empresa', 'ruc', 'contacto', 'correo', 'telefono', 'necesidad', 'mensaje'].forEach(k => { x[k] = val(r, k); });
+        const res = editar ? await Repo.editarLead(l.id, x, S.user.id) : await Repo.crearLead(x, S.user.id, via);
+        toast(editar ? 'Lead actualizado.' : `Lead ${res.id} registrado${res.vendedorId ? ' y asignado a ' + usr(res.vendedorId).nombre : ''}.`); refresh();
+      } }],
+      onOpen: r => {
+        bindOrigen(r);
+        const sug = () => {
+          const s = Rules.sugerirVendedor(S.db, { ruc: val(r, 'ruc'), correo: val(r, 'correo'), empresa: val(r, 'empresa') }), box = r.querySelector('#lead-sug');
+          box.innerHTML = s ? `★ Sugerido: <strong>${E(usr(s.vendedorId).nombre)}</strong> (${E(s.motivo)}) <a href="#" data-usar="${s.vendedorId}">Usar</a>` : '';
+        };
+        r.addEventListener('input', e => { if (['ruc', 'correo', 'empresa'].includes(e.target.name)) sug(); });
+        r.addEventListener('click', e => { const a = e.target.closest('[data-usar]'); if (a) { e.preventDefault(); r.querySelector('[name=vendedorId]').value = a.dataset.usar; } });
+        sug();
+      } });
+    return root;
+  }
+  ACTIONS['lead-nuevo'] = () => abrirLead(null);
+  /** Pegar un correo de fabricante: se clasifica (dominio y palabras clave) y prellena el lead */
+  ACTIONS['lead-correo'] = () => {
+    modal({ title: 'Pegar correo de fabricante', wide: true,
+      body: `<p class="small muted" style="margin-top:0">Copia del correo el remitente, el asunto y el cuerpo. La plataforma reconoce la marca por el dominio del remitente (por ejemplo @moxa.com) o, si fue reenviado, por el nombre de la marca junto con palabras como "lead", "RFQ" u "opportunity".</p>
+        <div class="stack"><label class="field">Remitente<input type="text" name="remitente" placeholder="Nombre <correo@dominio.com>"></label>
+        <label class="field">Asunto<input type="text" name="asunto"></label>
+        <label class="field">Cuerpo del correo<textarea name="cuerpo" rows="10"></textarea></label></div>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Clasificar y continuar', cls: 'primary', onClick: r => {
+        const remitente = val(r, 'remitente'), asunto = val(r, 'asunto'), cuerpo = r.querySelector('[name=cuerpo]').value;
+        if (!remitente && !cuerpo.trim()) throw Object.assign(new Error('Pega al menos el remitente y el cuerpo.'), { campos: { cuerpo: 'Obligatorio' } });
+        const c = Rules.clasificarCorreo(S.db, { remitente, asunto, cuerpo }), marca = c.marca && marcasLead().includes(c.marca) ? c.marca : c.marca ? 'Otra' : '';
+        const aviso = c.esFabricante
+          ? `<div class="alert ok" style="margin-bottom:12px"><div><strong>Lead de fabricante · ${E(c.marca)}</strong> — ${c.porDominio ? 'por el dominio del remitente (' + E(c.dominio) + ')' : 'por el nombre de la marca'}${c.palabras.length ? ' · palabras clave: ' + E(c.palabras.join(', ')) : ''}. Revisa los datos antes de registrar.</div></div>`
+          : `<div class="alert warn" style="margin-bottom:12px"><div>No se reconoció un fabricante${c.dominio ? ' (dominio ' + E(c.dominio) + ')' : ''}. Elige el origen. Si el dominio es de una marca, agrégalo en "Orígenes y reglas".</div></div>`;
+        abrirLead({ origen: c.esFabricante ? { id: 'fabricante', marca } : null, empresa: c.empresa, ruc: c.ruc, contacto: c.contacto, correo: c.correo, telefono: c.telefono, necesidad: c.necesidad,
+          mensaje: `De: ${remitente}\nAsunto: ${asunto}\n\n${cuerpo}`.slice(0, 8000) }, { via: 'correo', aviso });
+        return false;
+      } }] });
+  };
+  /* ---------- Importación del CSV exportado de HubSpot: mapeo de columnas, vista previa y duplicados ---------- */
+  const CAMPOS_IMP = [['llegada', 'Fecha de llegada', /create date|fecha de creaci|created|^fecha|^date/i], ['empresa', 'Empresa', /company|empresa|organi/i], ['ruc', 'RUC', /^ruc|tax id|vat/i],
+    ['nombre', 'Nombre del contacto', /^first name$|^nombre$|^name$|contact name|^contacto$/i], ['apellido', 'Apellido', /last name|apellido/i], ['correo', 'Correo', /e-?mail|correo/i],
+    ['telefono', 'Teléfono', /phone|tel[eé]fono|m[oó]vil|mobile|celular/i], ['necesidad', 'Producto o necesidad', /product|producto|interest|necesidad|subject|asunto/i],
+    ['mensaje', 'Mensaje', /message|mensaje|comment|description|descripci/i], ['fuente', 'Fuente (origen en HubSpot)', /source|fuente|origen/i]];
+  /** Fuente de HubSpot → origen de la plataforma (si no se reconoce, se usa el origen elegido para todo el archivo) */
+  const origenDeFuente = (v, def) => { const s = Util.norm(v); return !s ? def : /facebook/.test(s) ? 'facebook' : /linkedin/.test(s) ? 'linkedin' : /chatbot|\bbot\b/.test(s) ? 'hs_bot' : /ads|paid|anuncio|chat/.test(s) ? 'hs_ads' : /form|formulario/.test(s) ? 'hs_form' : def; };
+  function fechaImportada(v) {
+    if (v == null || v === '') return Util.ahora();
+    if (typeof v === 'number' && v > 20000) { const d = new Date(Math.round((v - 25569) * 864e5)); return d.toISOString().slice(0, 16); }   // fecha de Excel
+    const s = String(v).trim(); let m;
+    if ((m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}T${Util.pad(m[4] || 9)}:${m[5] || '00'}`;
+    if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,]+(\d{1,2}):(\d{2}))?/.exec(s))) return `${m[3]}-${Util.pad(m[2])}-${Util.pad(m[1])}T${Util.pad(m[4] || 9)}:${m[5] || '00'}`;
+    return Util.ahora();
+  }
+  ACTIONS['lead-importar'] = () => {
+    const st = { cab: [], filas: [], map: {}, def: 'hs_form', dup: false };
+    const root = modal({ title: 'Importar leads desde HubSpot (CSV o Excel)', wide: true,
+      body: `<p class="small muted" style="margin-top:0">Exporta los contactos o deals de HubSpot a CSV y súbelo. Se lee en este navegador. Indica qué columna es cada dato, revisa la vista previa (los duplicados se marcan y no se importan, salvo que lo pidas) y confirma.</p>
+        <label class="field">Archivo<input type="file" id="imp-file" accept=".csv,.xlsx"></label><div id="imp-paso"></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('upload')} Importar`, cls: 'primary', onClick: async () => {
+        const filas = prep().filter(f => !f.vacia && (!f.dup || st.dup));
+        if (!filas.length) throw new Error('No hay filas para importar.');
+        const r = await Repo.importarLeads(filas, S.user.id);
+        toast(`${r.importados} leads importados${r.errores.length ? ` · ${r.errores.length} con error (no se importaron): ${r.errores.slice(0, 2).join('; ')}` : ''}.`, { ms: 8000 }); refresh();
+      } }],
+      onOpen: r => {
+        r.querySelector('#imp-file').addEventListener('change', async e => {
+          const file = e.target.files[0]; if (!file) return;
+          try {
+            const hoja = (await ListaPrecios.leerArchivo(file))[0], rows = hoja.rows.filter(x => x && x.some(c => c != null && String(c).trim()));
+            st.cab = (rows[0] || []).map(c => String(c == null ? '' : c).trim()); st.filas = rows.slice(1);
+            st.map = {}; CAMPOS_IMP.forEach(([k, , rx]) => { const j = st.cab.findIndex(h => rx.test(h) && !Object.values(st.map).includes(st.cab.indexOf(h))); if (j >= 0) st.map[k] = j; });
+            pintar();
+          } catch (err) { toast('No se pudo leer el archivo: ' + err.message); }
+        });
+        r.addEventListener('change', e => {
+          if (e.target.dataset.map) { st.map[e.target.dataset.map] = e.target.value === '' ? undefined : +e.target.value; pintar(); }
+          else if (e.target.name === 'imp-def') { st.def = e.target.value; pintar(); }
+          else if (e.target.name === 'imp-dup') { st.dup = e.target.checked; }
+        });
+      } });
+    function prep() {
+      const vistos = new Set(), existentes = new Set((S.db.leads || []).map(l => l.correo ? 'c:' + l.correo.toLowerCase() : 'e:' + Util.norm(l.empresa) + '|' + Util.norm(l.contacto)));
+      return st.filas.map((row, i) => {
+        const g = k => st.map[k] == null ? '' : String(row[st.map[k]] == null ? '' : row[st.map[k]]).trim();
+        const d = { fila: i + 2, llegada: fechaImportada(st.map.llegada == null ? '' : row[st.map.llegada]), empresa: g('empresa'), ruc: g('ruc').replace(/\D/g, ''), contacto: [g('nombre'), g('apellido')].filter(Boolean).join(' '),
+          correo: g('correo'), telefono: g('telefono'), necesidad: g('necesidad'), mensaje: g('mensaje'), origen: { id: origenDeFuente(g('fuente'), st.def), marca: '', texto: '' } };
+        const k = d.correo ? 'c:' + d.correo.toLowerCase() : 'e:' + Util.norm(d.empresa) + '|' + Util.norm(d.contacto);
+        d.vacia = !d.empresa && !d.contacto && !d.correo;
+        d.dup = !d.vacia && (existentes.has(k) || vistos.has(k));
+        vistos.add(k);
+        return d;
+      });
+    }
+    function pintar() {
+      const fs = prep(), nuevos = fs.filter(f => !f.vacia && !f.dup).length, dups = fs.filter(f => f.dup).length;
+      const opsHs = origenesActivos().filter(o => !o.marca && !o.texto);
+      root.querySelector('#imp-paso').innerHTML = `
+        <h3 style="font-size:14px;margin:12px 0 6px">Columnas</h3><div class="imp-map">${CAMPOS_IMP.map(([k, lab]) => `<label class="field">${lab}<select data-map="${k}">${options(st.cab.map((h, j) => [j, h || '(columna ' + (j + 1) + ')']), st.map[k], '— No está —')}</select></label>`).join('')}
+          <label class="field">Origen si la fuente no se reconoce<select name="imp-def">${options(opsHs.map(o => [o.id, o.nombre]), st.def)}</select></label></div>
+        <div class="btn-row" style="margin:10px 0"><span class="chip ok">${nuevos} nuevos</span><span class="chip ${dups ? 'warn' : ''}">${dups} duplicados</span><span class="chip">${fs.filter(f => f.vacia).length} vacías</span>
+          <label style="display:flex;gap:6px;align-items:center" class="small"><input type="checkbox" name="imp-dup"${st.dup ? ' checked' : ''}> Importar también los duplicados</label></div>
+        <div class="table-wrap" style="max-height:38vh"><table class="tbl"><thead><tr><th class="r">Fila</th><th></th><th>Llegada</th><th>Origen</th><th>Empresa</th><th>Contacto</th><th>Correo</th><th>Necesidad</th></tr></thead><tbody>
+          ${fs.slice(0, 60).map(f => `<tr><td class="r small">${f.fila}</td><td>${f.vacia ? '<span class="chip">Vacía</span>' : f.dup ? '<span class="chip warn">Duplicado</span>' : '<span class="chip ok">Nuevo</span>'}</td><td class="small nowrap">${Util.fmtFechaHora(f.llegada)}</td>
+            <td class="small">${E(Rules.origenNombre(S.db, f.origen))}</td><td class="small">${E(f.empresa)}</td><td class="small">${E(f.contacto)}</td><td class="small">${E(f.correo)}</td><td class="small">${E(f.necesidad.slice(0, 60))}</td></tr>`).join('')}
+        </tbody></table></div>${fs.length > 60 ? `<p class="small muted">… y ${fs.length - 60} filas más.</p>` : ''}
+        <p class="small muted">Duplicado: mismo correo (o, sin correo, misma empresa y contacto) que un lead ya registrado o que una fila anterior del archivo.</p>`;
+    }
+  };
+  /* ---------- Orígenes y reglas de correos de fabricante (jefatura) ---------- */
+  ACTIONS['lead-config'] = () => {
+    const os = Rules.origenes(S.db).map(o => Object.assign({}, o)), R = Rules.reglasLead(S.db);
+    const filaO = (o, i) => `<tr data-i="${i}"><td><input type="text" data-o="nombre" value="${E(o.nombre)}" aria-label="Nombre del origen"></td><td class="small muted">${o.marca ? 'Pide la marca' : o.texto ? 'Pide un texto' : ''}</td>
+      <td class="center"><input type="checkbox" data-o="activo"${o.inactivo ? '' : ' checked'} aria-label="Activo"></td></tr>`;
+    const root = modal({ title: 'Orígenes y reglas de correos', wide: true,
+      body: `<h3 style="font-size:14px;margin:0 0 6px">Orígenes</h3><p class="small muted" style="margin:0 0 6px">Lista cerrada para leads y oportunidades. Un origen desactivado deja de ofrecerse, pero los registros que ya lo tienen lo conservan.</p>
+        <div class="table-wrap"><table class="tbl" id="cfg-o"><thead><tr><th>Nombre</th><th>Subcampo</th><th class="center">Activo</th></tr></thead><tbody>${os.map(filaO).join('')}</tbody></table></div>
+        <button type="button" class="btn sm" id="cfg-add" style="margin-top:6px">${I('plus')} Agregar origen</button>
+        <h3 style="font-size:14px;margin:16px 0 6px">Dominios de fabricante</h3><p class="small muted" style="margin:0 0 6px">Uno por línea: <code>dominio = Marca</code>. También reconoce subdominios y extensiones de país (us.moxa.com, moxa.com.tw).</p>
+        <textarea name="dominios" rows="8" style="width:100%;font-family:ui-monospace,monospace">${E(R.dominios.map(([d, m]) => `${d} = ${m}`).join('\n'))}</textarea>
+        <label class="field" style="margin-top:10px">Palabras clave (separadas por coma)<input type="text" name="palabras" value="${E(R.palabras.join(', '))}"></label>
+        ${(S.db.configLog || []).length ? `<h3 style="font-size:14px;margin:16px 0 6px">Historial</h3><ul class="timeline">${S.db.configLog.slice(0, 5).map(x => `<li><div class="t-date">${Util.fmtFechaHora(x.fecha)}</div><div>${E(x.accion)}<div class="small muted">${E(usr(x.usuarioId) ? usr(x.usuarioId).nombre : '')}</div></div></li>`).join('')}</ul>` : ''}`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
+        const filas = [...r.querySelectorAll('#cfg-o tbody tr')].map(tr => Object.assign({}, os[+tr.dataset.i] || {}, { nombre: tr.querySelector('[data-o=nombre]').value, inactivo: !tr.querySelector('[data-o=activo]').checked }));
+        const dominios = r.querySelector('[name=dominios]').value.split('\n').map(x => x.split('=').map(y => y.trim())).filter(x => x[0]);
+        if (dominios.some(x => x.length < 2 || !x[1])) throw new Error('Cada línea de dominios debe ser "dominio = Marca".');
+        await Repo.guardarConfigLeads({ origenes: filas, reglas: { dominios, palabras: val(r, 'palabras').split(',') } }, S.user.id);
+        toast('Orígenes y reglas guardados.'); refresh();
+      } }],
+      onOpen: r => r.querySelector('#cfg-add').addEventListener('click', () => { os.push({ id: '', nombre: '' }); r.querySelector('#cfg-o tbody').insertAdjacentHTML('beforeend', filaO(os[os.length - 1], os.length - 1)); }) });
+  };
+  /* ---------- Acciones del vendedor ---------- */
+  ACTIONS['lead-contactar'] = el => {
+    const l = leadDe(el.dataset.id); if (!l) return;
+    modal({ title: `Contacto con ${l.empresa || l.contacto}`, body: `<div class="stack"><label class="field">Canal<select name="canal">${options(['WhatsApp', 'Llamada', 'Correo', 'Reunión'].map(x => [x, x]), 'WhatsApp')}</select></label>
+      <label class="field">Nota<textarea name="nota" rows="3" placeholder="Qué se habló y siguiente paso"></textarea></label></div>
+      <p class="small muted">Queda como primer contacto (cuenta para el tiempo de respuesta). Cuando haya que cotizar, usa "Cotizar": el lead pasa a oportunidad con su origen.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Registrar contacto`, cls: 'primary', onClick: async r => { await Repo.contactarLead(l.id, { canal: val(r, 'canal'), nota: val(r, 'nota') }, S.user.id); toast('Contacto registrado.'); refresh(); } }] });
+  };
+  ACTIONS['lead-descartar'] = el => {
+    const l = leadDe(el.dataset.id); if (!l) return;
+    modal({ title: `Descartar lead ${l.id}`, body: `<div class="stack"><label class="field"><span>Motivo <span class="req">*</span></span><select name="motivo">${options(Config.MOTIVOS_DESCARTE, '', 'Elige…')}</select></label>
+      <label class="field">Detalle (obligatorio si es "Otro")<input type="text" name="motivoOtro"></label></div>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Descartar', cls: 'bad', onClick: async r => { await Repo.descartarLead(l.id, val(r, 'motivo'), val(r, 'motivoOtro'), S.user.id); toast('Lead descartado.'); refresh(); } }] });
+  };
+  /** Convertir: abre Nueva cotización con la empresa y el contacto del lead; al registrarla, el lead queda "Convertido" y su origen pasa a la oportunidad */
+  ACTIONS['lead-convertir'] = el => {
+    const l = leadDe(el.dataset.id); if (!l) return;
+    const db = S.db, sg = Rules.sugerirVendedor(db, l);
+    const c = (l.ruc && db.clients.find(x => x.ruc === l.ruc)) || (sg && cli(sg.clienteId)) || (l.empresa && db.clients.find(x => Util.norm(x.razonSocial) === Util.norm(l.empresa)));
+    const d = Object.assign(draftVacio(), c ? { clienteId: c.id } : { clienteId: '__nuevo', clienteNuevo: { razonSocial: l.empresa || '', ruc: l.ruc || '' } },
+      { contacto: l.contacto || '', contactoCorreo: l.correo || '', contactoTelefono: l.telefono || '', leadId: l.id, numAuto: true, numero: numeroSugerido(S.user) });
+    S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
+    go('nueva');
+  };
+  /* ---------- Origen en la ficha de la oportunidad ---------- */
+  ACTIONS['opp-origen'] = el => {
+    const o = oppById(el.dataset.id); if (!o) return;
+    const root = modal({ title: 'Origen de la oportunidad', body: `<div class="stack">${origenCampos(o.origenOpp)}</div><p class="small muted">Dato interno: no sale en el PDF. El cambio queda en el historial.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => { await Repo.origenOportunidad(o.id, origenDeModal(r), S.user.id); toast('Origen actualizado.'); refresh(); } }],
+      onOpen: bindOrigen });
+    return root;
+  };
+  /* ---------- Dashboard: leads y origen (jefatura y gerencia) ---------- */
+  function leadsDashHTML(vid) {
+    const db = S.db, h = hoy(), desde = Util.startOfMonth(Util.addMonths(h, -5)), R = Rules.indicadoresLeads(db, { desde, hasta: h, vendedorId: vid || null });
+    const nombre = id => id === 'sin' ? 'Sin origen' : (Rules.origenDe(db, id) || { nombre: id }).nombre;
+    const ids = [...Rules.origenes(db).map(o => o.id), ...Object.keys(R.porOrigen).filter(id => id !== 'sin' && !Rules.origenes(db).some(o => o.id === id)), 'sin'].filter(id => R.porOrigen[id]);
+    const conLeads = ids.filter(id => R.porOrigen[id].leads), T = k => Util.sum(ids, id => R.porOrigen[id][k]), pct = (a, b) => b ? Util.pct(a / b) : '—';
+    const vs = Object.keys(R.porVend).map(usr).filter(Boolean);
+    return `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Leads y origen de las oportunidades</h2><span class="sub">Últimos 6 meses · ${R.leads.length} leads${vid ? ' · ' + E(usr(vid).nombre) : ''}</span><a class="btn sm" href="#/leads" style="margin-left:auto">Bandeja de leads</a></div>
+      ${R.sinAtender.length ? `<div class="alert bad" style="margin-bottom:12px"><div><strong>${R.sinAtender.length} lead${R.sinAtender.length === 1 ? '' : 's'} sin atender por más de ${Config.LEAD_SIN_ATENDER_H} horas hábiles.</strong> <a href="#" data-action="lead-sin-atender">Ver en la bandeja</a></div></div>` : ''}
+      ${conLeads.length ? `<h3 class="dash-h3">Leads por origen y mes</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Origen</th>${R.meses.map(m => `<th class="r">${Util.fmtMonth(m)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+        ${conLeads.map(id => { const f = R.porOrigen[id]; return `<tr><td>${E(nombre(id))}</td>${R.meses.map(m => `<td class="r">${f.meses[m] || ''}</td>`).join('')}<td class="r"><strong>${f.leads}</strong></td></tr>`
+          + Object.entries(f.marcas).sort((a, b) => b[1].total - a[1].total).map(([mc, x]) => `<tr class="sub-row"><td class="small">&nbsp;&nbsp;↳ ${E(mc)}</td>${R.meses.map(m => `<td class="r small">${x.meses[m] || ''}</td>`).join('')}<td class="r small">${x.total}</td></tr>`).join(''); }).join('')}
+        <tr class="tot"><td>Total</td>${R.meses.map(m => `<td class="r">${Util.sum(conLeads, id => R.porOrigen[id].meses[m] || 0) || ''}</td>`).join('')}<td class="r">${R.leads.length}</td></tr></tbody></table></div>` : '<p class="muted">Aún no hay leads registrados en estos 6 meses.</p>'}
+      <h3 class="dash-h3">Conversión por origen</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Origen</th><th class="r">Leads</th><th class="r">Convertidos</th><th class="r">Lead → oport.</th><th class="r">Oportunidades</th><th class="r">Ganadas</th><th class="r">Tasa de cierre</th><th class="r">Monto oportunidades</th><th class="r">Monto ganado</th><th class="r">Facturado</th></tr></thead><tbody>
+        ${ids.map(id => { const f = R.porOrigen[id]; return `<tr${id === 'sin' ? ' class="muted"' : ''}><td>${E(nombre(id))}</td><td class="r">${f.leads || ''}</td><td class="r">${f.convertidos || ''}</td><td class="r">${f.leads ? pct(f.convertidos, f.leads) : ''}</td><td class="r">${f.opps || ''}</td><td class="r">${f.ganadas || ''}</td><td class="r">${f.opps ? pct(f.ganadas, f.opps) : ''}</td>
+          <td class="r num">${f.montoOpps ? money(f.montoOpps) : ''}</td><td class="r num">${f.montoGanado ? money(f.montoGanado) : ''}</td><td class="r num">${f.facturado ? money(f.facturado) : ''}</td></tr>`; }).join('')}
+        <tr class="tot"><td>Total</td><td class="r">${T('leads')}</td><td class="r">${T('convertidos')}</td><td class="r">${pct(T('convertidos'), T('leads'))}</td><td class="r">${T('opps')}</td><td class="r">${T('ganadas')}</td><td class="r">${pct(T('ganadas'), T('opps'))}</td><td class="r num">${money(T('montoOpps'))}</td><td class="r num">${money(T('montoGanado'))}</td><td class="r num">${money(T('facturado'))}</td></tr></tbody></table></div>
+      <p class="small muted">Leads por fecha de llegada; oportunidades por fecha de inicio (incluye las creadas sin lead, por ejemplo desde Nueva cotización). Montos en USD sin IGV; facturado según post-venta.</p>
+      ${vs.length ? `<h3 class="dash-h3">Leads asignados y tiempo de respuesta por vendedor</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Vendedor</th><th class="r">Asignados</th><th>Por origen</th><th class="r">Llegada → asignación</th><th class="r">Asignación → 1.er contacto</th><th class="r">Sin atender +${Config.LEAD_SIN_ATENDER_H} h</th><th class="r">Convertidos</th></tr></thead><tbody>
+        ${vs.map(v => { const x = R.porVend[v.id]; return `<tr><td>${vendTag(v)} ${E(v.nombre)}</td><td class="r">${x.leads}</td><td class="small">${Object.entries(x.origenes).sort((a, b) => b[1] - a[1]).map(([id, k]) => `${E(nombre(id))} ${k}`).join(' · ')}</td>
+          <td class="r">${fmtH(prom(x.tAsig))}</td><td class="r">${fmtH(prom(x.tCont))}</td><td class="r">${x.sinAtender ? `<span class="chip bad">${x.sinAtender}</span>` : '0'}</td><td class="r">${x.convertidos}</td></tr>`; }).join('')}
+      </tbody></table></div><p class="small muted">Tiempos promedio en horas hábiles (solo días hábiles).</p>` : ''}
+    </section>`;
+  }
+  ACTIONS['lead-sin-atender'] = (el, e) => { if (e) e.preventDefault(); Object.assign(S.leadF, { estado: 'sin_atender', origen: '', vendedor: '', q: '' }); go('leads'); };
 
   /* ---------- Arranque ---------- */
   let tResize = null;
