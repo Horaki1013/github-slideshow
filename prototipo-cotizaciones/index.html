@@ -410,6 +410,9 @@ tr.quick-open>td{border-bottom:0}
 .dash-h3{font-size:14px;margin:16px 0 6px}
 .tbl tr.sub-row td{color:var(--text-2);padding-top:3px;padding-bottom:3px}
 .tbl tr.tot td{font-weight:700;border-top:2px solid var(--border-2)}
+.stk-hint{font-size:11px;color:var(--text-2);margin-bottom:2px;white-space:nowrap}
+.stk-hint.ok{color:var(--ok)}
+.stk-hint.no{color:var(--text-3,#8a94a3)}
 .excel-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2,transparent)}
 .dir-sedes{display:flex;gap:4px 18px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);margin:8px 0}
 .dir-k{font-size:13px}
@@ -487,7 +490,14 @@ const Config = {
   SEGMENTO_T2_USD: 10000,
   OFERTA_GRANDE_USD: 200000,
   TC_REFERENCIA: 3.75,
-  ROLES: { vendedor: 'Account Manager', jefatura: 'Gerencia / Jefatura', finanzas: 'Finanzas', logistica: 'Logística / Soporte', admin: 'Administración del sistema' },
+  ROLES: { vendedor: 'Account Manager', jefatura: 'Gerencia / Jefatura', finanzas: 'Finanzas', logistica: 'Logística / Soporte', gestion: 'Gestión / Administración local', admin: 'Administración del sistema' },
+  OFICINAS: { PE: 'Perú', CL: 'Chile' },
+  // Inventario: el stock nunca se edita directo; resulta de los movimientos. Estados del stock físico en un almacén
+  ESTADOS_STOCK: { libre: 'En almacén', demo: 'Demo / Panel Tech', prestamo: 'Préstamo', malogrado: 'Malogrado' },
+  TIPOS_MOV: { inicial: 'Inventario inicial', ingreso: 'Ingreso (importación o compra)', salida: 'Salida por venta (despacho)', transferencia: 'Transferencia entre almacenes',
+    recepcion: 'Recepción de transferencia', ajuste: 'Ajuste por inventario', devolucion: 'Devolución', estado: 'Cambio de estado (demo, préstamo, malogrado)' },
+  REFS_MOV: ['OC', 'Oportunidad', 'Factura', 'Guía', 'Otro'],
+  SEMANAS_PEDIDO: 6,                  // fecha esperada de un pedido a fábrica si la cotización no trae plazo
   CUENTA_INACTIVA_DIAS: 60,           // ~2 meses sin cotizar → alerta al vendedor y a jefatura
 
   // Estado de la cuenta (se calcula; ver Rules.cuentas)
@@ -1752,6 +1762,7 @@ const DemoData = (() => {
       { id:'u5', nombre:'Valeria Castillo', iniciales:'VC', correo:'vcastillo@techvalue-demo.pe', meta:40000, rol:'vendedor', usuario:'vc', clave:'demo', perfil:'Nueva (poco historial)' },
       { id:'u6', nombre:'Roberto Valdivia', iniciales:'RV', correo:'rvaldivia@techvalue-demo.pe', meta:null,  rol:'jefatura', usuario:'jefatura', clave:'demo', perfil:'Jefatura comercial' },
       { id:'u8', nombre:'Mónica Ugarte',    iniciales:'MU', correo:'mugarte@techvalue-demo.pe',   meta:null,  rol:'admin',    usuario:'admin', clave:'demo', perfil:'Administración (lista de precios)' },
+      { id:'u9', nombre:'Yolanda Ríos',     iniciales:'YR', correo:'yrios@techvalue-demo.pe',     meta:null,  rol:'gestion',  usuario:'gestion', clave:'demo', perfil:'Gestión local (stock de Perú)', oficina:'PE' },
       { id:'u7', nombre:'Patricia Gómez',   iniciales:'PG', correo:'pgomez@techvalue-demo.pe',    meta:null,  rol:'finanzas', usuario:'finanzas', clave:'demo', perfil:'Finanzas (solo lectura)' },
     ];
     const vendedores = db.users.filter(u => u.rol === 'vendedor');
@@ -2198,6 +2209,7 @@ const DemoData = (() => {
     db.catalogoInfo = { actualizado: addDays(hoy, -20), por: 'u7', origen: 'demo' };
     db.catalogoLog = [{ fecha: addDays(hoy, -20), usuarioId: 'u7', accion: `Lista de precios de demostración cargada (${db.catalogo.length} productos ficticios)` }];
     leadsDemo(db, hoy);
+    stockDemo(db, hoy);
     return db;
   }
 
@@ -2235,6 +2247,31 @@ const DemoData = (() => {
     }
     // Oportunidades sin lead: la mayoría con un origen directo; el resto queda "Sin origen" para completar
     db.opps.forEach(o => { if (!o.origenOpp && r() < 0.7) o.origenOpp = r() < 0.15 ? { id: 'fabricante', marca: pick(['Moxa', 'Advantech']) } : { id: pick(['cliente', 'cliente', 'cliente', 'prospeccion', 'referido', 'hs_form']) }; });
+  }
+
+  /** Stock ficticio: almacenes de Lima y Santiago, inventario inicial, una transferencia en camino y un separado */
+  function stockDemo(db, hoy) {
+    const r = Util.rng(SEED + 23), n = (a, b) => a + Math.floor(r() * (b - a + 1)), ini = Util.addDays(hoy, -60), k = c => Rules.normCod(c);
+    Object.assign(db, { almacenes: [{ id: 'AL-1', nombre: 'Almacén Lima', pais: 'PE', ciudad: 'Lima', activo: true }, { id: 'AL-2', nombre: 'Almacén Santiago', pais: 'CL', ciudad: 'Santiago', activo: true }],
+      productosInv: [{ id: 'PI-1', codigo: 'FUENTE-24V-5A', marca: 'Sin marca', descripcion: 'Fuente genérica 24 V 5 A (producto de inventario sin precio)', alta: ini, usuarioId: 'u9' }],
+      movs: [], reservas: [], pedidosFab: [], invAvisos: [], invLog: [], costos: {}, minimos: {} });
+    Object.assign(db.seq, { mov: 1, res: 1, ped: 1, alm: 3, pinv: 2, aviso: 1 });
+    const mov = (d) => db.movs.push(Object.assign({ id: 'M-' + (db.seq.mov++), fecha: ini, creado: ini + 'T09:00', usuarioId: 'u9', nota: 'Inventario inicial (demo)' }, d));
+    const prods = db.catalogo.filter((p, i) => i % 2 === 0).slice(0, 30).concat([{ codigo: 'FUENTE-24V-5A', marca: 'Sin marca' }]);
+    prods.forEach((p, i) => {
+      const libre = n(0, 25), demo = i % 7 === 0 ? 1 : 0, prest = i % 11 === 0 ? 1 : 0;
+      const ef = [['libre', libre], ['demo', demo], ['prestamo', prest]].filter(x => x[1]).map(([e, c]) => ({ almacenId: 'AL-1', estado: e, delta: c }));
+      if (ef.length) mov({ tipo: 'inicial', k: k(p.codigo), codigo: p.codigo, marca: p.marca, almacenId: 'AL-1', cantidad: libre + demo + prest, efectos: ef });
+      if (i % 3 === 0) { const c = n(2, 12); mov({ tipo: 'inicial', k: k(p.codigo), codigo: p.codigo, marca: p.marca, almacenId: 'AL-2', cantidad: c, efectos: [{ almacenId: 'AL-2', estado: 'libre', delta: c }] }); }
+      if (i % 5 === 1) db.minimos[k(p.codigo) + '|AL-1'] = 5;
+    });
+    const p0 = prods[0];
+    mov({ tipo: 'transferencia', k: k(p0.codigo), codigo: p0.codigo, marca: p0.marca, almacenId: 'AL-2', destinoId: 'AL-1', cantidad: 2, fecha: Util.addDays(hoy, -3), nota: 'Envío a Lima (demo)',
+      efectos: [{ almacenId: 'AL-2', estado: 'libre', delta: -2 }, { almacenId: 'AL-1', estado: 'transito', delta: 2 }] });
+    db.movs[db.movs.length - 1].efectos[0].delta = -Math.min(2, db.movs.filter(m => m.k === k(p0.codigo) && m.almacenId === 'AL-2' && m.tipo === 'inicial').reduce((s, m) => s + m.cantidad, 0));
+    const sep = prods.find((p, i) => i > 2 && db.movs.some(m => m.k === k(p.codigo) && m.efectos.some(e => e.estado === 'libre' && e.delta >= 4)));
+    if (sep) db.reservas.push({ id: 'R-' + (db.seq.res++), k: k(sep.codigo), codigo: sep.codigo, almacenId: 'AL-1', cantidad: 3, oppId: null, nota: 'Separado para un cliente (demo)', estado: 'activa', creado: ini + 'T10:00', usuarioId: 'u9' });
+    db.invLog.unshift({ fecha: ini + 'T09:00', usuarioId: 'u9', texto: 'Inventario inicial de demostración (Lima y Santiago)' });
   }
 
   return { generate, CATALOGO, SEED };
@@ -2563,7 +2600,13 @@ const Rules = (() => {
   }
   /** Alertas que ve cada usuario en la campana */
   function alertasUsuario(db, user, hoy = Util.today()) {
-    if (!user || !['vendedor', 'jefatura'].includes(user.rol)) return [];
+    if (!user) return [];
+    if (['gestion', 'logistica'].includes(user.rol)) {   // stock: avisos sin revisar y pedidos a fábrica atrasados
+      const out = (db.invAvisos || []).filter(a => !a.vistoPor.includes(user.id)).map(a => ({ aviso: a, alerta: { tipo: 'stock', nivel: 'warn', texto: 'Aviso de stock' } }));
+      (db.pedidosFab || []).filter(p => p.estado === 'pendiente' && p.fechaEsperada < hoy).forEach(p => out.push({ aviso: { texto: `Pedido a fábrica atrasado: ${p.cantidad} ${p.codigo} (${p.oppId})`, fecha: p.fechaEsperada }, alerta: { tipo: 'stock', nivel: 'bad', texto: 'Ingreso atrasado' } }));
+      return out;
+    }
+    if (!['vendedor', 'jefatura'].includes(user.rol)) return [];
     const out = [];
     db.opps.forEach(o => {
       if (user.rol === 'vendedor' && o.vendedorId !== user.id) return;
@@ -2672,13 +2715,14 @@ const Rules = (() => {
 
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
-    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
-    finanzas: ['proyeccion', 'facturado', 'postventa', 'cotizaciones', 'contactos', 'catalogo', 'empresa'],
-    logistica: ['postventa', 'cotizaciones', 'contactos', 'catalogo'],
-    admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos', 'empresa'],
+    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
+    finanzas: ['proyeccion', 'facturado', 'postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo', 'empresa'],
+    logistica: ['postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo'],
+    gestion: ['stock', 'postventa', 'cotizaciones', 'catalogo', 'contactos'],
+    admin: ['usuarios', 'postventa', 'cotizaciones', 'stock', 'catalogo', 'contactos', 'empresa'],
   };
-  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa' };
+  const INICIO = { vendedor: 'mi-dia', jefatura: 'dashboard', finanzas: 'proyeccion', admin: 'usuarios', logistica: 'postventa', gestion: 'stock' };
   function puede(user, accion, opp) {
     if (!user) return false;
     switch (accion) {
@@ -2690,20 +2734,26 @@ const Rules = (() => {
       // Cuentas (opp = cliente en estos casos)
       case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       // Documentos de una oportunidad: el AM dueño y las áreas que gestionan la post-venta
-      case 'documentos_opp': return ['jefatura', 'finanzas', 'admin', 'logistica'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      case 'documentos_opp': return ['jefatura', 'finanzas', 'admin', 'logistica', 'gestion'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'agregar_contacto': return user.rol !== 'logistica';   // la agenda es común: se agregan contactos a cualquier empresa
       case 'crear_cliente': return ['vendedor', 'jefatura', 'finanzas', 'admin'].includes(user.rol);
       case 'editar_contactos': return ['jefatura', 'finanzas', 'admin'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'gestionar_cuenta': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'crear_cuenta': return user.rol === 'vendedor' || user.rol === 'jefatura';
       case 'asignar_cuenta': return user.rol === 'jefatura';
+      // Inventario: todos consultan; gestión local mueve stock (de los almacenes de su oficina); los costos no los ve el vendedor
+      case 'ver_stock': return true;
+      case 'ver_costos': return user.rol !== 'vendedor';
+      case 'editar_costos': return ['gestion', 'finanzas', 'jefatura', 'logistica', 'admin'].includes(user.rol);
+      case 'mover_stock': return user.rol === 'gestion';
+      case 'editar_minimos': return ['gestion', 'jefatura'].includes(user.rol);
       case 'gestionar_leads': return user.rol === 'jefatura';   // registra, importa y asigna leads; edita orígenes y reglas
       case 'ver_leads': return user.rol === 'jefatura' || user.rol === 'vendedor';
       case 'asignar_clientes': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // asignación de cuentas y carga de clientes por Excel
       // Lista de precios: todos la consultan; solo jefatura, finanzas y administración la modifican
       case 'ver_catalogo': return true;
       case 'gestionar_usuarios': return ['jefatura', 'admin'].includes(user.rol);
-      case 'ver_postventa': return ['jefatura', 'finanzas', 'logistica'].includes(user.rol);
+      case 'ver_postventa': return ['jefatura', 'finanzas', 'logistica', 'gestion'].includes(user.rol);
       case 'editar_catalogo': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);
       case 'editar_empresa': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // datos de la empresa y condiciones comerciales del PDF
       default: return false;
@@ -2715,7 +2765,7 @@ const Rules = (() => {
     if (user.rol === 'jefatura') return true;
     const duenio = user.rol === 'vendedor' && opp.vendedorId === user.id;
     if (!(db && db.config && db.config.postventaPorArea)) return duenio;
-    if (['finanzas', 'admin'].includes(user.rol)) return true;   // administración y finanzas gestionan todos los pasos
+    if (['finanzas', 'admin', 'gestion'].includes(user.rol)) return true;   // administración (del sistema y local) y finanzas gestionan todos los pasos
     if (paso === 'oc') return duenio;
     if (['pedido', 'transito', 'recibido', 'entregado'].includes(paso)) return user.rol === 'logistica';
     return false;
@@ -2783,6 +2833,110 @@ const Rules = (() => {
     }
     return { hoja: hoja.name, filas, error: null };
   }
+  /* ---------- Inventario: productos, almacenes y stock (siempre resulta de los movimientos) ---------- */
+  /** Código para cruzar el inventario con la lista de precios: sin espacios, guiones ni puntos ("ADAM 4541-C" = "ADAM-4541-C") */
+  const normCod = s => String(s == null ? '' : s).toUpperCase().replace(/[\s._\-\/]+/g, '');
+  const marcaInv = m => { const t = String(m == null ? '' : m).replace(/\s+/g, ' ').trim(); return !t || /^(x+|sin marca)$/i.test(t) ? 'Sin marca' : Config.MARCA_ALIAS[t.toUpperCase()] || t.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()); };
+  const oculto = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: true, configurable: true, enumerable: false });
+  /** Productos: la lista de precios (con precio) y los productos de inventario sin precio, por código normalizado */
+  function productos(db) {
+    const c = db.__prod, inv = db.productosInv || [];
+    if (c && c.cat === db.catalogo && c.n === db.catalogo.length && c.inv === inv.length) return c.map;
+    const map = new Map();
+    inv.forEach(p => map.set(normCod(p.codigo), Object.assign({ inventario: true }, p)));
+    (db.catalogo || []).forEach(p => map.set(normCod(p.codigo), p));
+    oculto(db, '__prod', { cat: db.catalogo, n: db.catalogo.length, inv: inv.length, map });
+    return map;
+  }
+  const VACIO_STOCK = () => ({ libre: 0, demo: 0, prestamo: 0, malogrado: 0, transito: 0, reservado: 0 });
+  /** Saldos por producto y almacén. Se recalcula solo si cambian los datos (o si el Repo lo fuerza en medio de un cambio) */
+  function stock(db, forzar) {
+    if (!forzar && db.__stk && db.__stk.v === db._v) return db.__stk;
+    const por = new Map(), pedidos = new Map();
+    const celda = (k, a) => { let p = por.get(k); if (!p) por.set(k, p = {}); return p[a] = p[a] || VACIO_STOCK(); };
+    (db.movs || []).forEach(m => m.efectos.forEach(e => { celda(m.k, e.almacenId)[e.estado] += e.delta; }));
+    (db.reservas || []).forEach(r => { if (r.estado === 'activa') celda(r.k, r.almacenId).reservado += r.cantidad; });
+    (db.pedidosFab || []).forEach(p => { if (p.estado === 'pendiente') pedidos.set(p.k, (pedidos.get(p.k) || 0) + p.cantidad); });
+    const r = { v: db._v, por, pedidos };
+    oculto(db, '__stk', r);
+    return r;
+  }
+  const almacenesActivos = (db, pais) => (db.almacenes || []).filter(a => a.activo !== false && (!pais || a.pais === pais));
+  /** Resumen de un producto: por almacén y por país. Disponible = en almacén − reservado; físico incluye demo, préstamo y malogrado */
+  function stockProducto(db, k, forzar) {
+    const S = stock(db, forzar), p = S.por.get(k) || {}, suma = () => ({ fisico: 0, libre: 0, reservado: 0, disponible: 0, demo: 0, prestamo: 0, malogrado: 0, transito: 0 });
+    const out = { almacenes: [], PE: suma(), CL: suma(), total: suma(), pedido: S.pedidos.get(k) || 0 };
+    Object.keys(p).forEach(aid => {
+      const x = p[aid], a = (db.almacenes || []).find(y => y.id === aid) || { id: aid, nombre: aid, pais: 'PE' };
+      const f = { almacen: a, libre: x.libre, reservado: x.reservado, disponible: x.libre - x.reservado, demo: x.demo, prestamo: x.prestamo, malogrado: x.malogrado, transito: x.transito, fisico: x.libre + x.demo + x.prestamo + x.malogrado };
+      out.almacenes.push(f);
+      [out[a.pais], out.total].forEach(t => { if (t) Object.keys(t).forEach(c => { t[c] += f[c]; }); });
+    });
+    return out;
+  }
+  /** Plazo de entrega sugerido al cotizar: todo disponible en Perú → entrega inmediata; completo con Chile → 2 a 3 semanas; si no, lo elige el vendedor */
+  function plazoSugerido(db, items) {
+    const ps = items.filter(it => String(it.codigo || '').trim() && +it.cant > 0 && !it.opcional);
+    if (!ps.length || !(db.movs || []).length) return null;
+    let pe = true, todo = true;
+    ps.forEach(it => { const s = stockProducto(db, normCod(it.codigo)); if (s.PE.disponible < +it.cant) pe = false; if (s.PE.disponible + s.CL.disponible < +it.cant) todo = false; });
+    return pe ? 'stock' : todo ? '2-3' : null;
+  }
+  /* Excel de stock: reconoce las columnas por su nombre. SEPARADO puede estar dentro de ALMACÉN o sumarse aparte: se usa la
+     suma que da el STOCK; si ninguna cuadra, manda el detalle y queda un aviso. Una hoja con columna CLIENTE son unidades separadas para ese cliente */
+  const COLS_STOCK = [['codigo', /c[oó]digo|^code$|part ?(no|number|#)|^modelo/i], ['marca', /^marca|^brand/i], ['descripcion', /descrip/i], ['total', /^stock$|^total$|f[ií]sico/i],
+    ['separado', /separad|reservad/i], ['disponible', /almac[eé]n|disponible|libre/i], ['demo', /demo|panel|exhibi/i], ['prestamo', /pr[eé]stamo/i], ['malogrado', /malogr|da[ñn]ad|defectu/i],
+    ['notas', /nota|observ/i], ['serie', /serie|serial/i], ['cliente', /cliente/i]];
+  function interpretarStock(db, hojas) {
+    const prods = productos(db), filas = [], errores = [], separaciones = [], vistos = new Map();
+    const num = v => v == null || v === '' ? 0 : typeof v === 'number' ? v : /^\s*-?\d+(\.\d+)?\s*$/.test(String(v)) ? +v : NaN;
+    let fecha = '';
+    hojas.forEach(h => {
+      let col = null, desde = 0;
+      for (let i = 0; i < Math.min(12, h.rows.length) && !col; i++) {
+        const fila = h.rows[i] || [], m = {};
+        if (!fecha) { const f = fila.find(x => /^\d{4}-\d{2}-\d{2}/.test(String(x == null ? '' : x))); if (f) fecha = String(f).slice(0, 10); }
+        fila.forEach((x, j) => { const def = COLS_STOCK.find(([, rx]) => rx.test(String(x == null ? '' : x).trim())); if (!def) return; if (def[0] === 'demo') (m.demo = m.demo || []).push(j); else if (m[def[0]] == null) m[def[0]] = j; });
+        if (m.codigo != null && (m.disponible != null || m.total != null || m.separado != null)) { col = m; desde = i + 1; }
+      }
+      if (!col) return;
+      for (let i = desde; i < h.rows.length; i++) {
+        const r = h.rows[i] || [], txt = k => col[k] == null || r[col[k]] == null ? '' : String(r[col[k]]).replace(/\s+/g, ' ').trim(), g = k => col[k] == null ? 0 : num(r[col[k]]);
+        const codigo = txt('codigo'), k = normCod(codigo), ref = `${h.name} fila ${i + 1} (${codigo})`;
+        if (!codigo) continue;
+        if (col.cliente != null) {
+          const cant = g('total') || g('disponible');
+          if (cant > 0 && txt('cliente')) separaciones.push({ k, ref, cantidad: cant, nota: `Separado para ${txt('cliente')}${txt('serie') ? ' · serie ' + txt('serie') : ''}` });
+          continue;
+        }
+        const q = { total: g('total'), separado: g('separado'), disponible: g('disponible'), demo: (col.demo || []).reduce((s, j) => s + num(r[j]), 0), prestamo: g('prestamo'), malogrado: g('malogrado') };
+        if (Object.values(q).some(v => isNaN(v))) { errores.push(`${ref}: hay una cantidad que no es un número.`); continue; }
+        if (Object.values(q).some(v => v < 0)) { errores.push(`${ref}: cantidad negativa.`); continue; }
+        if (vistos.has(k)) { errores.push(`${ref}: código repetido (ya está en la fila ${vistos.get(k)}).`); continue; }
+        vistos.set(k, i + 1);
+        const nd = q.demo + q.prestamo + q.malogrado, avisos = [];
+        let libre = q.disponible, separado = Math.min(q.separado, q.disponible);
+        if (col.total == null || q.total === q.disponible + q.separado + nd) { libre = q.disponible + q.separado; separado = q.separado; }
+        else if (q.total === q.disponible + nd) { if (q.separado > q.disponible) avisos.push(`Separado ${q.separado} y en almacén ${q.disponible}: se separan ${q.disponible}.`); }
+        else avisos.push(`STOCK ${q.total} no cuadra con el detalle (${q.disponible + nd}): se usa el detalle.`);
+        const p = prods.get(k);
+        filas.push({ fila: i + 1, hoja: h.name, codigo, k, nuevo: !p, marca: p ? p.marca : marcaInv(txt('marca')), descripcion: p ? p.descripcion : txt('descripcion'), total: col.total == null ? null : q.total,
+          libre, demo: q.demo, prestamo: q.prestamo, malogrado: q.malogrado, reservas: separado ? [{ cantidad: separado, nota: txt('notas') || 'Separado' }] : [], avisos });
+      }
+    });
+    separaciones.forEach(s => {
+      const f = filas.find(x => x.k === s.k);
+      if (!f) { errores.push(`${s.ref}: el código no está en la hoja de stock.`); return; }
+      const sep = f.reservas.reduce((a, r) => a + r.cantidad, 0);
+      // si el detalle no las contaba y el STOCK sí, son las unidades que faltaban
+      if (f.total != null && f.libre + f.demo + f.prestamo + f.malogrado + s.cantidad <= f.total && f.libre - sep < s.cantidad) { f.libre += s.cantidad; f.avisos = f.avisos.filter(a => !/no cuadra/.test(a)); }
+      const cabe = Math.min(s.cantidad, f.libre - sep);
+      if (cabe > 0) f.reservas.push({ cantidad: cabe, nota: s.nota });
+      if (cabe < s.cantidad) f.avisos.push(`${s.cantidad - cabe} unidad(es) "${s.nota}" sin stock para separar.`);
+    });
+    return { filas, errores, fecha };
+  }
+
   /* ---------- Origen de las oportunidades y bandeja de leads ---------- */
   const origenes = db => (db.config && db.config.origenes) || Config.ORIGENES;
   const origenDe = (db, id) => origenes(db).find(x => x.id === id) || Config.ORIGENES.find(x => x.id === id) || null;
@@ -2877,7 +3031,8 @@ const Rules = (() => {
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
-    origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads };
+    origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads,
+    normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
 })();
 
 /* =====================================================================
@@ -3060,6 +3215,160 @@ const Repo = (() => {
   const opp = id => db.opps.find(o => o.id === id) || fail('Oportunidad no encontrada.');
   const log = (o, nota, usuarioId) => db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Sistema', nota, proxContacto: o.proxContacto || null, usuarioId, auto: true });
   const guardar = o => { const e = Rules.validarOportunidad(o); if (e) fail(e); touch(); };
+  /* Inventario: colecciones, movimientos y reservas. Cada cambio queda registrado (movimiento con su usuario o invLog) */
+  function invDb() {
+    let nuevo = false;
+    ['almacenes', 'productosInv', 'movs', 'reservas', 'pedidosFab', 'invAvisos', 'invLog'].forEach(k => { if (!db[k]) { db[k] = []; nuevo = true; } });
+    if (!db.costos) db.costos = {};
+    if (!db.minimos) db.minimos = {};
+    ['mov', 'res', 'ped', 'alm', 'pinv', 'aviso'].forEach(k => { if (!db.seq[k]) db.seq[k] = 1; });
+    if (!db.almacenes.length) { db.almacenes.push({ id: 'AL-' + (db.seq.alm++), nombre: 'Almacén Lima', pais: 'PE', ciudad: 'Lima', activo: true }); nuevo = true; }
+    return nuevo;
+  }
+  const almacenPorId = id => (db.almacenes || []).find(a => a.id === id) || fail('Almacén no encontrado.');
+  const invLog = (texto, usuarioId) => db.invLog.unshift({ fecha: Util.ahora(), usuarioId, texto });
+  const aviso = (texto, oppId) => db.invAvisos.unshift({ id: 'AV-' + (db.seq.aviso++), fecha: Util.ahora(), texto, oppId: oppId || null, vistoPor: [] });
+  /** Gestión local solo mueve stock de los almacenes de su oficina (Perú o Chile) */
+  function gestorDe(usuarioId, a) {
+    const u = usuarioDe(usuarioId);
+    if (!u || !Rules.puede(u, 'mover_stock')) fail('Solo gestión / administración local registra movimientos de stock.');
+    if (a && (u.oficina || 'PE') !== a.pais) fail(`Tu usuario es de la oficina de ${Config.OFICINAS[u.oficina || 'PE']}: los almacenes de ${Config.OFICINAS[a.pais]} los mueve esa oficina.`);
+    return u;
+  }
+  /** Producto por código; si no existe y se indica la marca, se crea como producto de inventario (sin precio) */
+  function productoPara(codigo, marca, descripcion, usuarioId) {
+    const k = Rules.normCod(codigo), p = Rules.productos(db).get(k);
+    if (p) return { k, codigo: p.codigo, marca: p.marca };
+    if (!String(marca || '').trim()) fail(`El código ${codigo} no está en la lista de precios: indica la marca para crearlo como producto de inventario.`, { marca: 'Obligatorio' });
+    const n = { id: 'PI-' + (db.seq.pinv++), codigo: String(codigo).trim(), marca: Rules.marcaInv(marca), descripcion: String(descripcion || '').trim(), alta: hoy(), usuarioId };
+    db.productosInv.push(n);
+    invLog(`Producto de inventario nuevo: ${n.marca} ${n.codigo}`, usuarioId);
+    return { k, codigo: n.codigo, marca: n.marca };
+  }
+  function nuevoMov(d, usuarioId) {
+    const m = Object.assign({ id: 'M-' + (db.seq.mov++), fecha: hoy(), creado: Util.ahora(), usuarioId }, d);
+    db.movs.push(m);
+    return m;
+  }
+  const nuevaReserva = (d, usuarioId) => { const r = Object.assign({ id: 'R-' + (db.seq.res++), estado: 'activa', creado: Util.ahora(), usuarioId, oppId: null, nota: '' }, d); db.reservas.push(r); return r; };
+  /** Al ganar: se reserva lo disponible (Perú primero, luego Chile) y lo que falte queda como pedido a fábrica */
+  function reservarOpp(o, usuarioId) {
+    invDb();
+    const q = Rules.vigente(db, o); if (!q) return;
+    const S = Rules.stock(db, true), alm = [...Rules.almacenesActivos(db, 'PE'), ...Rules.almacenesActivos(db, 'CL')];
+    let res = 0, ped = 0;
+    Rules.principales(q).filter(it => String(it.codigo || '').trim() && +it.cant > 0).forEach(it => {
+      const k = Rules.normCod(it.codigo);
+      let falta = +it.cant;
+      alm.forEach(a => {
+        if (falta <= 0) return;
+        const x = (S.por.get(k) || {})[a.id], disp = x ? x.libre - x.reservado : 0, toma = Math.min(disp, falta);
+        if (toma > 0) { nuevaReserva({ k, codigo: it.codigo, almacenId: a.id, cantidad: toma, oppId: o.id, nota: 'Reserva por venta ganada' }, usuarioId); x.reservado += toma; falta -= toma; res += toma; }
+      });
+      if (falta > 0) {
+        const sem = Rules.maxSemanas(q.plazo) || Config.SEMANAS_PEDIDO;
+        db.pedidosFab.push({ id: 'PF-' + (db.seq.ped++), k, codigo: it.codigo, marca: it.marca, cantidad: falta, oppId: o.id, estado: 'pendiente', creado: Util.ahora(), fechaEsperada: Util.addDays(o.fechaCierre || hoy(), sem * 7) });
+        ped += falta;
+      }
+    });
+    if (res || ped) log(o, `Stock: ${res} u. reservadas${ped ? `; ${ped} u. sin stock pasan a pedido a fábrica` : ''}.`, usuarioId);
+    if (ped) aviso(`${o.id}: ${ped} u. sin stock para una venta ganada (pedido a fábrica).`, o.id);
+  }
+  /** Si una venta ganada se cae, se liberan sus reservas y se cancelan sus pedidos a fábrica, con aviso a logística */
+  function liberarOpp(o, usuarioId, motivo) {
+    const rs = (db.reservas || []).filter(r => r.oppId === o.id && r.estado === 'activa'), ps = (db.pedidosFab || []).filter(p => p.oppId === o.id && p.estado === 'pendiente');
+    if (!rs.length && !ps.length) return;
+    rs.forEach(r => { r.estado = 'liberada'; r.liberada = Util.ahora(); });
+    ps.forEach(p => { p.estado = 'cancelado'; });
+    const n = rs.reduce((a, r) => a + r.cantidad, 0);
+    log(o, `Stock: se liberaron ${n} u. reservadas${ps.length ? ' y se cancelaron ' + ps.length + ' pedido(s) a fábrica' : ''} (${motivo}).`, usuarioId);
+    aviso(`${o.id} dejó de estar ganada (${motivo}): ${n} u. liberadas${ps.length ? ', ' + ps.length + ' pedido(s) a fábrica cancelados' : ''}.`, o.id);
+  }
+  /** Post-venta "Recibido y revisado": se confirma el ingreso de lo pedido a fábrica y queda reservado para la venta */
+  function recibirOpp(o, fecha, usuarioId) {
+    const ps = (db.pedidosFab || []).filter(p => p.oppId === o.id && p.estado === 'pendiente'), a = Rules.almacenesActivos(db, 'PE')[0];
+    if (!ps.length || !a) return;
+    ps.forEach(p => {
+      const m = nuevoMov({ tipo: 'ingreso', k: p.k, codigo: p.codigo, marca: p.marca, almacenId: a.id, cantidad: p.cantidad, fecha, efectos: [{ almacenId: a.id, estado: 'libre', delta: p.cantidad }], ref: { tipo: 'Oportunidad', valor: o.id }, oppId: o.id, nota: 'Recibido y revisado (post-venta)' }, usuarioId);
+      const r = nuevaReserva({ k: p.k, codigo: p.codigo, almacenId: a.id, cantidad: p.cantidad, oppId: o.id, nota: 'Pedido a fábrica recibido' }, usuarioId);
+      Object.assign(p, { estado: 'recibido', movId: m.id, reservaId: r.id });
+    });
+    log(o, `Stock: ingreso confirmado de ${ps.reduce((s, p) => s + p.cantidad, 0)} u. pedidas a fábrica (${a.nombre}).`, usuarioId);
+  }
+  function deshacerRecepcion(o, usuarioId) {
+    (db.pedidosFab || []).filter(p => p.oppId === o.id && p.estado === 'recibido' && p.movId).forEach(p => {
+      const r = db.reservas.find(x => x.id === p.reservaId), m = db.movs.find(x => x.id === p.movId);
+      if (!r || r.estado !== 'activa' || !m) return;   // ya entregado: se corrige con un ajuste
+      r.estado = 'liberada'; r.liberada = Util.ahora();
+      nuevoMov({ tipo: 'ajuste', k: p.k, codigo: p.codigo, marca: p.marca, almacenId: m.almacenId, cantidad: p.cantidad, efectos: [{ almacenId: m.almacenId, estado: 'libre', delta: -p.cantidad }], oppId: o.id, nota: 'Se desmarcó "Recibido y revisado"' }, usuarioId);
+      Object.assign(p, { estado: 'pendiente', movId: null, reservaId: null });
+    });
+  }
+  /** Post-venta "Entregado": sale lo reservado para la venta */
+  function entregarOpp(o, fecha, usuarioId) {
+    const rs = (db.reservas || []).filter(r => r.oppId === o.id && r.estado === 'activa');
+    rs.forEach(r => {
+      const m = nuevoMov({ tipo: 'salida', k: r.k, codigo: r.codigo, almacenId: r.almacenId, cantidad: r.cantidad, fecha, efectos: [{ almacenId: r.almacenId, estado: 'libre', delta: -r.cantidad }], ref: { tipo: 'Oportunidad', valor: o.id }, oppId: o.id, nota: 'Entregado (post-venta)' }, usuarioId);
+      Object.assign(r, { estado: 'entregada', salidaMovId: m.id });
+    });
+    if (rs.length) log(o, `Stock: salida de ${rs.reduce((s, r) => s + r.cantidad, 0)} u. por la entrega.`, usuarioId);
+  }
+  function deshacerEntrega(o, usuarioId) {
+    (db.reservas || []).filter(r => r.oppId === o.id && r.estado === 'entregada' && r.salidaMovId).forEach(r => {
+      nuevoMov({ tipo: 'devolucion', k: r.k, codigo: r.codigo, almacenId: r.almacenId, cantidad: r.cantidad, efectos: [{ almacenId: r.almacenId, estado: 'libre', delta: r.cantidad }], oppId: o.id, nota: 'Se desmarcó "Entregado"' }, usuarioId);
+      Object.assign(r, { estado: 'activa', salidaMovId: null });
+    });
+  }
+  /** Carga de inventario (Excel ya interpretado): fija el saldo de cada código del archivo con un movimiento por la diferencia. La primera carga de un almacén es su inventario inicial */
+  function cargarInventario(a, interp, usuarioId, { fecha, archivo } = {}) {
+    invDb();
+    const S = Rules.stock(db, true), primera = !db.movs.some(m => m.efectos.some(e => e.almacenId === a.id)), f = fecha || hoy();
+    let nProd = 0, nMov = 0, nRes = 0;
+    interp.filas.forEach(r => {
+      if (!Rules.productos(db).has(r.k)) { productoPara(r.codigo, r.marca, r.descripcion, usuarioId); nProd++; }
+      const act = (S.por.get(r.k) || {})[a.id] || VACIO;
+      const efectos = Object.keys(Config.ESTADOS_STOCK).map(e => ({ almacenId: a.id, estado: e, delta: r[e] - act[e] })).filter(e => e.delta);
+      if (efectos.length) { nuevoMov({ tipo: primera ? 'inicial' : 'ajuste', k: r.k, codigo: r.codigo, marca: r.marca, almacenId: a.id, cantidad: efectos.reduce((s, e) => s + Math.abs(e.delta), 0), efectos, fecha: f, nota: (primera ? 'Inventario inicial' : 'Carga de inventario') + (archivo ? ` (${archivo})` : '') }, usuarioId); nMov++; }
+      db.reservas.filter(x => x.estado === 'activa' && !x.oppId && x.k === r.k && x.almacenId === a.id).forEach(x => { x.estado = 'liberada'; x.liberada = Util.ahora(); });
+      r.reservas.forEach(x => { nuevaReserva({ k: r.k, codigo: r.codigo, almacenId: a.id, cantidad: x.cantidad, nota: x.nota }, usuarioId); nRes++; });
+    });
+    invLog(`${primera ? 'Inventario inicial' : 'Carga de inventario'} en ${a.nombre}${archivo ? ' (' + archivo + ')' : ''}: ${interp.filas.length} códigos, ${nProd} productos de inventario nuevos, ${nMov} movimientos, ${nRes} separados`, usuarioId);
+    return { filas: interp.filas.length, productos: nProd, movimientos: nMov, reservas: nRes, inicial: primera };
+  }
+  const VACIO = Object.freeze({ libre: 0, demo: 0, prestamo: 0, malogrado: 0, transito: 0, reservado: 0 });   // saldo de un código sin movimientos (solo lectura)
+  /** Altas del archivo privado del piloto (usuarios nuevos e inventario inicial): se aplican una sola vez y no tocan lo registrado */
+  function aplicarAltas() {
+    let n = invDb() ? 1 : 0;
+    const A = typeof window !== 'undefined' && window.__PILOTO_ALTAS;
+    if (!A) return n;
+    (A.usuarios || []).forEach(u => { if (!db.users.some(x => x.usuario === u.usuario || x.id === u.id)) { db.users.push(Object.assign({ activo: true, debeCambiar: true, oficina: 'PE' }, u)); n++; } });
+    const inv = A.inventario, flag = inv && 'inventario-' + inv.id;
+    if (inv && !(db._migraciones || []).includes(flag)) {
+      const a = Rules.almacenesActivos(db, inv.pais || 'PE')[0];
+      if (a && !db.movs.some(m => m.efectos.some(e => e.almacenId === a.id))) cargarInventario(a, Rules.interpretarStock(db, inv.hojas), 'sistema', { fecha: inv.fecha, archivo: inv.archivo });
+      db._migraciones = (db._migraciones || []).concat(flag);
+      n++;
+    }
+    return n;
+  }
+  /** Renumera TV-AAAA-0001 al formato INICIALES-AAAA-0001 (una sola vez) */
+  function migrarNumeracion() {
+    if (!db.numeracion || (db._migraciones || []).includes('numero-iniciales')) return 0;
+    const re = /^TV-(\d{4})-(\d{4})(.*)$/i, mapa = {};
+    let cambios = 0;
+    db.quotes.filter(q => re.test(q.numero || '')).sort((a, b) => (a.fechaEmision + a.numero).localeCompare(b.fechaEmision + b.numero)).forEach(q => {
+      const m = re.exec(q.numero), base = `TV-${m[1]}-${m[2]}`.toUpperCase(), o = db.opps.find(x => x.id === q.oppId), v = o && usuarioDe(o.vendedorId);
+      if (!v) return;
+      if (!mapa[base]) mapa[base] = Rules.numeroAM(db, v, `${m[1]}-01-01`);
+      const ant = q.numero, nuevo = mapa[base] + m[3];
+      q.numero = nuevo; q.numeroAnterior = ant; cambios++;
+      db.followups.filter(f => f.oppId === q.oppId && f.nota && f.nota.includes(ant)).forEach(f => { f.nota = f.nota.split(ant).join(nuevo); });
+      log(o, `Número de cotización al formato del Account Manager: ${ant} → ${nuevo}.`, 'sistema');
+    });
+    db.numeracion.formato = 'iniciales';
+    db._migraciones = (db._migraciones || []).concat('numero-iniciales');
+    return cambios;
+  }
   /* Leads: cada cambio queda en el historial del lead (quién, cuándo, qué) */
   const leadsDb = () => { if (!db.leads) db.leads = []; if (!db.seq.lead) db.seq.lead = 1; return db.leads; };
   const leadPorId = id => leadsDb().find(l => l.id === id) || fail('Lead no encontrado.');
@@ -3259,22 +3568,12 @@ const Repo = (() => {
     },
     /** Ajustes de datos al abrir una versión nueva (una sola vez). Renumera TV-AAAA-0001 al formato INICIALES-AAAA-0001 */
     async migrar() {
-      if (!db || !db.numeracion || (db._migraciones || []).includes('numero-iniciales')) return false;
-      const re = /^TV-(\d{4})-(\d{4})(.*)$/i, mapa = {};
-      let cambios = 0;
-      db.quotes.filter(q => re.test(q.numero || '')).sort((a, b) => (a.fechaEmision + a.numero).localeCompare(b.fechaEmision + b.numero)).forEach(q => {
-        const m = re.exec(q.numero), base = `TV-${m[1]}-${m[2]}`.toUpperCase(), o = db.opps.find(x => x.id === q.oppId), v = o && usuarioDe(o.vendedorId);
-        if (!v) return;
-        if (!mapa[base]) mapa[base] = Rules.numeroAM(db, v, `${m[1]}-01-01`);
-        const ant = q.numero, nuevo = mapa[base] + m[3];
-        q.numero = nuevo; q.numeroAnterior = ant; cambios++;
-        db.followups.filter(f => f.oppId === q.oppId && f.nota && f.nota.includes(ant)).forEach(f => { f.nota = f.nota.split(ant).join(nuevo); });
-        log(o, `Número de cotización al formato del Account Manager: ${ant} → ${nuevo}.`, 'sistema');
-      });
-      db.numeracion.formato = 'iniciales';
-      db._migraciones = (db._migraciones || []).concat('numero-iniciales');
-      if (cambios) touch(); else programarGuardado();   // sin cotizaciones que renumerar no cuenta como cambio propio
-      return cambios > 0;
+      if (!db || modo !== 'piloto') return false;
+      const renumeradas = migrarNumeracion(), altas = aplicarAltas();
+      // Las altas del archivo (usuarios, inventario inicial) no son registros propios de este navegador: sin carpeta se guardan sin contarse como cambio;
+      // con carpeta se escriben en ella (la escritura compartida solo ocurre si cambia la versión)
+      if (renumeradas || (altas && estado.compartida)) touch(); else programarGuardado();
+      return renumeradas + altas > 0;
     },
     /** PUT /empresa — datos de la empresa y condiciones comerciales que salen en el PDF (gerencia, jefatura, finanzas y administración) */
     async guardarEmpresa(datos, usuarioId) {
@@ -3394,7 +3693,7 @@ const Repo = (() => {
       if (d.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.correo)) e.correo = 'Correo no válido.';
       if (Object.keys(e).length) fail(Object.values(e)[0], e);
       const datos = { nombre: d.nombre.trim(), usuario, iniciales: ini, correo: (d.correo || '').trim(), cargo: (d.cargo || '').trim(), telefono: (d.telefono || '').trim(),
-        rol: d.rol, meta: d.rol === 'vendedor' ? (+d.meta > 0 ? +d.meta : Config.META_MENSUAL_USD) : null, activo: d.activo !== false };
+        rol: d.rol, meta: d.rol === 'vendedor' ? (+d.meta > 0 ? +d.meta : Config.META_MENSUAL_USD) : null, activo: d.activo !== false, oficina: d.oficina === 'CL' ? 'CL' : 'PE' };
       if (d.id) {
         const u = usuarioDe(d.id) || fail('Usuario no encontrado.');
         if (d.id === porId && (!datos.activo || datos.rol !== u.rol)) fail('No puedes desactivarte ni cambiar tu propio rol.');
@@ -3446,7 +3745,7 @@ const Repo = (() => {
       const o = opp(oppId);
       const errs = Rules.validarCambioEtapa(o, nueva, d, hoy());
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
-      const antes = Rules.etapa(o.etapa).nombre;
+      const antes = Rules.etapa(o.etapa).nombre, eraGanada = o.etapa === 'ganada';
       if (nueva === 'ganada') {
         Object.assign(o, { etapa: 'ganada', fechaCierre: d.fechaOCReal, proxContacto: null, motivoPerdida: null, fechaReactivacion: null, pendiente: false,
           postventa: { oc: d.fechaOCReal } });
@@ -3463,6 +3762,8 @@ const Repo = (() => {
       const extra = nueva === 'perdida' ? ` · Motivo: ${Rules.motivo(d.motivoPerdida).nombre}${d.motivoOtro ? ' (' + d.motivoOtro + ')' : ''}` :
         nueva === 'pausa' ? ` · Reactivar el ${Util.fmtDate(d.fechaReactivacion)}` : nueva === 'ganada' ? ` · OC del ${Util.fmtDate(d.fechaOCReal)}` : '';
       log(o, `Etapa: ${antes} → ${Rules.etapa(nueva).nombre}${extra}${d.nota ? ' · ' + d.nota : ''}`, usuarioId);
+      if (nueva === 'ganada' && !eraGanada) reservarOpp(o, usuarioId);
+      if (eraGanada && nueva !== 'ganada') liberarOpp(o, usuarioId, 'pasó a ' + Rules.etapa(nueva).nombre.toLowerCase());
       guardar(o);
       return o;
     },
@@ -3626,6 +3927,8 @@ const Repo = (() => {
       if (fecha) o.postventa[paso] = fecha; else delete o.postventa[paso];
       if (paso === 'oc') o.fechaCierre = fecha;
       if (paso === 'facturado') { if (fecha) o.postventa.facturaMonto = Rules.montoUSD(db, o); else { delete o.postventa.facturaMonto; delete o.postventa.cobrado; } }
+      if (paso === 'recibido') { invDb(); if (fecha) recibirOpp(o, fecha, usuarioId); else deshacerRecepcion(o, usuarioId); }
+      if (paso === 'entregado') { invDb(); if (fecha) entregarOpp(o, fecha, usuarioId); else deshacerEntrega(o, usuarioId); }
       const nombre = Config.POSTVENTA.find(p => p.id === paso).nombre;
       log(o, fecha ? `Post-venta: ${nombre} (${Util.fmtDate(fecha)})` : `Post-venta: se desmarcó "${nombre}"`, usuarioId);
       touch();
@@ -3659,6 +3962,117 @@ const Repo = (() => {
       touch();
       return n;
     },
+    /** POST /stock/movimientos — ingreso, salida, transferencia, recepción, ajuste, devolución o cambio de estado (gestión local de la oficina del almacén) */
+    async registrarMovimiento(d, usuarioId) {
+      invDb();
+      const tipo = d.tipo, c = Math.round(+d.cantidad), t = v => String(v == null ? '' : v).trim();
+      if (!Config.TIPOS_MOV[tipo] || tipo === 'inicial') fail('Tipo de movimiento no válido.');
+      if (tipo === 'recepcion') {   // llega una transferencia: pasa de "en tránsito" a "en almacén" del destino
+        const T = db.movs.find(m => m.id === d.transferenciaId && m.tipo === 'transferencia') || fail('Transferencia no encontrada.');
+        if (T.recibidaPor) fail('Esa transferencia ya se recibió.');
+        const dest = almacenPorId(T.destinoId); gestorDe(usuarioId, dest);
+        const m = nuevoMov({ tipo, k: T.k, codigo: T.codigo, marca: T.marca, almacenId: dest.id, cantidad: T.cantidad, fecha: d.fecha || hoy(), transferenciaId: T.id, nota: t(d.nota),
+          efectos: [{ almacenId: dest.id, estado: 'transito', delta: -T.cantidad }, { almacenId: dest.id, estado: 'libre', delta: T.cantidad }] }, usuarioId);
+        T.recibidaPor = m.id;
+        touch(); return m;
+      }
+      const a = almacenPorId(d.almacenId);
+      gestorDe(usuarioId, a);
+      if (!(c > 0) || c !== +d.cantidad) fail('La cantidad debe ser un número entero mayor que cero.', { cantidad: 'Obligatorio' });
+      if (!t(d.codigo)) fail('Indica el código del producto.', { codigo: 'Obligatorio' });
+      const suma = ['ingreso', 'devolucion'].includes(tipo) || (tipo === 'ajuste' && d.signo !== '-');
+      const p = suma ? productoPara(d.codigo, d.marca, d.descripcion, usuarioId) : (() => { const k = Rules.normCod(d.codigo), x = Rules.productos(db).get(k); if (!x) fail(`No hay stock del código ${d.codigo}.`, { codigo: 'No existe' }); return { k, codigo: x.codigo, marca: x.marca }; })();
+      const desde = tipo === 'estado' || tipo === 'ajuste' ? (d.estadoDesde || 'libre') : 'libre', hacia = d.estadoHacia || 'libre';
+      if (!Config.ESTADOS_STOCK[desde] || !Config.ESTADOS_STOCK[hacia]) fail('Estado no válido.');
+      if (tipo === 'ajuste' && !t(d.nota)) fail('El ajuste necesita su motivo.', { nota: 'Obligatorio' });
+      if (tipo === 'estado' && desde === hacia) fail('Elige estados distintos.');
+      let efectos, extra = {};
+      if (tipo === 'ingreso' || tipo === 'devolucion') efectos = [{ almacenId: a.id, estado: 'libre', delta: c }];
+      else if (tipo === 'salida') efectos = [{ almacenId: a.id, estado: 'libre', delta: -c }];
+      else if (tipo === 'ajuste') efectos = [{ almacenId: a.id, estado: desde, delta: d.signo === '-' ? -c : c }];
+      else if (tipo === 'estado') efectos = [{ almacenId: a.id, estado: desde, delta: -c }, { almacenId: a.id, estado: hacia, delta: c }];
+      else if (tipo === 'transferencia') {
+        const dest = almacenPorId(d.destinoId);
+        if (dest.id === a.id) fail('Elige un almacén de destino distinto.');
+        efectos = [{ almacenId: a.id, estado: 'libre', delta: -c }, { almacenId: dest.id, estado: 'transito', delta: c }];
+        extra = { destinoId: dest.id };
+      }
+      // nunca queda stock negativo; lo reservado no se puede sacar sin liberar la reserva
+      const S = Rules.stock(db, true), x = (S.por.get(p.k) || {})[a.id] || VACIO;
+      efectos.filter(e => e.delta < 0).forEach(e => {
+        const hay = e.estado === 'libre' ? x.libre - x.reservado : x[e.estado];
+        if (hay < -e.delta) fail(`No alcanza: ${Config.ESTADOS_STOCK[e.estado].toLowerCase()} ${hay}${e.estado === 'libre' && x.reservado ? ' (sin contar ' + x.reservado + ' separado/reservado)' : ''} en ${a.nombre}.`, { cantidad: 'Sin stock' });
+      });
+      const costo = +d.costoUSD > 0 ? Util.round2(+d.costoUSD) : null;
+      const m = nuevoMov(Object.assign({ tipo, k: p.k, codigo: p.codigo, marca: p.marca, almacenId: a.id, cantidad: c, efectos, fecha: /^\d{4}-\d{2}-\d{2}$/.test(d.fecha || '') ? d.fecha : hoy(),
+        ref: t(d.refValor) ? { tipo: d.refTipo || 'Otro', valor: t(d.refValor) } : null, nota: t(d.nota), costoUSD: costo }, extra), usuarioId);
+      if (costo && tipo === 'ingreso') db.costos[p.k] = { costoUSD: costo, fecha: m.fecha, usuarioId, origen: 'ingreso ' + m.id };
+      touch(); return m;
+    },
+    /** POST /stock/cargas — carga de un Excel de stock (Perú o Chile). La primera carga de un almacén vacío la puede hacer cualquier gestión local */
+    async cargarStock(almacenId, hojas, usuarioId, opciones) {
+      invDb();
+      const a = almacenPorId(almacenId), vacio = !db.movs.some(m => m.efectos.some(e => e.almacenId === a.id));
+      gestorDe(usuarioId, vacio ? null : a);
+      const interp = Rules.interpretarStock(db, hojas);
+      if (!interp.filas.length) fail('El archivo no tiene filas de stock reconocibles. Usa la plantilla o un Excel con columnas Código y Stock/Almacén.');
+      const r = cargarInventario(a, interp, usuarioId, opciones);
+      touch(); return Object.assign(r, { errores: interp.errores });
+    },
+    /** POST /stock/reservas — separar unidades para un cliente (sin oportunidad) o liberar un separado */
+    async separarStock(d, usuarioId) {
+      invDb();
+      const a = almacenPorId(d.almacenId); gestorDe(usuarioId, a);
+      const k = Rules.normCod(d.codigo), p = Rules.productos(db).get(k) || fail('Código no encontrado.'), c = Math.round(+d.cantidad);
+      const x = (Rules.stock(db, true).por.get(k) || {})[a.id] || VACIO;
+      if (!(c > 0)) fail('Indica la cantidad.', { cantidad: 'Obligatorio' });
+      if (x.libre - x.reservado < c) fail(`Solo hay ${x.libre - x.reservado} disponibles en ${a.nombre}.`, { cantidad: 'Sin stock' });
+      if (!String(d.nota || '').trim()) fail('Indica para quién o por qué se separa.', { nota: 'Obligatorio' });
+      const r = nuevaReserva({ k, codigo: p.codigo, almacenId: a.id, cantidad: c, nota: String(d.nota).trim() }, usuarioId);
+      invLog(`Separado ${c} u. de ${p.codigo} en ${a.nombre}: ${r.nota}`, usuarioId);
+      touch(); return r;
+    },
+    async liberarSeparado(id, usuarioId) {
+      const r = (db.reservas || []).find(x => x.id === id && x.estado === 'activa') || fail('Separado no encontrado.');
+      gestorDe(usuarioId, almacenPorId(r.almacenId));
+      if (r.oppId) fail('Esta reserva es de una venta ganada: se libera sola si la oportunidad deja de estar ganada.');
+      r.estado = 'liberada'; r.liberada = Util.ahora();
+      invLog(`Liberado el separado de ${r.cantidad} u. de ${r.codigo} (${r.nota})`, usuarioId);
+      touch();
+    },
+    /** PUT /almacenes */
+    async guardarAlmacen(d, usuarioId) {
+      invDb(); gestorDe(usuarioId, null);
+      const t = v => String(v == null ? '' : v).trim();
+      if (!t(d.nombre)) fail('El almacén necesita un nombre.', { nombre: 'Obligatorio' });
+      if (!Config.OFICINAS[d.pais]) fail('Elige el país.', { pais: 'Obligatorio' });
+      if (db.almacenes.some(a => a.id !== d.id && a.nombre.toLowerCase() === t(d.nombre).toLowerCase())) fail('Ya existe un almacén con ese nombre.', { nombre: 'Repetido' });
+      const datos = { nombre: t(d.nombre), pais: d.pais, ciudad: t(d.ciudad), activo: d.activo !== false };
+      let a;
+      if (d.id) { a = almacenPorId(d.id); if (a.pais !== datos.pais && db.movs.some(m => m.efectos.some(e => e.almacenId === a.id))) fail('No se puede cambiar el país de un almacén con movimientos.'); Object.assign(a, datos); }
+      else { a = Object.assign({ id: 'AL-' + (db.seq.alm++) }, datos); db.almacenes.push(a); }
+      invLog(`${d.id ? 'Almacén editado' : 'Almacén nuevo'}: ${a.nombre} (${Config.OFICINAS[a.pais]}${a.ciudad ? ', ' + a.ciudad : ''})${a.activo ? '' : ' · inactivo'}`, usuarioId);
+      touch(); return a;
+    },
+    /** PATCH /stock/minimos — stock mínimo por producto y almacén (gestión local y jefatura) */
+    async guardarMinimo(codigo, almacenId, minimo, usuarioId) {
+      invDb(); exigir(usuarioId, 'editar_minimos', 'Solo gestión local o jefatura definen mínimos.');
+      const k = Rules.normCod(codigo), a = almacenPorId(almacenId), n = Math.max(0, Math.round(+minimo || 0)), clave = k + '|' + a.id;
+      if (n) db.minimos[clave] = n; else delete db.minimos[clave];
+      invLog(`Mínimo de ${codigo} en ${a.nombre}: ${n || 'sin mínimo'}`, usuarioId);
+      touch();
+    },
+    /** PATCH /productos/:codigo/costo — costo unitario USD (si no hay, el inventario se valoriza a precio de lista) */
+    async guardarCosto(codigo, costoUSD, usuarioId) {
+      invDb(); exigir(usuarioId, 'editar_costos', 'Tu rol no edita costos.');
+      const k = Rules.normCod(codigo), c = +costoUSD;
+      if (String(costoUSD).trim() === '' ) delete db.costos[k];
+      else if (!(c >= 0)) fail('Costo no válido.', { costo: 'Número' });
+      else db.costos[k] = { costoUSD: Util.round2(c), fecha: hoy(), usuarioId, origen: 'manual' };
+      invLog(`Costo de ${codigo}: ${db.costos[k] ? 'USD ' + db.costos[k].costoUSD : 'se quitó (vuelve a precio de lista)'}`, usuarioId);
+      touch();
+    },
+    async avisoVisto(id, usuarioId) { const x = (db.invAvisos || []).find(a => a.id === id); if (x && !x.vistoPor.includes(usuarioId)) { x.vistoPor.push(usuarioId); touch(); } },
     /** POST /leads — registro manual o desde un correo de fabricante (jefatura) */
     async crearLead(d, usuarioId, via) {
       exigir(usuarioId, 'gestionar_leads', 'Solo gerencia o jefatura registran leads.');
@@ -3898,6 +4312,31 @@ const SelfTest = (() => {
         Rules.horizonte('2026-10-31', hoy) === 'mes' && Rules.horizonte('2026-11-05', hoy) === 'd30' && Rules.horizonte('2027-02-01', hoy) === 'd120' &&
         Math.abs(pf.tot.total.d60 - 15000) < 0.01 && Math.abs(pc.tot.total.d90 - 8850) < 0.01 && Math.abs(pc.tot.total.mes - 4425) < 0.01;
     }],
+    ['Stock: sale de los movimientos; transferencia en tránsito; reservas restan del disponible; plazo sugerido', () => {
+      const db = miniDb(), m = (tipo, efectos) => db.movs.push({ tipo, k: 'X1', efectos });
+      db.catalogo = [{ codigo: 'X-1', marca: 'Moxa', precio: 10 }]; db.almacenes = [{ id: 'A', pais: 'PE', nombre: 'Lima' }, { id: 'B', pais: 'CL', nombre: 'Santiago' }]; db.movs = [];
+      m('inicial', [{ almacenId: 'A', estado: 'libre', delta: 10 }]);
+      m('estado', [{ almacenId: 'A', estado: 'libre', delta: -2 }, { almacenId: 'A', estado: 'demo', delta: 2 }]);
+      m('transferencia', [{ almacenId: 'A', estado: 'libre', delta: -3 }, { almacenId: 'B', estado: 'transito', delta: 3 }]);
+      db.reservas = [{ k: 'X1', almacenId: 'A', cantidad: 4, estado: 'activa' }, { k: 'X1', almacenId: 'A', cantidad: 9, estado: 'liberada' }];
+      const a = Rules.stockProducto(db, 'X1', true), A = a.almacenes.find(x => x.almacen.id === 'A'), B = a.almacenes.find(x => x.almacen.id === 'B');
+      const ok1 = A.libre === 5 && A.demo === 2 && A.fisico === 7 && A.reservado === 4 && A.disponible === 1 && B.transito === 3 && a.PE.disponible === 1 && a.CL.disponible === 0;
+      m('recepcion', [{ almacenId: 'B', estado: 'transito', delta: -3 }, { almacenId: 'B', estado: 'libre', delta: 3 }]);
+      const b = Rules.stockProducto(db, 'X1', true), it = c => [{ codigo: 'X-1', cant: c }];
+      return ok1 && b.CL.disponible === 3 && b.total.transito === 0 && Rules.plazoSugerido(db, it(1)) === 'stock' && Rules.plazoSugerido(db, it(4)) === '2-3' && Rules.plazoSugerido(db, it(5)) === null && Rules.normCod('ADAM 4541-C') === Rules.normCod('adam-4541-c');
+    }],
+    ['Excel de stock: separado dentro o aparte del almacén, equipos sin caja, errores y productos nuevos', () => {
+      const db = miniDb(); db.catalogo = [{ codigo: 'P-100', marca: 'MarcaDemo', descripcion: 'Producto de prueba', precio: 3 }];
+      const h1 = { name: 'Hoja1', rows: [['2026-01-15T00:00:00'], ['ITEM', 'CÓDIGO', 'MARCA ', 'DESCRIPCIÓN', 'STOCK', 'SEPARADO ', 'ALMACÉN', 'PANEL TECH', 'DEMO', 'PRESTAMO', 'MALOGRADO', 'NOTAS'],
+        [1, 'P 100', 'X', null, 20, 5, 19, null, 1, null, null, '5 PARA CLIENTE UNO'], [2, 'P-200', 'Y', null, 4, 4, 0, null, null, null, null, 'PARA CLIENTE DOS'],
+        [3, 'P-300', 'Y', null, 1, null, 0, null, null, null, null, null], [4, 'P-400', 'XXXX', null, 12, null, 7, null, null, null, null, null],
+        [5, 'P-500', 'Y', null, 3, 8, 3, null, null, null, null, null], [6, 'P-400', 'XXXX', null, 1, null, 1], [7, 'NEG', 'Y', null, -1, null, -1]] };
+      const h2 = { name: 'SIN CAJA', rows: [[null, 'CÓDIGO', 'MARCA', 'SERIE', 'STOCK', 'CLIENTE'], [2025, 'P-300', 'Y', 'S1', 1, 'CLIENTE TRES'], [2025, 'P 100', 'X', 'S2', 2, 'CLIENTE TRES']] };
+      const R = Rules.interpretarStock(db, [h1, h2]), f = c => R.filas.find(x => x.codigo === c), res = c => f(c).reservas.reduce((s, r) => s + r.cantidad, 0);
+      return R.fecha === '2026-01-15' && R.filas.length === 5 && R.errores.length === 2 && !f('P 100').nuevo && f('P 100').marca === 'MarcaDemo' && f('P 100').libre === 19 && f('P 100').demo === 1 && res('P 100') === 7 &&
+        f('P-200').libre === 4 && res('P-200') === 4 && f('P-300').libre === 1 && res('P-300') === 1 && /CLIENTE TRES · serie S1/.test(f('P-300').reservas[0].nota) && !f('P-300').avisos.length &&
+        f('P-400').libre === 7 && f('P-400').marca === 'Sin marca' && f('P-400').nuevo && f('P-400').avisos.length === 1 && f('P-500').libre === 3 && res('P-500') === 3 && f('P-500').avisos.length === 1;
+    }],
     ['Correo de fabricante: marca por dominio (o por nombre si fue reenviado) y datos del cliente', () => {
       const db = miniDb();
       const a = Rules.clasificarCorreo(db, { remitente: 'Leads <leads@us.moxa.com>', asunto: 'New lead: RFQ', cuerpo: 'Company: Minera X SAC\nFirst Name: Ana\nLast Name: Perez\nEmail: ana@minerax.pe\nPhone: +51 999 111 222\nProduct: EDS-408A' });
@@ -4017,7 +4456,7 @@ const UI = (() => {
     dash: { vendedor: '' }, notif: { tab: 'alertas', vendedor: '' }, fact: { vendedor: '', mes: '' },
     nueva: null, popover: null, charts: {}, funnelMedida: 'cantidad', pdf: null, pdfPendiente: null,
     expand: {}, pvF: { estado: 'pendientes', vendedor: '' },
-    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, cotF: { q: '', vendedor: '', etapa: '', lim: 50 }, leadF: { estado: 'pendientes', origen: '', vendedor: '', q: '' }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
+    ctaF: { estado: '', vendedor: '', q: '' }, agF: { q: '', vendedor: '' }, cotF: { q: '', vendedor: '', etapa: '', lim: 50 }, leadF: { estado: 'pendientes', origen: '', vendedor: '', q: '' }, stkF: { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 }, catF: { q: '', marca: '' }, catIdx: null, catImport: null,
   };
   const filtrosIniciales = () => ({ etapa: 'abiertas', cliente: '', proyecto: '', marca: '', vendedor: '', desde: '', hasta: '', q: '' });
   S.filtros = filtrosIniciales();
@@ -4065,6 +4504,7 @@ const UI = (() => {
     file: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
     tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L2 12V2h10l8.6 8.6a2 2 0 010 2.8z"/><circle cx="7" cy="7" r="1.5"/>',
     key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2M16 7l3 3M18 5l2 2"/>',
+    stock: '<path d="M3 21V9l9-6 9 6v12"/><path d="M7 21v-8h10v8"/><path d="M7 17h10"/>',
     box: '<path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/>',
     users: '<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8"/>',
     book: '<path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5z"/><path d="M4 19.5V21h16M9 7h7M9 11h5"/>',
@@ -4103,14 +4543,15 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
-    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
-    logistica: [['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
-    admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Ranking', 'trophy'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Datos de la empresa', 'file']],
+    finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['stock', 'Stock', 'stock'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Datos de la empresa', 'file']],
+    logistica: [['postventa', 'Post-venta', 'box'], ['stock', 'Stock', 'stock'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    gestion: [['stock', 'Stock', 'stock'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
+    admin: [['usuarios', 'Usuarios', 'key'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['stock', 'Stock', 'stock'], ['empresa', 'Datos de la empresa', 'file'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
   };
-  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'cotizaciones', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos'] };
-  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', cotizaciones: 'Cotizaciones', leads: 'Leads', usuarios: 'Usuarios', empresa: 'Empresa' };
+  const NAV_MOBILE = { vendedor: ['mi-dia', 'oportunidades', 'nueva', 'cuentas', 'proyeccion'], jefatura: ['dashboard', 'oportunidades', 'cuentas', 'proyeccion', 'facturado'], finanzas: ['proyeccion', 'facturado', 'postventa', 'catalogo', 'contactos'], logistica: ['postventa', 'stock', 'cotizaciones', 'catalogo', 'contactos'], gestion: ['stock', 'postventa', 'cotizaciones', 'catalogo', 'contactos'], admin: ['usuarios', 'postventa', 'cotizaciones', 'catalogo', 'contactos'] };
+  const CORTO = { 'mi-dia': 'Mi día', oportunidades: 'Oportunidades', nueva: 'Nueva', proyeccion: 'Proyección', ranking: 'Ranking', dashboard: 'Dashboard', facturado: 'Facturado', notificaciones: 'Avisos', cuentas: 'Cuentas', contactos: 'Directorio', catalogo: 'Precios', postventa: 'Post-venta', cotizaciones: 'Cotizaciones', leads: 'Leads', stock: 'Stock', usuarios: 'Usuarios', empresa: 'Empresa' };
 
   function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
@@ -4123,6 +4564,7 @@ const UI = (() => {
   }
   async function render(keepScroll) {
     closePopover();
+    if (piloto() && !AlmacenCompartido.soportado()) { renderNavegadorNoSoportado(); return; }
     S.db = await Repo.snapshot();
     const { ruta, param } = parseHash();
     if (!S.user) {
@@ -4158,7 +4600,7 @@ const UI = (() => {
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
-    bell.classList.toggle('hidden', u.debeCambiar || !['vendedor', 'jefatura'].includes(u.rol));
+    bell.classList.toggle('hidden', u.debeCambiar || !['vendedor', 'jefatura', 'gestion', 'logistica'].includes(u.rol));   // gestión y logística: avisos de stock
     bell.innerHTML = I('bell') + (n ? `<span class="badge-count">${n > 99 ? '99+' : n}</span>` : '');
     bell.setAttribute('aria-label', `Alertas (${n})`);
     $('#user-btn').innerHTML = avatar(u) + `<span class="uname">${E(u.nombre)}</span>`;
@@ -4180,12 +4622,21 @@ const UI = (() => {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#print-root').firstChild) { $('#print-root').innerHTML = ''; S.pdf = null; } else if ($('#modal-root').firstChild && $('#modal-root [data-modal-close]')) closeModal(); else closePopover(); } });
 
   /* ---------- Popovers (campana y usuario) ---------- */
+  /** El piloto guarda los datos del equipo en una carpeta de red, que solo Edge y Chrome pueden usar */
+  function renderNavegadorNoSoportado() {
+    document.body.classList.add('logged-out');
+    renderChromeLoggedOut(); $('#mode-badge').textContent = 'Piloto Perú';
+    view().innerHTML = `<div class="login-wrap"><div class="card login-card"><div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${marcaLogin()}<div><h1 style="margin:0">Abre la plataforma en Edge o Chrome</h1></div></div>
+      <div class="alert warn"><div>Este navegador (por ejemplo Firefox o Safari) no puede usar la <strong>carpeta compartida</strong> donde el equipo guarda los datos del piloto. Si trabajaras aquí, lo que registres no lo vería nadie más y tú no verías lo del equipo.</div></div>
+      <ol class="small" style="margin:12px 0 0;padding-left:18px"><li>Abre <strong>Microsoft Edge</strong> (viene con Windows) o <strong>Google Chrome</strong>.</li><li>Abre el mismo archivo o el acceso directo de la plataforma.</li><li>Ingresa con tu usuario de siempre.</li></ol></div></div>`;
+  }
   function closePopover() { $('#popover-root').innerHTML = ''; S.popover = null; }
   ACTIONS['toggle-bell'] = () => {
     if (S.popover === 'bell') return closePopover();
     const al = Rules.alertasUsuario(S.db, S.user, hoy()), jef = S.user.rol === 'jefatura';
     const titulo = jef ? 'Leads, escalados y cuentas sin cotizar' : 'Tus alertas';
-    const item = x => x.lead ? `<a class="pop-item" href="#/leads" style="text-decoration:none;color:inherit">
+    const item = x => x.aviso ? `<a class="pop-item" href="#/stock" data-action="stk-ir-reservas" style="text-decoration:none;color:inherit"><div><strong>${E(x.aviso.texto)}</strong></div><div class="small muted">${Util.fmtFechaHora(x.aviso.fecha)}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
+      : x.lead ? `<a class="pop-item" href="#/leads" style="text-decoration:none;color:inherit">
         <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(x.lead.empresa || x.lead.contacto || x.lead.correo)}</strong>${jef && x.lead.vendedorId ? vendTag(usr(x.lead.vendedorId)) : ''}</div>
         <div class="small muted">Lead · ${E(Rules.origenNombre(S.db, x.lead.origen))}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
       : x.opp ? `<a class="pop-item" href="#/op/${x.opp.id}" style="text-decoration:none;color:inherit">
@@ -4196,7 +4647,7 @@ const UI = (() => {
         <div class="small muted">Cuenta</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`;
     $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="${titulo}"><header><h3>${titulo} (${al.length})</h3><span class="sim-label">Simulación</span></header>
       <div class="pop-body">${al.length ? al.slice(0, 20).map(item).join('') : '<div class="list-empty">Sin alertas pendientes.</div>'}</div>
-      <footer><a class="btn sm" href="#/notificaciones">${I('mail')} Ver todas, correo de resumen y eventos de Outlook</a></footer></div>`;
+      <footer>${Rules.puedeRuta(S.user, 'notificaciones') ? `<a class="btn sm" href="#/notificaciones">${I('mail')} Ver todas, correo de resumen y eventos de Outlook</a>` : `<a class="btn sm" href="#/stock" data-action="stk-ir-reservas">Ver avisos y reservas en Stock</a>`}</footer></div>`;
     S.popover = 'bell';
   };
   function textoGuardado(e) {
@@ -4309,7 +4760,7 @@ const UI = (() => {
     await Repo.reset();
     S.db = await Repo.snapshot();
     S.user = S.db.users.find(u => u.id === id) || null;
-    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' };
+    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 };
     toast('Datos de demo restablecidos.');
     render();
   };
@@ -5255,7 +5706,7 @@ const UI = (() => {
       S.user = await Repo.login(usuario, clave);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.catF = { q: '', marca: '' }; S.expand = {};
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 }; S.catF = { q: '', marca: '' }; S.expand = {};
       if (piloto()) guardarSesion(S.user.id);
       if (S.user.debeCambiar && piloto()) { location.hash = '#/' + Rules.INICIO[S.user.rol]; await render(); abrirCambioClave(true); return; }
       go(Rules.INICIO[S.user.rol]);
@@ -5687,7 +6138,7 @@ const UI = (() => {
         ${(() => { const n = docsDe(o.id).filter(d => d.paso === s.id).length, sube = Rules.puede(S.user, 'documentos_opp', o); return n || sube ? `<button class="btn sm ghost s-doc" data-action="${sube ? 'doc-subir' : 'doc-ver'}" data-id="${o.id}" data-paso="${s.id}" title="${sube ? 'Adjuntar documento de este paso' : 'Ver documentos'}">📎 ${n ? n + ' doc.' : 'Adjuntar'}</button>` : ''; })()}
         ${s.id === 'cobrado' && !pv.cobrado ? `<div class="small muted" style="margin-top:4px">Estimado: ${cobro.filter(c => !c.cobrado).map(c => Util.fmtDate(c.fecha)).join(' y ') || '—'}</div>` : ''}
       </div>`).join('')}</div>
-      <p class="small muted" style="margin-bottom:0">Condición de pago: ${E(Rules.condicion(q.condicionPago).nombre)} → ${E(Rules.condicion(q.condicionPago).regla)}.</p></section>`;
+      <p class="small muted" style="margin-bottom:0">Condición de pago: ${E(Rules.condicion(q.condicionPago).nombre)} → ${E(Rules.condicion(q.condicionPago).regla)}.</p>${stockOppHTML(o)}</section>`;
   }
   CHANGES['etapa'] = el => { const o = oppById(el.dataset.id), nueva = el.value; el.value = o.etapa; if (nueva !== o.etapa) abrirCambioEtapa(o.id, nueva); };
   CHANGES['prox'] = async el => {
@@ -6007,7 +6458,7 @@ const UI = (() => {
         <label class="field ${d.moneda === 'PEN' ? 'c3' : 'c6'}">Moneda<select data-nq="moneda" data-nq-render="1">${options([['USD', 'USD – Dólares'], ['PEN', 'PEN – Soles']], d.moneda)}</select></label>
         ${d.moneda === 'PEN' ? `<label class="field c3"><span>Tipo de cambio <span class="req">*</span></span><input type="number" step="0.001" name="tc" data-nq="tc" value="${d.tc}"><span class="field-hint">Del ${Util.fmtDate(d.fechaEmision)}</span></label>` : ''}
         <label class="field c4"><span>Condición de pago <span class="req">*</span></span><select name="condicionPago" data-nq="condicionPago">${options(Config.CONDICIONES_PAGO.map(x => [x.id, x.nombre]), d.condicionPago, 'Selecciona…')}</select></label>
-        <label class="field c6"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select></label>
+        <label class="field c6"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select>${plazoHint(d)}</label>
         <label class="field c2"><span>Validez (días) <span class="req">*</span></span><input type="number" min="1" name="validezDias" data-nq="validezDias" value="${E(d.validezDias)}"></label>
         <label class="field c12"><span>Condición comercial especial <span class="muted" style="font-weight:400">(opcional)</span></span><textarea name="condicionEspecial" data-nq="condicionEspecial" rows="2" maxlength="1500" placeholder="Ej.: Precio válido por la compra conjunta de los 3 ítems. Entrega parcial: 50 % en 2 semanas y el saldo en 6.">${E(d.condicionEspecial || '')}</textarea><span class="field-hint">Sale en el PDF dentro de "Condiciones comerciales". Cuentas, entrega y despacho los mantiene gerencia en "Datos de la empresa".</span></label>
       </div>`)}
@@ -6018,7 +6469,7 @@ const UI = (() => {
         const fila = ([it, i]) => `<tr${it.opcional ? ' class="fila-opc"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td><input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios"></td>
+          <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios"></td>
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options([...new Set([...marcasDisponibles(), it.marca].filter(Boolean))].map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción" title="${E(it.descripcion)}"></td>
           <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"><div class="field-hint" id="nq-lista-${i}">${listaHint(d, it)}</div></td>
@@ -6064,6 +6515,22 @@ const UI = (() => {
         <button type="submit" class="btn primary">${I('check')} ${plat ? 'Registrar y generar PDF' : 'Registrar cotización'}</button></div>
     </form>`;
   }
+  /** Disponible en Perú y Chile del código (sobre el campo); el vendedor no ve costos */
+  function stockHint(it) {
+    const c = String(it.codigo || '').trim();
+    if (!c || !(S.db.movs || []).length) return '';
+    const k = Rules.normCod(c);
+    if (!Rules.productos(S.db).has(k)) return '';
+    const s = Rules.stockProducto(S.db, k), cant = +it.cant || 0;
+    return `<div class="stk-hint${s.PE.disponible >= cant && cant ? ' ok' : s.PE.disponible + s.CL.disponible ? '' : ' no'}" title="Disponible (en almacén menos reservado)">Stock · Perú ${s.PE.disponible} · Chile ${s.CL.disponible}</div>`;
+  }
+  /** Plazo sugerido por el stock; el vendedor lo puede cambiar */
+  function plazoHint(d) {
+    const p = Rules.plazoSugerido(S.db, d.items);
+    if (!p) return (S.db.movs || []).length && d.items.some(it => String(it.codigo || '').trim()) ? '<span class="field-hint">Sin stock suficiente: elige el plazo como siempre.</span>' : '';
+    return `<span class="field-hint">Según el stock: <strong>${E(Rules.plazo(p).nombre.split(',')[0])}</strong>${d.plazo === p ? ' ✓' : ` <a href="#" data-action="nq-plazo-stock" data-p="${p}">Usar</a>`}</span>`;
+  }
+  ACTIONS['nq-plazo-stock'] = (el, e) => { if (e) e.preventDefault(); setDraft('plazo', el.dataset.p); render(true); };
   /** Origen de la oportunidad (dato interno, no sale en el PDF): obligatorio al crear una oportunidad; en revisiones ya lo tiene */
   function origenNqHTML(d) {
     const l = d.leadId && (S.db.leads || []).find(x => x.id === d.leadId);
@@ -6970,12 +7437,12 @@ const UI = (() => {
       ${piloto() ? '' : '<div class="alert info" style="margin-bottom:12px"><div>En la demo los cambios de usuarios no se guardan.</div></div>'}
       <div class="table-wrap"><table class="tbl" style="min-width:1000px"><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Cargo</th><th>Correo</th><th>Teléfono</th><th class="r">Meta mensual</th><th>Estado</th><th></th></tr></thead><tbody>
         ${us.map(u => `<tr${u.activo === false ? ' style="opacity:.6"' : ''}><td class="nowrap">${avatarSm(u)}<strong>${E(u.nombre)}</strong> <span class="muted small">${E(u.iniciales)}</span></td>
-          <td><code>${E(u.usuario)}</code></td><td class="nowrap">${E(Rules.rolNombre(u))}</td><td class="small">${E(u.cargo || '—')}</td><td class="small">${E(u.correo || '—')}</td><td class="small nowrap">${E(u.telefono || '—')}</td>
+          <td><code>${E(u.usuario)}</code></td><td class="nowrap">${E(Rules.rolNombre(u))}<div class="cell-sub">${E(Config.OFICINAS[u.oficina || 'PE'])}</div></td><td class="small">${E(u.cargo || '—')}</td><td class="small">${E(u.correo || '—')}</td><td class="small nowrap">${E(u.telefono || '—')}</td>
           <td class="r num">${u.rol === 'vendedor' ? Util.money0(u.meta || Config.META_MENSUAL_USD) : '—'}</td>
           <td>${u.activo === false ? '<span class="chip">Inactivo</span>' : '<span class="chip ok">Activo</span>'}${u.debeCambiar && piloto() ? ' <span class="chip warn">Contraseña temporal</span>' : ''}</td>
           <td class="nowrap"><button class="btn sm" data-action="usuario-editar" data-id="${u.id}">Editar</button>${piloto() ? ` <button class="btn sm" data-action="usuario-clave" data-id="${u.id}">Restablecer contraseña</button>` : ''}</td></tr>`).join('')}
       </tbody></table></div>
-      <p class="small muted">Roles: ${Object.values(Config.ROLES).map(E).join(' · ')}. Gerencia y jefatura tienen todos los permisos comerciales; administración gestiona usuarios y lista de precios. Para desactivar a un Account Manager, primero reasigna sus cuentas desde Cuentas.</p>`;
+      <p class="small muted">Roles: ${Object.values(Config.ROLES).map(E).join(' · ')}. Gerencia y jefatura tienen todos los permisos comerciales; administración del sistema gestiona usuarios y lista de precios; gestión / administración local registra el stock de los almacenes de su oficina (Perú o Chile). Para desactivar a un Account Manager, primero reasigna sus cuentas desde Cuentas.</p>`;
   };
   function mostrarTemporal(u, temporal, titulo) {
     modal({ title: titulo, body: `<p style="margin-top:0">Entrega esta contraseña temporal a <strong>${E(u.nombre)}</strong> (usuario <code>${E(u.usuario)}</code>). Al ingresar deberá cambiarla.</p>
@@ -6994,6 +7461,7 @@ const UI = (() => {
         <label class="field">Cargo<input type="text" name="cargo" value="${E(u.cargo || '')}" placeholder="Ej.: Account Manager"></label>
         <label class="field">Correo<input type="email" name="correo" value="${E(u.correo || '')}"></label>
         <label class="field">Teléfono (sale en el PDF)<input type="text" name="telefono" value="${E(u.telefono || '')}"></label>
+        <label class="field">Oficina<select name="oficina">${options(Object.entries(Config.OFICINAS), u.oficina || 'PE')}</select></label>
         <label class="field" id="campo-meta">Meta mensual USD (Account Manager)<input type="number" min="0" step="1000" name="meta" value="${E(u.meta || Config.META_MENSUAL_USD)}"></label>
       </div>
       ${el.dataset.id ? `<label style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer"><input type="checkbox" name="activo"${u.activo !== false ? ' checked' : ''}> Usuario activo (puede ingresar)</label>` : ''}
@@ -7001,7 +7469,7 @@ const UI = (() => {
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
         const act = r.querySelector('[name=activo]');
         const res = await Repo.guardarUsuario({ id: el.dataset.id || null, nombre: val(r, 'nombre'), iniciales: val(r, 'iniciales'), usuario: val(r, 'usuario'), rol: val(r, 'rol'),
-          cargo: val(r, 'cargo'), correo: val(r, 'correo'), telefono: val(r, 'telefono'), meta: val(r, 'meta'), activo: act ? act.checked : true }, S.user.id);
+          cargo: val(r, 'cargo'), correo: val(r, 'correo'), telefono: val(r, 'telefono'), meta: val(r, 'meta'), oficina: val(r, 'oficina'), activo: act ? act.checked : true }, S.user.id);
         S.user = S.db.users.find(x => x.id === S.user.id);
         toast('Usuario guardado.'); refresh();
         if (res.temporal) setTimeout(() => mostrarTemporal(res.usuario, res.temporal, 'Usuario creado'), 60);
@@ -7389,6 +7857,240 @@ const UI = (() => {
     </section>`;
   }
   ACTIONS['lead-sin-atender'] = (el, e) => { if (e) e.preventDefault(); Object.assign(S.leadF, { estado: 'sin_atender', origen: '', vendedor: '', q: '' }); go('leads'); };
+
+  /* =====================================================================
+     STOCK — almacenes de Perú y Chile. El stock resulta de los movimientos; gestión local los registra,
+     las ventas ganadas reservan y post-venta confirma ingresos y entregas. Los costos no los ve el vendedor.
+     ===================================================================== */
+  const PAIS = Config.OFICINAS;
+  const nombreAlm = id => ((S.db.almacenes || []).find(a => a.id === id) || { nombre: id }).nombre;
+  const n0 = v => v ? v.toLocaleString('en-US') : '';
+  /** Valor unitario: costo cargado o, si no hay, precio de lista (rotulado así) */
+  const valorUnit = k => { const c = (S.db.costos || {})[k], p = Rules.productos(S.db).get(k); return c ? { v: c.costoUSD, lista: false } : p && +p.precio > 0 ? { v: +p.precio, lista: true } : null; };
+  /** Filas del stock: productos con movimientos o pedidos, agregados según el filtro de país/almacén */
+  function filasStock() {
+    const db = S.db, F = S.stkF, St = Rules.stock(db), prods = Rules.productos(db), t = Util.norm(F.q);
+    const ks = new Set([...St.por.keys(), ...St.pedidos.keys()]);
+    const out = [];
+    ks.forEach(k => {
+      const p = prods.get(k) || { codigo: k, marca: '', descripcion: '' }, s = Rules.stockProducto(db, k);
+      if (F.marca && p.marca !== F.marca) return;
+      if (t && !Util.norm([p.codigo, p.marca, p.descripcion].join(' ')).includes(t)) return;
+      const ams = s.almacenes.filter(x => (!F.pais || x.almacen.pais === F.pais) && (!F.almacen || x.almacen.id === F.almacen));
+      const sum = c => Util.sum(ams, x => x[c]);
+      const r = { k, p, s, fisico: sum('fisico'), reservado: sum('reservado'), disponible: sum('disponible'), nodisp: sum('demo') + sum('prestamo') + sum('malogrado'), transito: sum('transito'),
+        pe: s.PE.disponible, cl: s.CL.disponible, pedido: s.pedido, minimo: ams.reduce((m, x) => m + ((db.minimos || {})[k + '|' + x.almacen.id] || 0), 0) };
+      if (F.solo === 'con' && !r.fisico && !r.transito && !r.pedido) return;
+      if (F.solo === 'bajo' && !(r.minimo && r.disponible < r.minimo)) return;
+      const vu = valorUnit(k); r.vu = vu; r.valor = vu ? vu.v * r.fisico : 0;
+      out.push(r);
+    });
+    return out.sort((a, b) => (a.p.marca || '').localeCompare(b.p.marca || '') || String(a.p.codigo).localeCompare(String(b.p.codigo)));
+  }
+  PAGES['stock'] = async () => {
+    const db = S.db, u = S.user, F = S.stkF, gest = Rules.puede(u, 'mover_stock'), costos = Rules.puede(u, 'ver_costos');
+    const tabs = [['stock', 'Stock'], ['movs', 'Movimientos'], ['reservas', u.rol === 'vendedor' ? 'Mis reservas' : 'Reservas y pedidos'], ['almacenes', 'Almacenes']];
+    if (!tabs.some(x => x[0] === F.tab)) F.tab = 'stock';
+    const alms = db.almacenes || [];
+    let cuerpo = '';
+    if (F.tab === 'stock') {
+      const rows = filasStock(), marcas = [...new Set(rows.map(r => r.p.marca).filter(Boolean))].sort(), conLista = rows.some(r => r.vu && r.vu.lista && r.fisico);
+      cuerpo = `<div class="card" style="padding:12px"><div class="filters" style="margin:0">
+          <label class="field" style="flex:2 1 240px">Buscar<input type="text" data-input="stkf" name="q" value="${E(F.q)}" placeholder="Código, marca o descripción"></label>
+          <label class="field">País<select data-change="stkf" name="pais">${options(Object.entries(PAIS), F.pais, 'Perú y Chile')}</select></label>
+          <label class="field">Almacén<select data-change="stkf" name="almacen">${options(alms.map(a => [a.id, a.nombre + ' (' + PAIS[a.pais] + ')']), F.almacen, 'Todos')}</select></label>
+          <label class="field">Marca<select data-change="stkf" name="marca">${options(marcas.map(m => [m, m]), F.marca, 'Todas')}</select></label>
+          <label class="field">Mostrar<select data-change="stkf" name="solo">${options([['con', 'Con stock, en tránsito o pedido'], ['bajo', 'Bajo el mínimo'], ['todos', 'Todos los códigos del inventario']], F.solo)}</select></label>
+        </div><div class="small muted" style="margin-top:8px">${rows.length} códigos · ${n0(Util.sum(rows, r => r.fisico)) || 0} u. físicas · ${n0(Util.sum(rows, r => r.disponible)) || 0} disponibles${costos ? ` · valor ${money(Util.sum(rows, r => r.valor))}${conLista ? ' <span class="chip warn" title="Productos sin costo cargado: se valorizan a precio de lista">incluye valor a precio de lista</span>' : ''}` : ''}</div></div>
+        <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:${costos ? 1240 : 1060}px"><thead><tr><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">Disp. Perú</th><th class="r">Disp. Chile</th><th class="r">Físico</th><th class="r">Reservado</th><th class="r">Disponible</th><th class="r" title="Demo / Panel Tech, préstamo y malogrado">No disponible</th><th class="r">En tránsito</th><th class="r">Pedido a fábrica</th><th class="r">Mínimo</th>${costos ? '<th class="r">Costo u. USD</th><th class="r">Valor USD</th>' : ''}</tr></thead><tbody>
+          ${rows.slice(0, F.lim).map(r => `<tr class="clickable" data-action="stk-ver" data-k="${E(r.k)}"><td class="nowrap"><strong>${E(r.p.codigo)}</strong>${r.p.inventario ? ' <span class="chip" title="No está en la lista de precios">inventario</span>' : ''}</td><td class="nowrap">${E(r.p.marca)}</td><td class="small">${E((r.p.descripcion || '').slice(0, 70))}</td>
+            <td class="r">${n0(r.pe)}</td><td class="r">${n0(r.cl)}</td><td class="r">${n0(r.fisico)}</td><td class="r">${n0(r.reservado)}</td><td class="r"><strong${r.minimo && r.disponible < r.minimo ? ' style="color:var(--bad)"' : ''}>${r.disponible || (r.fisico ? 0 : '')}</strong></td><td class="r">${n0(r.nodisp)}</td><td class="r">${n0(r.transito)}</td><td class="r">${n0(r.pedido)}</td><td class="r">${n0(r.minimo)}</td>
+            ${costos ? `<td class="r num">${r.vu ? Util.nf2.format(r.vu.v) + (r.vu.lista ? '<span class="cell-sub">lista</span>' : '') : '<span class="muted">—</span>'}</td><td class="r num">${r.valor ? Util.nf2.format(r.valor) : ''}</td>` : ''}</tr>`).join('') || `<tr><td colspan="14" class="center muted" style="padding:20px">${(db.movs || []).length ? 'Sin códigos con estos filtros.' : 'Aún no hay stock cargado.' + (gest ? ' Usa "Cargar stock (Excel)".' : '')}</td></tr>`}
+        </tbody></table></div>${rows.length > F.lim ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="stk-mas">Ver más (${rows.length - F.lim} restantes)</button></div>` : ''}
+        <p class="small muted">Disponible = en almacén − reservado (separados y ventas ganadas). No disponible: demo / Panel Tech, préstamo y malogrado. ${costos ? 'Valor: costo cargado por producto o, si no hay, precio de lista (marcado "lista").' : ''} Clic en un código para ver el detalle por almacén.</p>`;
+    } else if (F.tab === 'movs') {
+      const t = Util.norm(F.q);
+      let ms = (db.movs || []).slice().reverse();
+      if (F.almacen) ms = ms.filter(m => m.efectos.some(e => e.almacenId === F.almacen));
+      if (F.tipo) ms = ms.filter(m => m.tipo === F.tipo);
+      if (t) ms = ms.filter(m => Util.norm([m.codigo, m.marca, m.nota, m.ref && m.ref.valor, m.oppId].join(' ')).includes(t));
+      cuerpo = `<div class="card" style="padding:12px"><div class="filters" style="margin:0">
+          <label class="field" style="flex:2 1 240px">Buscar<input type="text" data-input="stkf" name="q" value="${E(F.q)}" placeholder="Código, referencia, nota u oportunidad"></label>
+          <label class="field">Tipo<select data-change="stkf" name="tipo">${options(Object.entries(Config.TIPOS_MOV), F.tipo, 'Todos')}</select></label>
+          <label class="field">Almacén<select data-change="stkf" name="almacen">${options(alms.map(a => [a.id, a.nombre]), F.almacen, 'Todos')}</select></label>
+        </div><div class="small muted" style="margin-top:8px">${ms.length} movimientos · del más reciente al más antiguo</div></div>
+        <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1100px"><thead><tr><th>Fecha</th><th>Tipo</th><th>Código</th><th>Almacén</th><th>Efecto</th><th>Referencia</th>${costos ? '<th class="r">Costo u.</th>' : ''}<th>Usuario</th><th>Nota</th></tr></thead><tbody>
+          ${ms.slice(0, 300).map(m => `<tr><td class="nowrap">${Util.fmtDate(m.fecha)}<div class="cell-sub">${E(m.id)}</div></td><td class="small">${E(Config.TIPOS_MOV[m.tipo])}${m.tipo === 'transferencia' ? `<div class="cell-sub">${m.recibidaPor ? 'recibida' : '<span class="chip warn">en tránsito</span>'}</div>` : ''}</td>
+            <td class="nowrap"><strong>${E(m.codigo)}</strong><div class="cell-sub">${E(m.marca || '')}</div></td><td class="small">${E(nombreAlm(m.almacenId))}${m.destinoId ? ' → ' + E(nombreAlm(m.destinoId)) : ''}</td>
+            <td class="small nowrap">${m.efectos.map(e => `${e.delta > 0 ? '+' : ''}${e.delta} ${E(e.estado === 'transito' ? 'en tránsito' : Config.ESTADOS_STOCK[e.estado].toLowerCase())}${m.destinoId || m.tipo === 'recepcion' ? ' · ' + E(nombreAlm(e.almacenId)) : ''}`).join('<br>')}</td>
+            <td class="small">${m.ref ? E(m.ref.tipo + ' ' + m.ref.valor) : ''}${m.oppId ? `<div><a href="#/op/${m.oppId}">${E(m.oppId)}</a></div>` : ''}</td>${costos ? `<td class="r num">${m.costoUSD ? Util.nf2.format(m.costoUSD) : ''}</td>` : ''}
+            <td class="small">${E(m.usuarioId === 'sistema' ? 'Carga inicial' : (usr(m.usuarioId) || {}).nombre || '')}</td><td class="small">${E(m.nota || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="center muted" style="padding:20px">Sin movimientos.</td></tr>'}
+        </tbody></table></div>`;
+    } else if (F.tab === 'reservas') {
+      const vend = u.rol === 'vendedor', mias = r => !vend || (r.oppId && (oppById(r.oppId) || {}).vendedorId === u.id);
+      const rs = (db.reservas || []).filter(r => r.estado === 'activa' && mias(r)), ps = (db.pedidosFab || []).filter(p => p.estado === 'pendiente' && mias(p));
+      const tr = (db.movs || []).filter(m => m.tipo === 'transferencia' && !m.recibidaPor), av = (db.invAvisos || []).filter(a => !a.vistoPor.includes(u.id)).slice(0, 20), h = hoy();
+      const opp = id => { const o = oppById(id); return o ? `<a href="#/op/${o.id}">${E(o.id)}</a> · ${E(cli(o.clienteId).razonSocial)}${vend ? '' : ' ' + vendTag(usr(o.vendedorId))}` : ''; };
+      cuerpo = `${!vend && av.length ? `<section class="card"><div class="card-head"><h2>Avisos</h2><span class="sub">${av.length} sin revisar</span></div><ul class="timeline">${av.map(a => `<li><div class="t-date">${Util.fmtFechaHora(a.fecha)}</div><div>${E(a.texto)}${a.oppId ? ` · <a href="#/op/${a.oppId}">${E(a.oppId)}</a>` : ''} <button class="btn sm ghost" data-action="stk-visto" data-id="${a.id}">Visto</button></div></li>`).join('')}</ul></section>` : ''}
+        <section class="card" style="margin-top:12px"><div class="card-head"><h2>Reservas activas</h2><span class="sub">${rs.length} · ${n0(Util.sum(rs, r => r.cantidad)) || 0} u.</span></div>
+          <div class="table-wrap"><table class="tbl"><thead><tr><th>Código</th><th class="r">Cantidad</th><th>Almacén</th><th>Para</th><th>Desde</th><th></th></tr></thead><tbody>
+          ${rs.map(r => `<tr><td><strong>${E(r.codigo)}</strong></td><td class="r">${r.cantidad}</td><td class="small">${E(nombreAlm(r.almacenId))}</td><td class="small">${r.oppId ? opp(r.oppId) : E(r.nota)}</td><td class="small nowrap">${Util.fmtFechaHora(r.creado)}</td>
+            <td>${gest && !r.oppId ? `<button class="btn sm ghost" data-action="stk-liberar" data-id="${r.id}">Liberar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="center muted">Sin reservas.</td></tr>'}</tbody></table></div></section>
+        <section class="card" style="margin-top:12px"><div class="card-head"><h2>Pedidos a fábrica pendientes</h2><span class="sub">Lo que faltó al ganar; se confirma con "Recibido y revisado" en post-venta</span></div>
+          <div class="table-wrap"><table class="tbl"><thead><tr><th>Código</th><th class="r">Cantidad</th><th>Venta</th><th>Llegada esperada</th></tr></thead><tbody>
+          ${ps.map(p => `<tr><td><strong>${E(p.codigo)}</strong><div class="cell-sub">${E(p.marca || '')}</div></td><td class="r">${p.cantidad}</td><td class="small">${opp(p.oppId)}</td><td class="nowrap">${Util.fmtDate(p.fechaEsperada)}${p.fechaEsperada < h ? ' <span class="chip bad">atrasado</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="center muted">Sin pedidos pendientes.</td></tr>'}</tbody></table></div></section>
+        ${vend ? '' : `<section class="card" style="margin-top:12px"><div class="card-head"><h2>Transferencias en tránsito</h2></div>
+          <div class="table-wrap"><table class="tbl"><thead><tr><th>Envío</th><th>Código</th><th class="r">Cantidad</th><th>Origen → destino</th><th></th></tr></thead><tbody>
+          ${tr.map(m => { const dest = (db.almacenes || []).find(a => a.id === m.destinoId), puede = gest && dest && (u.oficina || 'PE') === dest.pais;
+            return `<tr><td class="nowrap">${Util.fmtDate(m.fecha)}<div class="cell-sub">${E(m.id)}</div></td><td><strong>${E(m.codigo)}</strong></td><td class="r">${m.cantidad}</td><td class="small">${E(nombreAlm(m.almacenId))} → ${E(nombreAlm(m.destinoId))}</td>
+              <td>${puede ? `<button class="btn sm primary" data-action="stk-recibir" data-id="${m.id}">Recibir</button>` : '<span class="small muted">La recibe la oficina de destino</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5" class="center muted">Nada en tránsito.</td></tr>'}</tbody></table></div></section>`}`;
+    } else {
+      cuerpo = `<div class="table-wrap"><table class="tbl"><thead><tr><th>Almacén</th><th>País</th><th>Ciudad</th><th class="r">Códigos con stock</th><th class="r">Unidades físicas</th><th>Estado</th><th></th></tr></thead><tbody>
+        ${alms.map(a => { const St = Rules.stock(db); let cod = 0, uds = 0; St.por.forEach(p => { const x = p[a.id]; if (x) { const f = x.libre + x.demo + x.prestamo + x.malogrado; if (f) { cod++; uds += f; } } });
+          return `<tr><td><strong>${E(a.nombre)}</strong></td><td>${E(PAIS[a.pais])}</td><td>${E(a.ciudad || '')}</td><td class="r">${cod}</td><td class="r">${n0(uds) || 0}</td><td>${a.activo === false ? '<span class="chip">Inactivo</span>' : '<span class="chip ok">Activo</span>'}</td>
+            <td>${gest ? `<button class="btn sm" data-action="stk-almacen" data-id="${a.id}">Editar</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+        <p class="small muted">Para empezar con un almacén nuevo (por ejemplo de Chile): créalo aquí y usa "Cargar stock (Excel)" o registra ingresos uno por uno. La primera carga de un almacén vacío la puede hacer cualquier gestión local; después, cada oficina mueve solo sus almacenes.</p>`;
+    }
+    view().innerHTML = `
+      <div class="page-head"><div><h1>Stock</h1><p class="muted">${alms.filter(a => a.activo !== false).map(a => E(a.nombre)).join(' · ') || 'Sin almacenes'} · el stock resulta de los movimientos${gest ? ` · tu oficina: ${PAIS[u.oficina || 'PE']}` : ''}</p></div>
+        <div class="btn-row">${costos ? `<button class="btn" data-action="stk-exportar">${I('download')} Exportar a Excel</button>` : ''}${gest ? `<button class="btn" data-action="stk-almacen">${I('plus')} Almacén</button><button class="btn" data-action="stk-plantilla">${I('download')} Plantilla</button><button class="btn" data-action="stk-cargar">${I('upload')} Cargar stock (Excel)</button><button class="btn" data-action="stk-separar">Separar</button><button class="btn primary" data-action="stk-mov">${I('plus')} Registrar movimiento</button>` : ''}</div></div>
+      <input type="file" id="stk-file" accept=".xlsx,.csv" class="hidden">
+      <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" class="${F.tab === k ? 'active' : ''}" data-action="stk-tab" data-tab="${k}">${l}</button>`).join('')}</div>${cuerpo}`;
+    const inp = $('#stk-file');
+    if (inp) inp.addEventListener('change', async () => { const f = inp.files[0]; inp.value = ''; if (!f) return; try { revisarCargaStock(await ListaPrecios.leerArchivo(f), f.name); } catch (e) { toast('No se pudo leer el archivo: ' + e.message); } });
+  };
+  filtro('stkf', () => S.stkF, F => { F.lim = 100; });
+  ACTIONS['stk-tab'] = el => { Object.assign(S.stkF, { tab: el.dataset.tab, q: '', lim: 100 }); render(true); };
+  ACTIONS['stk-mas'] = () => { S.stkF.lim += 100; refresh(); };
+  ACTIONS['stk-visto'] = async el => { await Repo.avisoVisto(el.dataset.id, S.user.id); refresh(); };
+  ACTIONS['stk-liberar'] = async el => { try { await Repo.liberarSeparado(el.dataset.id, S.user.id); toast('Separado liberado.'); } catch (e) { toast(e.message); } refresh(); };
+  ACTIONS['stk-recibir'] = async el => { try { await Repo.registrarMovimiento({ tipo: 'recepcion', transferenciaId: el.dataset.id, almacenId: S.db.movs.find(m => m.id === el.dataset.id).destinoId }, S.user.id); toast('Transferencia recibida: ya está disponible.'); } catch (e) { toast(e.message); } refresh(); };
+  /** Detalle de un producto: por almacén, reservas, últimos movimientos, mínimo y costo */
+  ACTIONS['stk-ver'] = el => {
+    const db = S.db, k = el.dataset.k, p = Rules.productos(db).get(k) || { codigo: k }, s = Rules.stockProducto(db, k), u = S.user;
+    const verC = Rules.puede(u, 'ver_costos'), edC = Rules.puede(u, 'editar_costos'), edM = Rules.puede(u, 'editar_minimos'), vu = valorUnit(k), c = (db.costos || {})[k];
+    const ms = (db.movs || []).filter(m => m.k === k).slice(-12).reverse(), rs = (db.reservas || []).filter(r => r.k === k && r.estado === 'activa');
+    modal({ title: `${p.marca || ''} ${p.codigo}`, wide: true,
+      body: `<p class="small muted" style="margin-top:0">${E(p.descripcion || '')}${p.inventario ? ' · producto de inventario (no está en la lista de precios)' : p.precio ? ` · precio de lista ${Util.money(p.precio)}` : ''}</p>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Almacén</th><th class="r">Físico</th><th class="r">Reservado</th><th class="r">Disponible</th><th class="r">Demo / Panel</th><th class="r">Préstamo</th><th class="r">Malogrado</th><th class="r">En tránsito</th><th class="r">Mínimo</th></tr></thead><tbody>
+        ${(db.almacenes || []).map(a => { const x = s.almacenes.find(y => y.almacen.id === a.id) || {}, mn = (db.minimos || {})[k + '|' + a.id] || 0;
+          return `<tr><td>${E(a.nombre)} <span class="small muted">${E(PAIS[a.pais])}</span></td><td class="r">${x.fisico || 0}</td><td class="r">${x.reservado || 0}</td><td class="r"><strong>${x.disponible || 0}</strong></td><td class="r">${x.demo || 0}</td><td class="r">${x.prestamo || 0}</td><td class="r">${x.malogrado || 0}</td><td class="r">${x.transito || 0}</td>
+            <td class="r">${edM ? `<input type="number" min="0" step="1" data-min="${a.id}" value="${mn || ''}" style="width:70px" aria-label="Mínimo en ${E(a.nombre)}">` : mn || ''}</td></tr>`; }).join('')}
+        </tbody></table></div>${s.pedido ? `<p class="small">Pedido a fábrica pendiente: <strong>${s.pedido}</strong> u.</p>` : ''}
+        ${rs.length ? `<h3 class="dash-h3">Reservas activas</h3><ul class="small" style="margin:0;padding-left:18px">${rs.map(r => `<li>${r.cantidad} u. en ${E(nombreAlm(r.almacenId))} · ${r.oppId ? 'venta ' + E(r.oppId) : E(r.nota)}</li>`).join('')}</ul>` : ''}
+        ${verC ? `<h3 class="dash-h3">Costo unitario (USD)</h3><div class="cc-row">${edC ? `<input type="number" min="0" step="0.01" name="costo" value="${c ? c.costoUSD : ''}" placeholder="${vu && vu.lista ? 'Precio de lista: ' + vu.v : 'Sin costo'}" style="width:160px">` : `<strong>${c ? Util.nf2.format(c.costoUSD) : '—'}</strong>`}
+          <span class="small muted">${c ? `Cargado el ${Util.fmtDate(c.fecha)}${c.origen && c.origen !== 'manual' ? ' (' + E(c.origen) + ')' : ''}` : vu && vu.lista ? 'Sin costo cargado: el inventario se valoriza a precio de lista.' : 'Sin costo ni precio de lista: no suma al valor del inventario.'}</span></div>` : ''}
+        <h3 class="dash-h3">Últimos movimientos</h3><ul class="timeline">${ms.map(m => `<li><div class="t-date">${Util.fmtDate(m.fecha)}</div><div>${E(Config.TIPOS_MOV[m.tipo])} · ${m.efectos.map(e => `${e.delta > 0 ? '+' : ''}${e.delta} ${e.estado === 'transito' ? 'en tránsito' : E(Config.ESTADOS_STOCK[e.estado].toLowerCase())} (${E(nombreAlm(e.almacenId))})`).join(', ')}<div class="small muted">${E(m.nota || '')}${m.oppId ? ' · ' + E(m.oppId) : ''}</div></div></li>`).join('') || '<li class="muted">Sin movimientos.</li>'}</ul>`,
+      actions: [{ label: 'Cerrar' }, ...(edC || edM ? [{ label: `${I('check')} Guardar mínimo y costo`, cls: 'primary', onClick: async r => {
+        if (edM) for (const i of r.querySelectorAll('[data-min]')) { const a = i.dataset.min, antes = (db.minimos || {})[k + '|' + a] || 0; if ((+i.value || 0) !== antes) await Repo.guardarMinimo(p.codigo, a, i.value, u.id); }
+        if (edC) { const v = r.querySelector('[name=costo]').value; if (String(c ? c.costoUSD : '') !== v) await Repo.guardarCosto(p.codigo, v, u.id); }
+        toast('Guardado.'); refresh();
+      } }] : [])] });
+  };
+  /** Registrar movimiento (gestión local): los campos se ajustan al tipo */
+  ACTIONS['stk-mov'] = () => {
+    const db = S.db, u = S.user, mios = Rules.almacenesActivos(db, u.oficina || 'PE'), todos = Rules.almacenesActivos(db);
+    if (!mios.length) return toast(`No hay almacenes activos de ${PAIS[u.oficina || 'PE']}.`);
+    const est = Object.entries(Config.ESTADOS_STOCK);
+    const root = modal({ title: 'Registrar movimiento de stock', wide: true,
+      body: `<div class="form-grid">
+        <label class="field"><span>Tipo <span class="req">*</span></span><select name="tipo">${options(Object.entries(Config.TIPOS_MOV).filter(([k]) => !['inicial', 'recepcion'].includes(k)), 'ingreso')}</select></label>
+        <label class="field"><span>Fecha <span class="req">*</span></span><input type="date" name="fecha" value="${hoy()}" max="${hoy()}"></label>
+        <label class="field"><span>Almacén <span class="req">*</span></span><select name="almacenId">${options(mios.map(a => [a.id, a.nombre]), mios[0].id)}</select></label>
+        <label class="field" data-si="transferencia"><span>Destino <span class="req">*</span></span><select name="destinoId">${options(todos.map(a => [a.id, a.nombre + ' (' + PAIS[a.pais] + ')']), '', 'Elige…')}</select></label>
+        <label class="field" data-si="ajuste"><span>Sentido <span class="req">*</span></span><select name="signo">${options([['+', 'Aumenta (encontrado / sobrante)'], ['-', 'Disminuye (faltante / baja)']], '+')}</select></label>
+        <label class="field" data-si="estado ajuste"><span>Estado${' '}<span class="req">*</span></span><select name="estadoDesde">${options(est, 'libre')}</select></label>
+        <label class="field" data-si="estado"><span>Pasa a <span class="req">*</span></span><select name="estadoHacia">${options(est, 'demo')}</select></label>
+        <label class="field"><span>Código <span class="req">*</span></span><input type="text" name="codigo" autocomplete="off" placeholder="Como en la lista de precios"><span class="field-hint" id="mov-prod"></span></label>
+        <label class="field hidden" data-nuevo><span>Marca (producto nuevo) <span class="req">*</span></span><input type="text" name="marca" list="dl-marcas-inv"><datalist id="dl-marcas-inv">${marcasDisponibles().map(m => `<option value="${E(m)}">`).join('')}</datalist></label>
+        <label class="field hidden" data-nuevo>Descripción<input type="text" name="descripcion"></label>
+        <label class="field"><span>Cantidad <span class="req">*</span></span><input type="number" name="cantidad" min="1" step="1"></label>
+        <label class="field" data-si="ingreso">Costo unitario USD (opcional)<input type="number" name="costoUSD" min="0" step="0.01"></label>
+        <label class="field">Referencia<div style="display:flex;gap:6px"><select name="refTipo" style="max-width:130px">${options(Config.REFS_MOV.map(x => [x, x]), 'OC')}</select><input type="text" name="refValor" placeholder="N° de OC, factura, guía…"></div></label>
+        <label class="field" style="grid-column:1/-1"><span>Nota <span data-si="ajuste" class="req">(motivo obligatorio)</span></span><input type="text" name="nota"></label></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Registrar`, cls: 'primary', onClick: async r => {
+        const d = {}; ['tipo', 'fecha', 'almacenId', 'destinoId', 'signo', 'estadoDesde', 'estadoHacia', 'codigo', 'marca', 'descripcion', 'cantidad', 'costoUSD', 'refTipo', 'refValor', 'nota'].forEach(k => { d[k] = val(r, k); });
+        const m = await Repo.registrarMovimiento(d, S.user.id);
+        toast(`${Config.TIPOS_MOV[m.tipo]} registrado (${m.id}).`); refresh();
+      } }],
+      onOpen: r => {
+        const ver = () => { const t = val(r, 'tipo'); r.querySelectorAll('[data-si]').forEach(x => x.classList.toggle('hidden', !x.dataset.si.split(' ').includes(t))); prod(); };
+        const prod = () => {
+          const c = val(r, 'codigo'), k = Rules.normCod(c), p = c && Rules.productos(S.db).get(k), t = val(r, 'tipo'), suma = ['ingreso', 'devolucion'].includes(t) || (t === 'ajuste' && val(r, 'signo') === '+');
+          const s = p && Rules.stockProducto(S.db, k).almacenes.find(x => x.almacen.id === val(r, 'almacenId'));
+          r.querySelector('#mov-prod').innerHTML = !c ? '' : p ? `${E(p.marca)} · ${E((p.descripcion || '').slice(0, 60))}${s ? ` · disponible ${s.disponible}` : ' · sin stock aquí'}` : suma ? 'No está en la lista de precios: se crea como producto de inventario.' : '<span style="color:var(--bad)">Código sin stock.</span>';
+          r.querySelectorAll('[data-nuevo]').forEach(x => x.classList.toggle('hidden', !(c && !p && suma)));
+        };
+        r.addEventListener('change', e => { if (['tipo', 'signo', 'almacenId'].includes(e.target.name)) ver(); });
+        r.addEventListener('input', e => { if (e.target.name === 'codigo') prod(); });
+        ver();
+      } });
+    return root;
+  };
+  ACTIONS['stk-separar'] = () => {
+    const mios = Rules.almacenesActivos(S.db, S.user.oficina || 'PE');
+    modal({ title: 'Separar unidades para un cliente', body: `<div class="stack"><label class="field">Almacén<select name="almacenId">${options(mios.map(a => [a.id, a.nombre]), mios[0] && mios[0].id)}</select></label>
+      <label class="field"><span>Código <span class="req">*</span></span><input type="text" name="codigo"></label><label class="field"><span>Cantidad <span class="req">*</span></span><input type="number" name="cantidad" min="1" step="1"></label>
+      <label class="field"><span>Para quién / por qué <span class="req">*</span></span><input type="text" name="nota" placeholder="Ej.: 10 unidades para el cliente X (pedido del vendedor)"></label></div>
+      <p class="small muted">Lo separado deja de estar disponible hasta que se libere (pestaña Reservas). Las ventas ganadas reservan solas.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Separar', cls: 'primary', onClick: async r => { await Repo.separarStock({ almacenId: val(r, 'almacenId'), codigo: val(r, 'codigo'), cantidad: val(r, 'cantidad'), nota: val(r, 'nota') }, S.user.id); toast('Unidades separadas.'); refresh(); } }] });
+  };
+  ACTIONS['stk-almacen'] = el => {
+    const a = (el.dataset.id && S.db.almacenes.find(x => x.id === el.dataset.id)) || { pais: S.user.oficina || 'PE', activo: true };
+    modal({ title: a.id ? `Editar ${a.nombre}` : 'Nuevo almacén', body: `<div class="stack"><label class="field"><span>Nombre <span class="req">*</span></span><input type="text" name="nombre" value="${E(a.nombre || '')}" placeholder="Ej.: Almacén Santiago"></label>
+      <label class="field">País<select name="pais">${options(Object.entries(PAIS), a.pais)}</select></label><label class="field">Ciudad<input type="text" name="ciudad" value="${E(a.ciudad || '')}"></label>
+      ${a.id ? `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="activo"${a.activo !== false ? ' checked' : ''}> Activo</label>` : ''}</div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => { const ac = r.querySelector('[name=activo]'); await Repo.guardarAlmacen({ id: a.id, nombre: val(r, 'nombre'), pais: val(r, 'pais'), ciudad: val(r, 'ciudad'), activo: ac ? ac.checked : true }, S.user.id); toast('Almacén guardado.'); refresh(); } }] });
+  };
+  /* ---------- Carga de stock por Excel (plantilla o el Excel actual) y exportación ---------- */
+  ACTIONS['stk-plantilla'] = () => {
+    Util.descargar(Excel.libro([
+      { nombre: 'Stock', fija: true, anchos: [22, 14, 50, 12, 12, 16, 12, 12, 36], filas: [['Código', 'Marca', 'Descripción', 'Disponible', 'Separado', 'Demo / Panel Tech', 'Préstamo', 'Malogrado', 'Notas']] },
+      { nombre: 'Instrucciones', anchos: [110], filas: [['Cómo cargar el stock de un almacén'],
+        ['1. Una fila por código. Disponible = unidades libres en el almacén; Separado = unidades apartadas para un cliente (se suman al físico); Demo / Panel Tech, Préstamo y Malogrado no están disponibles para vender.'],
+        ['2. Si el código no está en la lista de precios, se crea como producto de inventario con la marca de la fila (sin precio).'],
+        ['3. En la plataforma: Stock → "Cargar stock (Excel)", elige el almacén y revisa la vista previa. La carga fija el saldo de cada código del archivo con un movimiento por la diferencia; los códigos que no vienen no cambian.'],
+        ['4. También sirve el Excel de inventario actual (columnas STOCK, SEPARADO, ALMACÉN, PANEL TECH, DEMO, PRESTAMO, MALOGRADO, NOTAS).']] }]), `plantilla_stock_${hoy()}.xlsx`);
+  };
+  ACTIONS['stk-cargar'] = () => { const i = $('#stk-file'); if (i) i.click(); };
+  function revisarCargaStock(hojas, archivo) {
+    const db = S.db, u = S.user, interp = Rules.interpretarStock(db, hojas);
+    if (!interp.filas.length) return toast('El archivo no tiene filas de stock reconocibles. Usa la plantilla o un Excel con columnas Código y Stock/Almacén.');
+    const libres = (db.almacenes || []).filter(a => a.activo !== false && ((u.oficina || 'PE') === a.pais || !(db.movs || []).some(m => m.efectos.some(e => e.almacenId === a.id))));
+    const nuevos = interp.filas.filter(f => f.nuevo).length, conAviso = interp.filas.filter(f => f.avisos.length), sep = Util.sum(interp.filas, f => Util.sum(f.reservas, r => r.cantidad));
+    modal({ title: 'Cargar stock desde Excel', wide: true,
+      body: `<p style="margin-top:0"><strong>${E(archivo)}</strong> · ${interp.filas.length} códigos leídos en este navegador.</p>
+        <div class="form-grid"><label class="field">Almacén<select name="almacenId">${options(libres.map(a => [a.id, a.nombre + ' (' + PAIS[a.pais] + ')']), libres[0] && libres[0].id)}</select></label>
+          <label class="field">Fecha del inventario<input type="date" name="fecha" value="${interp.fecha || hoy()}" max="${hoy()}"></label></div>
+        <div class="btn-row" style="margin:10px 0"><span class="chip">${n0(Util.sum(interp.filas, f => f.libre + f.demo + f.prestamo + f.malogrado)) || 0} u. físicas</span><span class="chip">${sep} separadas</span><span class="chip info">${nuevos} productos de inventario nuevos (sin precio)</span>${conAviso.length ? `<span class="chip warn">${conAviso.length} filas con aviso</span>` : ''}${interp.errores.length ? `<span class="chip bad">${interp.errores.length} con error (no se cargan)</span>` : ''}</div>
+        ${interp.errores.length || conAviso.length ? `<div class="table-wrap" style="max-height:40vh"><table class="tbl"><thead><tr><th>Fila</th><th>Detalle</th></tr></thead><tbody>
+          ${interp.errores.map(e => `<tr><td class="small" style="color:var(--bad)">Error</td><td class="small">${E(e)}</td></tr>`).join('')}
+          ${conAviso.map(f => `<tr><td class="small nowrap">${E(f.hoja)} ${f.fila}</td><td class="small"><strong>${E(f.codigo)}</strong>: ${f.avisos.map(E).join(' ')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        <p class="small muted">La carga fija el saldo de cada código del archivo en ese almacén (la primera vez, como inventario inicial). Los códigos que no vienen en el archivo no cambian. Los separados reemplazan a los separados manuales anteriores.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('upload')} Cargar stock`, cls: 'primary', onClick: async r => {
+        const x = await Repo.cargarStock(val(r, 'almacenId'), hojas, u.id, { fecha: val(r, 'fecha'), archivo });
+        toast(`${x.inicial ? 'Inventario inicial cargado' : 'Stock actualizado'}: ${x.filas} códigos, ${x.movimientos} movimientos, ${x.productos} productos nuevos, ${x.reservas} separados.`, { ms: 8000 }); refresh();
+      } }] });
+  }
+  ACTIONS['stk-exportar'] = () => {
+    const db = S.db, rows = (() => { const F = S.stkF, f = Object.assign({}, F); Object.assign(F, { solo: 'con', q: '', marca: '', pais: '', almacen: '' }); const r = filasStock(); Object.assign(F, f); return r; })();
+    const alms = db.almacenes || [];
+    Util.descargar(Excel.libro([
+      { nombre: 'Stock', fija: true, anchos: [22, 14, 44, ...alms.map(() => 14), 12, 12, 12, 12, 12, 12, 14, 14], filas: [['Código', 'Marca', 'Descripción', ...alms.map(a => 'Disp. ' + a.nombre), 'Físico', 'Reservado', 'Disponible', 'No disponible', 'En tránsito', 'Pedido a fábrica', 'Costo u. USD', 'Valor USD'],
+        ...rows.map(r => [r.p.codigo, r.p.marca, r.p.descripcion || '', ...alms.map(a => (r.s.almacenes.find(x => x.almacen.id === a.id) || { disponible: 0 }).disponible), r.fisico, r.reservado, r.disponible, r.nodisp, r.transito, r.pedido, r.vu ? r.vu.v : '', r.valor || ''])] },
+      { nombre: 'Movimientos', fija: true, anchos: [10, 12, 26, 22, 22, 10, 40, 18, 22, 30], filas: [['ID', 'Fecha', 'Tipo', 'Código', 'Almacén', 'Cantidad', 'Efecto', 'Referencia', 'Usuario', 'Nota'],
+        ...(db.movs || []).map(m => [m.id, m.fecha, Config.TIPOS_MOV[m.tipo], m.codigo, nombreAlm(m.almacenId) + (m.destinoId ? ' → ' + nombreAlm(m.destinoId) : ''), m.cantidad, m.efectos.map(e => `${e.delta > 0 ? '+' : ''}${e.delta} ${e.estado} (${nombreAlm(e.almacenId)})`).join('; '), m.ref ? m.ref.tipo + ' ' + m.ref.valor : (m.oppId || ''), m.usuarioId === 'sistema' ? 'Carga inicial' : (usr(m.usuarioId) || {}).nombre || '', m.nota || ''])] },
+    ]), `stock_${hoy()}.xlsx`);
+    toast('Stock y movimientos exportados a Excel (incluye costos: información interna).');
+  };
+  /** Ficha de una venta ganada: lo reservado y lo pedido a fábrica */
+  function stockOppHTML(o) {
+    const rs = (S.db.reservas || []).filter(r => r.oppId === o.id && r.estado !== 'liberada'), ps = (S.db.pedidosFab || []).filter(p => p.oppId === o.id && p.estado !== 'cancelado');
+    if (!rs.length && !ps.length) return '';
+    const est = { activa: 'reservado', entregada: 'entregado' };
+    return `<p class="small" style="margin:10px 0 0"><strong>Stock:</strong> ${rs.map(r => `${r.cantidad} ${E(r.codigo)} ${est[r.estado]} (${E(nombreAlm(r.almacenId))})`).join(' · ')}${rs.length && ps.length ? ' · ' : ''}${ps.map(p => `${p.cantidad} ${E(p.codigo)} ${p.estado === 'recibido' ? 'pedido a fábrica, recibido' : `pedido a fábrica (llega ~${Util.fmtDate(p.fechaEsperada)})`}`).join(' · ')} · <a href="#/stock" data-action="stk-ir-reservas">Ver en Stock</a></p>`;
+  }
+  ACTIONS['stk-ir-reservas'] = (el, e) => { if (e) e.preventDefault(); S.stkF.tab = 'reservas'; go('stock'); };
 
   /* ---------- Arranque ---------- */
   let tResize = null;

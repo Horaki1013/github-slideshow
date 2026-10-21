@@ -201,6 +201,58 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
 - **Orden por defecto:** de la cotización más reciente a la más antigua (columna "Cotizada"). Se puede reordenar por cualquier columna, como antes.
 - **Desplegable por fila (▸):** etapa, facturación estimada y próximo contacto, sin abrir la ficha. Entre etapas abiertas el cambio se guarda directo (conserva el próximo contacto y la OC). Ganada, perdida o en pausa abren su formulario de cierre. Solo el vendedor dueño edita; gerencia ve los datos.
 
+## Stock: almacenes de Perú y Chile
+
+Menú **Stock** para todos los roles. **El stock nunca se edita directo: resulta siempre de los movimientos** (`db.movs`; cada uno guarda sus efectos por almacén y estado, y su usuario).
+
+**Datos:**
+- **Almacenes** (`db.almacenes`): nombre, país (Perú o Chile), ciudad y activo. Se crean desde Stock → "Almacén".
+- **Productos:** la Lista de precios más los **productos de inventario** (`db.productosInv`), que tienen marca y no tienen precio. El cruce entre stock y lista de precios usa el código normalizado, sin espacios, guiones ni puntos (`Rules.normCod`: "ADAM 4541-C" = "ADAM-4541-C").
+- **Estados del stock físico:** en almacén, demo / Panel Tech, préstamo y malogrado. Además: **reservado** (separados para un cliente y ventas ganadas), **disponible** (en almacén − reservado), **en tránsito** (transferencias) y **pedido a fábrica**.
+- **Movimientos:** inventario inicial, ingreso (importación o compra, con costo opcional), salida por venta, transferencia (origen → "en tránsito" → recepción en destino, también Chile ↔ Perú), ajuste por inventario (con motivo obligatorio), devolución y cambio de estado.
+  - Nunca deja stock negativo y no permite sacar lo reservado.
+  - Referencia opcional: OC, oportunidad, factura o guía.
+- **Mínimos** por producto y almacén, y **costos** por producto (`db.costos`).
+  - Sin costo cargado, el inventario se valoriza **a precio de lista**, rotulado así.
+
+**Relación con las ventas:**
+- **Al cotizar:** sobre cada código se ve el disponible en Perú y en Chile.
+  - Se sugiere el plazo: "Stock para Entrega Inmediata" si alcanza en Perú, "2 a 3 semanas" si alcanza sumando Chile. Si no hay stock, el vendedor elige como siempre (`Rules.plazoSugerido`).
+- **Al marcar Ganada:** se reserva lo disponible (Perú primero) y lo que falta queda como **pedido a fábrica**, con fecha esperada según el plazo de la cotización.
+- **Post-venta:**
+  - "Recibido y revisado" confirma el ingreso de lo pedido y lo reserva para la venta.
+  - "Entregado" genera la salida y cierra la reserva.
+  - Desmarcar cualquiera de los dos revierte el movimiento.
+- **Venta que se cae:** si una venta ganada pasa a otra etapa, sus reservas se liberan y sus pedidos se cancelan, con **aviso a logística** en la campana de gestión local y logística.
+
+**Carga desde Excel** (`Rules.interpretarStock`, vista previa con errores y avisos):
+- Reconoce las columnas por nombre: Código, Marca, Descripción, STOCK, SEPARADO, ALMACÉN o Disponible, PANEL TECH y DEMO, PRÉSTAMO, MALOGRADO y NOTAS.
+- **SEPARADO** puede estar dentro de ALMACÉN o sumarse aparte: se usa la suma que da el STOCK. Si ninguna cuadra, manda el detalle y la fila queda con aviso.
+- Una hoja con columna **CLIENTE** (y SERIE) son unidades separadas para ese cliente.
+- La primera carga de un almacén es su **inventario inicial**. Las siguientes fijan el saldo de los códigos del archivo con un ajuste por la diferencia; los códigos que no vienen no cambian.
+- Los códigos que no están en la lista de precios se crean como productos de inventario.
+- Hay **plantilla** para cargar almacenes nuevos (por ejemplo de Chile) y **exportación** del stock y de los movimientos a Excel.
+
+**Roles:**
+
+| Rol | Ve | Edita |
+|---|---|---|
+| Gestión / Administración local (rol nuevo) | Todo, con costos | Movimientos, almacenes, cargas, separados, mínimos y costos de **su oficina** |
+| Logística / Soporte (post-venta) | Stock, reservas y pedidos, con costos | Recepción y entrega (post-venta) y costos |
+| Finanzas | Todo, con costos y valor | Costos |
+| Gerencia / Jefatura | Todo, con costos | Mínimos y costos |
+| Vendedor | Disponible por almacén y país, y las reservas de sus ventas | Nada; sus reservas se generan al ganar |
+
+- Cada usuario tiene **oficina: Perú o Chile**. Un usuario de Chile solo mueve almacenes de Chile.
+- La primera carga de un almacén vacío la puede hacer cualquier gestión local; después, cada oficina mueve solo los suyos.
+- **Ningún vendedor ve costos.**
+
+**Altas del piloto sin tocar lo registrado.** El archivo privado puede traer `window.__PILOTO_ALTAS` (usuarios nuevos e inventario inicial). `Repo.migrar` los aplica una sola vez (`_migraciones`), sin cambiar la versión de los datos iniciales.
+
+**Solo Edge o Chrome en el piloto.** Si el navegador no puede usar la carpeta compartida (Firefox, Safari), el piloto no deja ingresar y explica cómo abrirlo en Edge o Chrome. Así nadie trabaja con datos separados del equipo. La demo pública funciona en cualquier navegador.
+
+**Pendiente (entrega A2):** indicadores (rotación, días de inventario, días hasta la venta por FIFO, antigüedad, stock sin movimiento, cobertura, quiebres, más vendidos y cotizados frente a vendidos, valor) y alertas (bajo el mínimo, ingreso atrasado, reserva sin stock, más de 180 días sin movimiento).
+
 ## Leads y origen de las oportunidades
 
 Un **lead** es una consulta que todavía no es oportunidad. Toda oportunidad nueva tiene un **origen**.
