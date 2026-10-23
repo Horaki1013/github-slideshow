@@ -1885,8 +1885,6 @@ const DemoData = (() => {
       u5: (f, n, rev) => `VC${yymmdd(f)}-${Util.pad(n, 5)}` + (rev ? `-R${rev}` : ''),
     };
     const contador = { u1: 410, u2: 150, u3: 980, u4: 1200, u5: 20 };
-    db.formatosNumero = { u1:'CM{aammdd}-{correlativo}', u2:'COT-{aaaa}-{correlativo}', u3:'LP-{correlativo}', u4:'DH{ddmmaa}-{correlativo}', u5:'VC{aammdd}-{correlativo}' };
-    db.contadores = contador;
 
     function makeQuote(opp, fecha, itemsUSD, o) {
       const tcq = o.moneda === 'PEN' ? (db.fx[fecha] || Config.TC_REFERENCIA) : null;
@@ -4250,7 +4248,6 @@ const Repo = (() => {
         o = { id: 'OP-' + (++db.seq.opp), clienteId, proyectoId, vendedorId: p.vendedorId, etapa: p.etapa || 'e1', fechaInicio: p.fechaEmision, fechaOC: p.fechaOC,
           fechaFacturaEst: Rules.fechaDeHorizonte(p.facturacion, hoy()), proxContacto: p.proxContacto, motivoPerdida: null, motivoOtro: '', fechaReactivacion: null, fechaCierre: null, postventa: null, origen: p.origen, pendiente: false };
         db.opps.push(o);
-        if (db.contadores) db.contadores[p.vendedorId] = (db.contadores[p.vendedorId] || 0) + 1; // solo para sugerir el siguiente número en la demo
         q.oppId = o.id;
         db.quotes.push(q);
         db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: p.fechaEmision, canal: 'Correo', nota: `Cotización enviada (N° ${q.numero}) — ${p.origen === 'plataforma' ? 'cotizada en la plataforma (PDF generado)' : p.origen === 'pdf' ? 'registrada desde el PDF' : 'registrada manualmente'}.`, proxContacto: o.proxContacto, usuarioId: 'sistema', auto: true });
@@ -4319,7 +4316,7 @@ const SelfTest = (() => {
     }],
     ['Número de cotización: INICIALES-AAMMDD-correlativo por vendedor, que reinicia cada año y continúa el formato anterior', () => {
       const db = miniDb(), v = { iniciales: 'NP' };
-      db.quotes = ['NP-2026-0003', 'NP-261020-0026-R1', 'NP-251230-0099', 'XX-261020-0500', 'N°M261006-26574'].map(numero => ({ numero }));
+      db.quotes = ['NP-2026-0003', 'NP-261020-0026-R1', 'NP-251230-0099', 'XX-261020-0500', 'N°M260101-12345'].map(numero => ({ numero }));
       return Rules.numeroAM(db, v, '2026-10-23') === 'NP-261023-0027' && Rules.numeroAM(db, v, '2027-01-04') === 'NP-270104-0001' && Rules.numeroAM({ quotes: [] }, v, '2026-02-05') === 'NP-260205-0001';
     }],
     ['Stock: sale de los movimientos; transferencia en tránsito; reservas restan del disponible; plazo sugerido', () => {
@@ -6255,12 +6252,8 @@ const UI = (() => {
       condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
   }
-  function numeroSugerido(u, fecha) {
-    if (S.db.numeracion) return Rules.numeroAM(S.db, u, fecha || hoy());
-    const f = hoy(), n = (S.db.contadores && S.db.contadores[u.id] || 0) + 1;
-    const yymmdd = f.slice(2, 4) + f.slice(5, 7) + f.slice(8, 10), ddmmyy = f.slice(8, 10) + f.slice(5, 7) + f.slice(2, 4);
-    return { u1: `CM${yymmdd}-${Util.pad(n, 4)}`, u2: `COT-${f.slice(0, 4)}-${Util.pad(n, 4)}`, u3: `LP-${n}`, u4: `DH${ddmmyy}-${n}`, u5: `VC${yymmdd}-${Util.pad(n, 5)}` }[u.id] || `COT-${n}`;
-  }
+  /** Número sugerido: INICIALES-AAMMDD-correlativo del vendedor (el mismo en la demo y en el piloto) */
+  const numeroSugerido = (u, fecha) => Rules.numeroAM(S.db, u, fecha || hoy());
   /** Simula lo que la IA extraería del PDF: datos ficticios coherentes con la cartera del vendedor */
   function simularExtraccion() {
     const db = S.db, u = S.user, d = draftVacio();

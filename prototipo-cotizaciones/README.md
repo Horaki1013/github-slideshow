@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 11/11 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 17/17 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -22,6 +22,7 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 | `jefatura` | `demo` | Jefatura | Ve todo, filtra por vendedor y reasigna |
 | `finanzas` | `demo` | Finanzas | Proyección y facturado (solo lectura); mantiene la lista de precios |
 | `admin` | `demo` | Administración | Mantiene la lista de precios |
+| `gestion` | `demo` | Gestión / Administración local | Stock del almacén de Perú (oficina PE) |
 
 | Rol | Pantallas | Puede editar |
 |---|---|---|
@@ -29,6 +30,7 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 | Gerencia / Jefatura | Dashboard, Oportunidades (todas), Ficha, Cuentas, Agenda de contactos, Lista de precios, Proyección, Facturado, Post-venta, Usuarios, Notificaciones | Todo: crear cuentas, asignar o reasignar cuentas y oportunidades entre Account Managers, editar contactos, mantener la lista de precios, marcar cualquier paso de post-venta, crear usuarios y restablecer contraseñas |
 | Finanzas | Proyección de facturación y cobranza, Facturado, Post-venta, Lista de precios, Agenda de contactos | La lista de precios y, en el piloto, los pasos "Facturado" y "Cobrado" |
 | Logística / Soporte (solo piloto) | Post-venta, Lista de precios (consulta), Agenda de contactos | En el piloto, los pasos físicos: pedido al proveedor, en tránsito, recibido y entregado |
+| Gestión / Administración local | Stock, Post-venta, Visor de cotizaciones, Lista de precios (consulta), Agenda de contactos | Movimientos, cargas, mínimos y costos del stock de su oficina (Perú o Chile) y todos los pasos de post-venta |
 | Administración del sistema | Usuarios, Lista de precios, Agenda de contactos | Usuarios (alta, rol, meta, activar o desactivar, contraseña temporal) y la lista de precios |
 
 En la interfaz, el rol "Vendedor" se muestra como **Account Manager**.
@@ -405,7 +407,7 @@ El descuento de una cotización puede ingresarse **en porcentaje o en monto**. E
 
 | Entidad | Campos |
 |---|---|
-| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura, finanzas, logistica o admin), `activo`. En el piloto, además: `usuario`, `salt`, `claveHash` (SHA-256 de sal + contraseña) y `debeCambiar` |
+| **Usuario** | `id`, `nombre`, `iniciales`, `correo`, `meta` (40,000 USD), `rol` (vendedor, jefatura, finanzas, logistica, gestion o admin), `oficina` (PE o CL), `activo`. En el piloto, además: `usuario`, `salt`, `claveHash` (SHA-256 de sal + contraseña) y `debeCambiar` |
 | **Cliente** | `id`, `razonSocial`, `ruc` (11 dígitos), `vendedorId`, `ciudad`, `tipo`, `fechaAlta`, `registradoPor`, `contactos[]` (id, nombre, cargo, correo, teléfono; todo opcional salvo el nombre). El **segmento** (T1, T2 o CO) y el **estado** (activo, no responde o sin contacto) se calculan (`Rules.segmento`, `Rules.cuentas`). `vendedorId` puede ser nulo (sin asignar) |
 | **Proyecto** | `id`, `nombre`, `usuarioFinal`, `tipo` (estatal, privado o directa). `PR-DIRECTA` = "Compra directa (sin proyecto)". Un proyecto puede tener oportunidades de varios integradores |
 | **Oportunidad** | `id`, `clienteId`, `proyectoId`, `vendedorId`, `etapa` (la probabilidad se deriva), `fechaInicio`, `fechaOC` (estimada, la define el vendedor), `proxContacto`, `motivoPerdida`, `motivoOtro`, `fechaReactivacion`, `fechaCierre`, `postventa`, `origen` (correo, pdf o manual), `pendiente` (leída del correo y aún sin completar) |
