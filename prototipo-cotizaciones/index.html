@@ -385,7 +385,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 /* Formulario de cotización: grilla de 12 columnas y subgrupos */
 .linkish{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-weight:600;cursor:pointer;text-align:left}
 .linkish:hover{text-decoration:underline}
-.step .s-doc{margin-top:6px;padding:2px 6px;min-height:24px;font-size:11.5px}
+.s-doc{margin-top:6px;padding:2px 6px;min-height:24px;font-size:11.5px}
+.pv-celda .s-doc{display:flex;margin-top:4px}
 .dir-emp{padding:14px 16px}
 .dir-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
 .dir-head h2{margin:0;font-size:15px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -2770,14 +2771,14 @@ const Rules = (() => {
     if (['pedido', 'transito', 'recibido', 'entregado'].includes(paso)) return user.rol === 'logistica';
     return false;
   }
-  /** Número por Account Manager: INICIALES-AÑO-0001, correlativo propio que reinicia cada año (se calcula desde las cotizaciones registradas) */
+  /** Número por Account Manager: INICIALES-AAMMDD-0001 (fecha de emisión y correlativo propio que reinicia cada año), p. ej. NP-261023-0027 */
   function numeroAM(db, vendedor, fecha) {
     if (!vendedor) return null;
-    const anio = String(fecha || Util.today()).slice(0, 4), ini = String(vendedor.iniciales || '').toUpperCase();
-    const re = new RegExp('^' + ini.replace(/[^A-Z0-9]/g, '') + '-' + anio + '-(\\d{4,})');
+    const f = String(fecha || Util.today()), anio = f.slice(0, 4), ini = String(vendedor.iniciales || '').toUpperCase();
+    const re = new RegExp('^' + ini.replace(/[^A-Z0-9]/g, '') + '-(\\d{4}|\\d{6})-(\\d{4,})');   // también cuenta el formato anterior INICIALES-AAAA-0001
     let max = 0;
-    db.quotes.forEach(q => { const m = re.exec(String(q.numero || '').toUpperCase()); if (m) max = Math.max(max, +m[1]); });
-    return `${ini}-${anio}-${Util.pad(max + 1, 4)}`;
+    db.quotes.forEach(q => { const m = re.exec(String(q.numero || '').toUpperCase()); if (m && (m[1].length === 4 ? m[1] : '20' + m[1].slice(0, 2)) === anio) max = Math.max(max, +m[2]); });
+    return `${ini}-${f.slice(2, 4)}${f.slice(5, 7)}${f.slice(8, 10)}-${Util.pad(max + 1, 4)}`;
   }
   /* ---------- Carga de clientes y asignación de cuentas por Excel (plantilla de la plataforma) ---------- */
   const COLS_CLIENTES = [['ruc', /^(ruc|id fiscal|identificador)/i], ['razonSocial', /raz[oó]n social|^(cliente|empresa)$/i], ['vendedor', /vendedor|account manager|iniciales|asignad/i],
@@ -3359,7 +3360,7 @@ const Repo = (() => {
     db.quotes.filter(q => re.test(q.numero || '')).sort((a, b) => (a.fechaEmision + a.numero).localeCompare(b.fechaEmision + b.numero)).forEach(q => {
       const m = re.exec(q.numero), base = `TV-${m[1]}-${m[2]}`.toUpperCase(), o = db.opps.find(x => x.id === q.oppId), v = o && usuarioDe(o.vendedorId);
       if (!v) return;
-      if (!mapa[base]) mapa[base] = Rules.numeroAM(db, v, `${m[1]}-01-01`);
+      if (!mapa[base]) mapa[base] = Rules.numeroAM(db, v, q.fechaEmision || `${m[1]}-01-01`);
       const ant = q.numero, nuevo = mapa[base] + m[3];
       q.numero = nuevo; q.numeroAnterior = ant; cambios++;
       db.followups.filter(f => f.oppId === q.oppId && f.nota && f.nota.includes(ant)).forEach(f => { f.nota = f.nota.split(ant).join(nuevo); });
@@ -3624,6 +3625,10 @@ const Repo = (() => {
       if (!Rules.puede(u, 'documentos_opp', o)) fail('No puedes subir documentos a esta oportunidad.');
       if (!archivo || !archivo.blob) fail('Elige un archivo.');
       if (archivo.blob.size > Config.DOC_MAX_MB * 1024 * 1024) fail(`El archivo pesa más de ${Config.DOC_MAX_MB} MB.`);
+      // El mismo archivo (mismo contenido) no se guarda dos veces en la misma venta: ahorra espacio en la carpeta compartida
+      const huella = typeof crypto !== 'undefined' && crypto.subtle ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await archivo.blob.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('') : null;
+      const igual = huella && (db.documentos || []).find(d => d.oppId === oppId && d.huella === huella);
+      if (igual) fail(`Ese archivo ya está anexado a esta venta como "${igual.nombre}".`);
       const cat = Config.DOCUMENTOS.find(x => x.id === (meta && meta.categoria)) || Config.DOCUMENTOS[Config.DOCUMENTOS.length - 1];
       const id = 'D-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const nombre = String(archivo.nombre || 'documento').replace(/[\\/:*?"<>|]+/g, '-').slice(-120), archivoNombre = `${id}__${nombre}`;
@@ -3631,7 +3636,7 @@ const Repo = (() => {
       if (estado.compartida) { await AlmacenCompartido.guardarDoc(oppId, archivoNombre, archivo.blob); ubicacion = 'carpeta'; }
       else if (modo === 'piloto') { await Almacen.escribir('doc:' + id, archivo.blob); ubicacion = 'navegador'; }
       else { docsMemoria.set(id, archivo.blob); ubicacion = 'memoria'; }
-      const doc = { id, oppId, nombre, tipo: archivo.blob.type || '', tamano: archivo.blob.size, categoria: cat.id, paso: cat.paso, nota: String(meta && meta.nota || '').trim(), fecha: hoy(), en: new Date().toISOString(), usuarioId, ubicacion, archivo: archivoNombre };
+      const doc = { id, oppId, nombre, tipo: archivo.blob.type || '', tamano: archivo.blob.size, huella, categoria: cat.id, paso: cat.paso, nota: String(meta && meta.nota || '').trim(), fecha: hoy(), en: new Date().toISOString(), usuarioId, ubicacion, archivo: archivoNombre };
       db.documentos = (db.documentos || []).concat([doc]);
       log(o, `Documento subido: ${nombre} (${cat.nombre}).`, usuarioId);
       touch();
@@ -4311,6 +4316,11 @@ const SelfTest = (() => {
         cb.length === 2 && Rules.horizonte(cb[0].fecha, hoy) === 'mes' && cb[0].monto === 5900 && Rules.horizonte(cb[1].fecha, hoy) === 'd60' &&
         Rules.horizonte('2026-10-31', hoy) === 'mes' && Rules.horizonte('2026-11-05', hoy) === 'd30' && Rules.horizonte('2027-02-01', hoy) === 'd120' &&
         Math.abs(pf.tot.total.d60 - 15000) < 0.01 && Math.abs(pc.tot.total.d90 - 8850) < 0.01 && Math.abs(pc.tot.total.mes - 4425) < 0.01;
+    }],
+    ['Número de cotización: INICIALES-AAMMDD-correlativo por vendedor, que reinicia cada año y continúa el formato anterior', () => {
+      const db = miniDb(), v = { iniciales: 'NP' };
+      db.quotes = ['NP-2026-0003', 'NP-261020-0026-R1', 'NP-251230-0099', 'XX-261020-0500', 'N°M261006-26574'].map(numero => ({ numero }));
+      return Rules.numeroAM(db, v, '2026-10-23') === 'NP-261023-0027' && Rules.numeroAM(db, v, '2027-01-04') === 'NP-270104-0001' && Rules.numeroAM({ quotes: [] }, v, '2026-02-05') === 'NP-260205-0001';
     }],
     ['Stock: sale de los movimientos; transferencia en tránsito; reservas restan del disponible; plazo sugerido', () => {
       const db = miniDb(), m = (tipo, efectos) => db.movs.push({ tipo, k: 'X1', efectos });
@@ -6070,8 +6080,8 @@ const UI = (() => {
   const docsDe = oppId => (S.db.documentos || []).filter(d => d.oppId === oppId).sort((a, b) => String(b.en).localeCompare(String(a.en)));
   const tamTxt = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   const catNombre = id => (Config.DOCUMENTOS.find(c => c.id === id) || { nombre: 'Otro' }).nombre;
-  function docsListaHTML(o) {
-    const ds = docsDe(o.id);
+  function docsListaHTML(o, paso) {
+    const ds = docsDe(o.id).filter(d => !paso || d.paso === paso);
     if (!ds.length) return '<p class="small muted" style="margin:0">Aún no hay documentos.</p>';
     return `<div class="table-wrap"><table class="tbl docs-tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>Subido</th><th class="r">Tamaño</th><th></th></tr></thead><tbody>
       ${ds.map(d => { const up = usr(d.usuarioId), borra = d.usuarioId === S.user.id || ['jefatura', 'admin'].includes(S.user.rol);
@@ -6092,10 +6102,10 @@ const UI = (() => {
     try { Util.descargar(await Repo.leerDocumento(d.id), d.nombre); } catch (e) { toast(e.message); }
   };
   ACTIONS['doc-borrar'] = el => borrarDocumento(el, null);
-  function borrarDocumento(el, volver) {
+  function borrarDocumento(el, volver, paso) {
     const d = (S.db.documentos || []).find(x => x.id === el.dataset.doc); if (!d) return;
     modal({ title: 'Eliminar documento', body: `<p style="margin-top:0">¿Eliminar <strong>${E(d.nombre)}</strong>? El archivo se borra para todo el equipo.</p>`,
-      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarDocumento(d.id, S.user.id); toast('Documento eliminado.'); refresh(); if (volver) setTimeout(() => abrirDocumentos(volver), 50); } }] });
+      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarDocumento(d.id, S.user.id); toast('Documento eliminado.'); refresh(); if (volver) setTimeout(() => abrirDocumentos(volver, paso), 50); } }] });
   }
   /** Subir uno o varios archivos; el tipo sugiere el paso de post-venta que respalda */
   function abrirSubirDocumento(oppId, paso, volver) {
@@ -6109,20 +6119,27 @@ const UI = (() => {
         const files = [...(root.querySelector('[name=archivos]').files || [])], cat = val(root, 'categoria');
         if (!files.length) { const e = new Error('Elige al menos un archivo.'); e.campos = { archivos: 'Obligatorio' }; throw e; }
         if (!cat) { const e = new Error('Elige el tipo de documento.'); e.campos = { categoria: 'Obligatorio' }; throw e; }
-        for (const f of files) await Repo.subirDocumento(oppId, { nombre: f.name, blob: f }, { categoria: cat, nota: val(root, 'nota') }, S.user.id);
-        toast(files.length === 1 ? 'Documento subido.' : `${files.length} documentos subidos.`); refresh();
-        if (volver) setTimeout(() => abrirDocumentos(volver), 50);
+        let ok = 0; const omitidos = [];
+        for (const f of files) { try { await Repo.subirDocumento(oppId, { nombre: f.name, blob: f }, { categoria: cat, nota: val(root, 'nota') }, S.user.id); ok++; } catch (e) { if (files.length === 1) throw e; omitidos.push(`${f.name}: ${e.message}`); } }
+        toast((ok === 1 ? 'Documento subido.' : `${ok} documentos subidos.`) + (omitidos.length ? ` Omitidos: ${omitidos.join(' · ')}` : ''), { ms: omitidos.length ? 9000 : 5000 }); refresh();
+        if (volver) setTimeout(() => abrirDocumentos(volver, paso), 50);
       } }] });
   }
-  /** Lista de documentos en un modal (desde Post-venta, para las áreas que no abren la ficha) */
-  function abrirDocumentos(oppId) {
-    const o = oppById(oppId), sube = Rules.puede(S.user, 'documentos_opp', o);
-    modal({ title: 'Documentos', wide: true, body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · N° ${E((Rules.vigente(S.db, o) || {}).numero || o.id)} · ${E(usr(o.vendedorId).nombre)}</p>${docsListaHTML(o)}`,
+  /** Lista de documentos en un modal (desde Post-venta, para las áreas que no abren la ficha); con paso, solo los de ese paso (p. ej. facturas) */
+  function abrirDocumentos(oppId, paso) {
+    const o = oppById(oppId), sube = Rules.puede(S.user, 'documentos_opp', o), p = paso && Config.POSTVENTA.find(x => x.id === paso);
+    modal({ title: p ? `Documentos · ${p.nombre}` : 'Documentos', wide: true, body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · N° ${E((Rules.vigente(S.db, o) || {}).numero || o.id)} · ${E(usr(o.vendedorId).nombre)}</p>${docsListaHTML(o, paso)}`,
       onOpen: back => back.addEventListener('click', ev => { const b = ev.target.closest('[data-action^="doc-"]'); if (!b) return; ev.preventDefault(); ev.stopPropagation();
-        if (b.dataset.action === 'doc-bajar') ACTIONS['doc-bajar'](b); else if (b.dataset.action === 'doc-borrar') { closeModal(); borrarDocumento(b, oppId); } }),
-      actions: [{ label: 'Cerrar' }].concat(sube ? [{ label: `${I('upload')} Subir documento`, cls: 'primary', onClick: () => { setTimeout(() => abrirSubirDocumento(oppId, null, oppId), 30); } }] : []) });
+        if (b.dataset.action === 'doc-bajar') ACTIONS['doc-bajar'](b); else if (b.dataset.action === 'doc-borrar') { closeModal(); borrarDocumento(b, oppId, paso); } }),
+      actions: [{ label: 'Cerrar' }].concat(sube ? [{ label: `${I('upload')} ${p ? 'Agregar' : 'Subir documento'}`, cls: 'primary', onClick: () => { setTimeout(() => abrirSubirDocumento(oppId, paso || null, oppId), 30); } }] : []) });
   }
   ACTIONS['doc-subir'] = el => abrirSubirDocumento(el.dataset.id, el.dataset.paso || null);
+  /** 📎 de un paso de post-venta (ficha y tabla de Post-venta): sin archivos abre la subida; con archivos, la lista del paso para descargar o agregar */
+  function docPasoBtn(o, paso) {
+    const n = docsDe(o.id).filter(d => d.paso === paso).length, sube = Rules.puede(S.user, 'documentos_opp', o);
+    return n || sube ? `<button class="btn sm ghost s-doc" data-action="doc-paso" data-id="${o.id}" data-paso="${paso}" title="${n ? 'Ver, descargar o agregar' : 'Adjuntar documento de este paso'}">📎 ${n ? n + ' doc.' : 'Adjuntar'}</button>` : '';
+  }
+  ACTIONS['doc-paso'] = el => { const { id, paso } = el.dataset; if (docsDe(id).some(d => d.paso === paso)) abrirDocumentos(id, paso); else abrirSubirDocumento(id, paso); };
   ACTIONS['doc-ver'] = el => abrirDocumentos(el.dataset.id);
   function postventaHTML(o) {
     const pv = o.postventa || {};
@@ -6135,7 +6152,7 @@ const UI = (() => {
         <div class="s-n">${pv[s.id] ? '✓' : i + 1}</div><div class="s-t">${E(s.nombre)}</div>
         ${puedeP(s.id) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${s.id}" value="${pv[s.id] || ''}" max="${hoy()}" aria-label="${E(s.nombre)}">` : `<div class="small">${Util.fmtDate(pv[s.id])}</div>`}
         ${s.id === 'facturado' && pv.facturaMonto ? `<div class="small muted" style="margin-top:4px">${money(pv.facturaMonto)}</div>` : ''}
-        ${(() => { const n = docsDe(o.id).filter(d => d.paso === s.id).length, sube = Rules.puede(S.user, 'documentos_opp', o); return n || sube ? `<button class="btn sm ghost s-doc" data-action="${sube ? 'doc-subir' : 'doc-ver'}" data-id="${o.id}" data-paso="${s.id}" title="${sube ? 'Adjuntar documento de este paso' : 'Ver documentos'}">📎 ${n ? n + ' doc.' : 'Adjuntar'}</button>` : ''; })()}
+        ${docPasoBtn(o, s.id)}
         ${s.id === 'cobrado' && !pv.cobrado ? `<div class="small muted" style="margin-top:4px">Estimado: ${cobro.filter(c => !c.cobrado).map(c => Util.fmtDate(c.fecha)).join(' y ') || '—'}</div>` : ''}
       </div>`).join('')}</div>
       <p class="small muted" style="margin-bottom:0">Condición de pago: ${E(Rules.condicion(q.condicionPago).nombre)} → ${E(Rules.condicion(q.condicionPago).regla)}.</p>${stockOppHTML(o)}</section>`;
@@ -6238,8 +6255,8 @@ const UI = (() => {
       condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
   }
-  function numeroSugerido(u) {
-    if (S.db.numeracion) return Rules.numeroAM(S.db, u, hoy());
+  function numeroSugerido(u, fecha) {
+    if (S.db.numeracion) return Rules.numeroAM(S.db, u, fecha || hoy());
     const f = hoy(), n = (S.db.contadores && S.db.contadores[u.id] || 0) + 1;
     const yymmdd = f.slice(2, 4) + f.slice(5, 7) + f.slice(8, 10), ddmmyy = f.slice(8, 10) + f.slice(5, 7) + f.slice(2, 4);
     return { u1: `CM${yymmdd}-${Util.pad(n, 4)}`, u2: `COT-${f.slice(0, 4)}-${Util.pad(n, 4)}`, u3: `LP-${n}`, u4: `DH${ddmmyy}-${n}`, u5: `VC${yymmdd}-${Util.pad(n, 5)}` }[u.id] || `COT-${n}`;
@@ -6318,7 +6335,7 @@ const UI = (() => {
     else if (!cands.some(o => o.id === d.oppDestinoId)) d.oppDestinoId = cands[0].id;
     if (d.numAuto) { // numeración automática de la plataforma: correlativo nuevo o sufijo de revisión
       const o = d.modo !== 'nueva' && d.oppDestinoId ? oppById(d.oppDestinoId) : null;
-      if (!o) d.numero = numeroSugerido(S.user);
+      if (!o) d.numero = numeroSugerido(S.user, d.fechaEmision);
       else {
         const base = Rules.vigente(S.db, o).numero.replace(/(\s*Rev\.\s*\d+|-rev\d+|-R\d+|-ALT)$/i, '');
         d.numero = d.modo === 'revision' ? `${base}-${Rules.siguienteRevision(S.db, o)}` : `${base}-ALT`;
@@ -6585,6 +6602,7 @@ const UI = (() => {
       d.items.forEach(it => { if (!(+it.listaUSD > 0)) return; const lo = old === 'PEN' ? Util.round2(it.listaUSD * tcOld) : +it.listaUSD; if (Math.abs((+it.valorUnit || 0) - lo) < 0.01) it.valorUnit = value === 'PEN' ? Util.round2(it.listaUSD * tcNew) : +it.listaUSD; });
     }
     if (path === 'fechaEmision' || path === 'moneda') d.tc = tcDelDia(d.fechaEmision);
+    if (path === 'fechaEmision' && d.numAuto && d.modo === 'nueva') { d.numero = numeroSugerido(S.user, value); const n = document.querySelector('[data-nq="numero"]'); if (n) n.value = d.numero; }   // el número lleva la fecha de emisión
   }
   document.addEventListener('input', e => {
     const el = e.target;
@@ -7540,7 +7558,7 @@ const UI = (() => {
     rows.sort((a, b) => (Rules.fechaOCRef(b) || '') < (Rules.fechaOCRef(a) || '') ? -1 : 1);
     const total = rows.length; rows = rows.slice(0, 150);
     const porArea = db.config && db.config.postventaPorArea;
-    view().innerHTML = `<div class="page-head"><div><h1>Post-venta</h1><p class="muted">${porArea ? 'Administración y finanzas marcan todos los pasos; logística, pedido, tránsito, recepción y entrega. Los documentos (📎) quedan para descargarlos cuando se necesiten.' : 'Avance de las oportunidades ganadas.'}</p></div></div>
+    view().innerHTML = `<div class="page-head"><div><h1>Post-venta</h1><p class="muted">${porArea ? 'Administración y finanzas marcan todos los pasos; logística, pedido, tránsito, recepción y entrega. En Facturado se anexan las facturas (📎); todos los documentos quedan para descargarlos cuando se necesiten.' : 'Avance de las oportunidades ganadas.'}</p></div></div>
       <div class="card" style="padding:12px"><div class="filters" style="margin:0">
         <label class="field" style="flex:2 1 260px">Buscar<input type="text" data-input="pvf" name="q" value="${E(F.q || '')}" placeholder="Cliente, RUC o N° de cotización"></label>
         <label class="field">Mostrar<select data-change="pvf" name="estado">${options([['pendientes', 'Pendientes de cobro'], ['logistica', 'Pendientes de entrega'], ['facturar', 'Entregadas sin facturar'], ['todas', 'Todas las ganadas']], F.estado)}</select></label>
@@ -7550,7 +7568,7 @@ const UI = (() => {
         ${rows.map(o => { const pv = o.postventa || {}, q = Rules.vigente(db, o); return `<tr><td><div class="cell-main">${Rules.puede(u, 'ver_opp', o) ? `<a href="#/op/${o.id}" style="color:inherit">${E(cli(o.clienteId).razonSocial)}</a>` : E(cli(o.clienteId).razonSocial)}</div><div class="cell-sub">${E(q ? q.numero : '')}</div></td>
           <td>${vendTag(usr(o.vendedorId))}</td><td class="r num">${Util.money0(Rules.montoUSD(db, o))}</td>
           <td><button class="btn sm" data-action="doc-ver" data-id="${o.id}" title="Ver, descargar y subir documentos">📎 ${(db.documentos || []).filter(d => d.oppId === o.id).length}</button></td>
-          ${Config.POSTVENTA.map(p => `<td>${Rules.puedePaso(u, p.id, o, db) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${p.id}" value="${pv[p.id] || ''}" max="${hoy()}" aria-label="${E(p.nombre)}" style="min-width:130px">` : (pv[p.id] ? `<span class="chip ok">${Util.fmtDate(pv[p.id])}</span>` : '<span class="muted">—</span>')}</td>`).join('')}</tr>`; }).join('') || '<tr><td colspan="10" class="center muted" style="padding:20px">Nada pendiente.</td></tr>'}
+          ${Config.POSTVENTA.map(p => `<td class="pv-celda">${Rules.puedePaso(u, p.id, o, db) ? `<input type="date" data-change="pv" data-id="${o.id}" data-paso="${p.id}" value="${pv[p.id] || ''}" max="${hoy()}" aria-label="${E(p.nombre)}" style="min-width:130px">` : (pv[p.id] ? `<span class="chip ok">${Util.fmtDate(pv[p.id])}</span>` : '<span class="muted">—</span>')}${p.id === 'facturado' ? docPasoBtn(o, 'facturado') : ''}</td>`).join('')}</tr>`; }).join('') || '<tr><td colspan="10" class="center muted" style="padding:20px">Nada pendiente.</td></tr>'}
       </tbody></table></div>`;
   };
   filtro('pvf', () => S.pvF);

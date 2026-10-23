@@ -44,7 +44,7 @@ El mismo `index.html` funciona en dos modos:
 | Data | Ficticia, generada al cargar | Inicial migrada de los FUP reales, inyectada en el HTML como `window.__PILOTO_SEED` |
 | Persistencia | Ninguna (memoria) | **Carpeta compartida de red** (recurso compartido de Windows), común para todo el equipo. Sin carpeta, IndexedDB del navegador (`techvalue-piloto`). La sesión dura mientras la pestaña esté abierta |
 | Login | Usuarios de demo con clave `demo` | Usuario y contraseña propios; la primera vez obliga a cambiar la contraseña temporal |
-| Numeración de cotizaciones | Texto libre | Por Account Manager: `INICIALES-AAAA-0001` (p. ej. `NP-2026-0001`), reinicia cada año (`Rules.numeroAM`). Las `TV-AAAA-0001` anteriores se renumeran una vez al abrir la versión nueva (`Repo.migrar`) |
+| Numeración de cotizaciones | Texto libre | Por Account Manager: `INICIALES-AAMMDD-0001`, con la fecha de emisión (p. ej. `NP-261023-0027`). El correlativo es propio del AM, reinicia cada año y continúa los números del formato anterior `INICIALES-AAAA-0001`, que se conservan (`Rules.numeroAM`). Si cambia la fecha de emisión, el número sugerido se actualiza. Las `TV-AAAA-0001` antiguas se renumeran una vez (`Repo.migrar`) |
 | Datos de la empresa en el PDF | Ficticios, sin logo | Los reales y el logo (vienen en la data inicial y en `window.__PILOTO_EXTRA`, no en el código) |
 | Marca en el ingreso y la barra superior | "tv" | El logo de la empresa (mismo `window.__PILOTO_EXTRA.empresa.logo`) |
 | Post-venta | La marca el vendedor dueño o jefatura | Por área: el vendedor registra la OC; logística, pedido → entregado; finanzas, facturado y cobrado; gerencia y jefatura, todo |
@@ -189,6 +189,8 @@ Cada franja muestra cantidad, monto y ponderado. Las pausas quedan fuera del fú
 - **Documentos** (`Repo.subirDocumento`, `leerDocumento`, `eliminarDocumento`):
   - Cada oportunidad guarda archivos: OC, propuesta, pedido a fábrica, documentos de importación, recepción, guía o acta de entrega, factura, comprobante de pago u otros, de hasta 20 MB.
   - **Dónde se suben:** en la ficha ("Documentos" y 📎 en cada paso, con el tipo ya elegido) o desde Post-venta (columna 📎) para las áreas que no abren la ficha.
+  - **Facturas en la columna Facturado:** en la tabla de Post-venta, debajo de la fecha de facturación, el 📎 anexa la factura (tipo "Factura" ya elegido). Si ya hay facturas, abre la lista de ese paso para descargarlas o agregar otra. Es el mismo botón que el paso Facturado de la ficha (`docPasoBtn`).
+  - **Sin duplicados:** cada archivo guarda su huella (SHA-256). Si se sube el mismo archivo otra vez a la misma venta, no se guarda de nuevo, para no ocupar espacio en la carpeta compartida.
   - **Quién:** los suben y descargan el AM de la oportunidad, gerencia, administración, finanzas y logística. Los borran quien los subió, gerencia o administración.
 - **El archivo se guarda aparte de los datos:**
   - con carpeta compartida, en `documentos/<oportunidad>/`;
