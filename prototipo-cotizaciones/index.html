@@ -140,12 +140,21 @@ body.logged-out main#view{max-width:none;padding:0}
 /* Formularios */
 label.field{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--text-2);min-width:0}
 label.field .req{color:var(--bad)}
-input[type=text],input[type=number],input[type=date],input[type=password],input[type=email],input[type=tel],input[type=url],select,textarea{width:100%;border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;background:#fff;min-height:38px;font-weight:400;color:var(--text)}
+input:is([type=text],[type=number],[type=date],[type=month],[type=time],[type=password],[type=email],[type=tel],[type=url],[type=search]),select,textarea{width:100%;border:1px solid var(--border-2);border-radius:8px;padding:8px 10px;background:#fff;min-height:38px;font-weight:400;color:var(--text);line-height:1.3}
+input:is([type=text],[type=number],[type=date],[type=month],[type=time],[type=password],[type=email],[type=tel],[type=url],[type=search]),select:not([multiple]){height:38px;padding-top:0;padding-bottom:0}
 textarea{min-height:64px;resize:vertical}
 input.invalid,select.invalid,textarea.invalid{border-color:var(--bad);background:#fff8f7}
 .field-hint{font-weight:400;color:var(--muted);font-size:11px}
 .field-err{font-weight:600;color:var(--bad);font-size:11px}
 .form-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+/* Campos en grilla: el título, el campo y la ayuda de cada fila quedan alineados aunque alguno ocupe dos líneas (UI.alinearCampo arma las 3 partes) */
+:is(.form-grid,.fg,.grid,.filters) > label.field:has(> .f-ctl){display:grid;grid-row:span 3;grid-template-rows:subgrid;row-gap:4px;align-content:start}
+:is(.form-grid,.fg,.grid,.filters):has(> label.field > .f-ctl) > :not(label.field){grid-row:span 2;align-self:end}
+:is(.form-grid,.fg,.grid,.filters):has(> label.field > .f-ctl) > :is(.fg-sub,h2,h3,p){grid-row:span 1;align-self:auto}
+label.field > .f-lab{align-self:end}
+label.field > .f-ctl{display:flex;flex-direction:column;gap:4px;min-width:0}
+label.field > .f-pie{display:flex;flex-direction:column;gap:2px}
+label.field > .f-pie:empty{display:none}
 .radio-chips{display:flex;flex-wrap:wrap;gap:6px}
 .radio-chips label{cursor:pointer}
 .radio-chips input{position:absolute;opacity:0;pointer-events:none}
@@ -4798,6 +4807,21 @@ const UI = (() => {
     return back;
   }
   function closeModal() { $('#modal-root').innerHTML = ''; }
+  /** Separa cada campo en título, control y ayuda para que las grillas los alineen por fila (ver .f-lab/.f-ctl/.f-pie en el CSS) */
+  const ES_CONTROL = 'input:not([type=hidden]),select,textarea,div,button,table,.radio-chips', ES_AYUDA = '.field-hint,.field-err,small,.small,.muted';
+  function alinearCampo(l) {
+    if (l.dataset.al) return;
+    l.dataset.al = '1';
+    const ns = [...l.childNodes], i = ns.findIndex(n => n.nodeType === 1 && n.matches(ES_CONTROL));
+    if (i < 0) return;
+    let j = ns.findIndex((n, k) => k > i && n.nodeType === 1 && n.matches(ES_AYUDA));
+    if (j < 0) j = ns.length;
+    const parte = (tag, cls, xs) => { const e = document.createElement(tag); e.className = cls; xs.forEach(n => e.appendChild(n)); return e; };
+    const lab = ns.slice(0, i); while (lab.length && lab[0].nodeType === 3 && !lab[0].textContent.trim()) lab.shift();
+    l.replaceChildren(parte('span', 'f-lab', lab), parte('div', 'f-ctl', ns.slice(i, j)), parte('div', 'f-pie', ns.slice(j).filter(n => n.nodeType === 1 || n.textContent.trim())));
+  }
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType !== 1) return; if (n.matches('label.field')) alinearCampo(n); n.querySelectorAll('label.field').forEach(alinearCampo); })))
+    .observe(document.body, { childList: true, subtree: true });
   function clearErrors(root) { $$('.invalid', root).forEach(x => x.classList.remove('invalid')); $$('.field-err', root).forEach(x => x.remove()); const b = root.querySelector('.form-error'); if (b) b.remove(); }
   function showFormError(root, err) {
     clearErrors(root);
@@ -4806,7 +4830,7 @@ const UI = (() => {
       const inp = root.querySelector(`[name="${k}"]`);
       if (!inp) return;
       inp.classList.add('invalid');
-      const host = inp.closest('label.field') || inp.parentElement;
+      const lab = inp.closest('label.field'), host = (lab && lab.querySelector(':scope > .f-pie')) || lab || inp.parentElement;
       host.insertAdjacentHTML('beforeend', `<span class="field-err">${E(campos[k])}</span>`);
     });
     const box = document.createElement('div');
