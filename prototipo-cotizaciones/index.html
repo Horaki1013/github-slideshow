@@ -390,6 +390,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .hoja .h-notas{color:#444;margin-top:6px}
 .hoja .h-cond td{padding:3px 6px;vertical-align:top}
 .hoja .h-cond td.k{font-weight:700;width:24%}
+.pie-prev{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.pie-prev img{max-width:100%;max-height:120px;width:auto;height:auto}
+.hoja .h-marcas{margin-top:16px;text-align:center}
+.hoja .h-marcas img{display:inline-block;max-width:100%;max-height:25mm;width:auto;height:auto}
 .hoja .h-foot{margin-top:18px;border-top:2px solid var(--brand);padding-top:6px;color:#555;font-size:9.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 /* Formulario de cotización: grilla de 12 columnas y subgrupos */
 .linkish{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-weight:600;cursor:pointer;text-align:left}
@@ -600,6 +604,7 @@ const Config = {
     { id:'otro',       nombre:'Otro',                                        paso:null },
   ],
   DOC_MAX_MB: 20,
+  PIE_MAX_MB: 3,   // imagen del pie de página de las cotizaciones (marcas)
   POSTVENTA: [
     { id:'oc',        nombre:'OC recibida' },
     { id:'pedido',    nombre:'Pedido a fábrica' },
@@ -3604,6 +3609,17 @@ const Repo = (() => {
       touch();
       return cambios;
     },
+    /** PUT /empresa/pie-marcas — imagen del pie de página de las cotizaciones (logos de las marcas); '' la quita */
+    async guardarPieMarcas(imagen, usuarioId) {
+      exigir(usuarioId, 'editar_empresa', 'Solo gerencia, jefatura, finanzas o administración pueden cambiar el pie de página.');
+      const src = String(imagen || '');
+      if (src && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(src)) fail('Usa una imagen PNG, JPG, WebP o SVG.');
+      if (src.length > Config.PIE_MAX_MB * 1048576 * 4 / 3) fail(`La imagen pesa más de ${Config.PIE_MAX_MB} MB.`);
+      db.pieMarcas = { imagen: src, fecha: hoy(), usuarioId };
+      db.empresaLog = [{ fecha: hoy(), en: new Date().toISOString(), usuarioId, campos: ['pieMarcas'] }].concat(db.empresaLog || []).slice(0, 50);
+      touch();
+      return db.pieMarcas;
+    },
     /** PATCH /cotizaciones/:id/cliente — corrige los datos del cliente y del contacto que salen en el PDF de una cotización ya registrada */
     async actualizarDatosCotizacion(quoteId, datos, usuarioId) {
       const q = db.quotes.find(x => x.id === quoteId) || fail('Cotización no encontrada.');
@@ -5164,12 +5180,14 @@ const UI = (() => {
         ${q.condicionEspecial ? `<tr><td class="k">Condición especial</td><td><strong>${E(q.condicionEspecial).replace(/\n/g, '<br>')}</strong></td></tr>` : ''}
         ${cnd.terminos ? `<tr><td class="k">Términos de venta</td><td>${cnd.terminosEnlace ? `<a href="${E(cnd.terminosEnlace.url)}" target="_blank" rel="noopener">Revisar el siguiente enlace: ${E(cnd.terminosEnlace.texto || 'Procedimiento de atención')}</a><br>` : ''}${E(cnd.terminos)}</td></tr>` : ''}
       </tbody></table>
+      ${emp.pieMarcas ? `<div class="h-marcas"><img src="${E(emp.pieMarcas)}" alt="Marcas que representamos"></div>` : ''}
       <div class="h-foot"><span>${E(emp.razonSocial)} · ${E(emp.direccion)} · Central: ${E(emp.central)}</span><span>${E(emp.web || '')}</span></div>
     </div>`;
   }
   /* ---------- Cotización en PDF real (descarga directa), con el diseño de la plantilla oficial ---------- */
   // Lo editado en "Datos de la empresa" manda sobre los recursos privados del archivo (el logo solo viene de ahí)
-  const empresaPDF = () => Object.assign({}, S.db.empresa ? {} : EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {}, S.db.empresa || {});
+  /** Datos de la empresa para el PDF. El pie de página con las marcas lo cambia gerencia o administración (vacío = sin pie) */
+  const empresaPDF = () => Object.assign({}, S.db.empresa ? {} : EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {}, S.db.empresa || {}, S.db.pieMarcas ? { pieMarcas: S.db.pieMarcas.imagen } : {});
   /** Condiciones de una cotización: las copiadas al emitirla y, si no hay copia, las vigentes */
   const condicionesDe = (q, emp) => Object.assign({}, emp, q.condiciones || {});
   /** Dónde lo piden: lo guardado en la cotización y, si falta, lo de la cuenta */
@@ -5185,12 +5203,16 @@ const UI = (() => {
     return { correo: q.contactoCorreo || k.correo || '', telefono: q.contactoTelefono || k.telefono || '' };
   }
   let logoPDF = null;
+  const piePDF = { src: null, im: null };
   async function pdfCotizacion({ q, cliente, contacto, proyecto, vendedor }) {
     const emp = empresaPDF();
     if (emp.logo && !logoPDF) { try { logoPDF = await PdfDoc.imagen(emp.logo); } catch (e) { logoPDF = null; } }
+    if (piePDF.src !== (emp.pieMarcas || null)) { piePDF.src = emp.pieMarcas || null; try { piePDF.im = piePDF.src ? await PdfDoc.imagen(piePDF.src) : null; } catch (e) { piePDF.im = null; } }
     const AZ = [1, 80, 136], BANDA = [241, 245, 249], CELESTE = [197, 217, 241], GRIS = [90, 90, 90], NEGRO = [20, 20, 20], BLANCO = [255, 255, 255];
     const doc = PdfDoc.crear({ titulo: `Cotización ${q.numero}` });
-    const L = 40, R = 555, LIM = doc.H - 70;
+    // Pie con las marcas: centrado sobre la dirección, con sus píxeles originales (sin recomprimir), a lo más 2.5 cm de alto y nunca por debajo de 150 dpi
+    const im = piePDF.im, pw = im ? Math.min(515, 72 * im.w / im.h, im.w * 72 / 150) : 0, ph = im ? pw * im.h / im.w : 0;
+    const L = 40, R = 555, LIM = doc.H - 70 - (im ? ph + 10 : 0);
     const cur = q.moneda, n2 = v => Util.nf2.format(v || 0);
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
     const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
@@ -5200,6 +5222,7 @@ const UI = (() => {
       const yb = doc.H - 44;
       doc.texto(emp.razonSocial, L, yb, { t: 6.5, color: GRIS }).texto(emp.direccion || '', L, yb + 8, { t: 6.5, color: GRIS }).texto(emp.central ? 'Central: ' + emp.central : '', L, yb + 16, { t: 6.5, color: GRIS });
       doc.texto(emp.web || '', L, yb + 16, { t: 6.5, color: GRIS, align: 'center', w: R - L });
+      if (im) doc.imagen(im, L + (R - L - pw) / 2, yb - 10 - ph, pw, ph);
     };
     const encabezado = continuacion => {
       if (logoPDF) doc.imagen(logoPDF, L, 22, 150, 150 * logoPDF.h / logoPDF.w);
@@ -7438,7 +7461,7 @@ const UI = (() => {
   PAGES['empresa'] = async () => {
     const emp = empresaPDF(), ed = Rules.puede(S.user, 'editar_empresa'), log = S.db.empresaLog || [];
     const enl = emp.terminosEnlace || {};
-    const NOMBRES = { razonSocial: 'Razón social', ruc: 'RUC', direccion: 'Dirección', central: 'Central', web: 'Web', area: 'Área', formaPago: 'Forma de pago', entrega: 'Entrega', despacho: 'Despacho', terminos: 'Términos de venta', terminosEnlace: 'Enlace de términos' };
+    const NOMBRES = { razonSocial: 'Razón social', ruc: 'RUC', direccion: 'Dirección', central: 'Central', web: 'Web', area: 'Área', formaPago: 'Forma de pago', entrega: 'Entrega', despacho: 'Despacho', terminos: 'Términos de venta', terminosEnlace: 'Enlace de términos', pieMarcas: 'Pie de página (marcas)' };
     const campo = (k, label, area, hint) => `<label class="field"${area ? ' style="grid-column:1 / -1;min-width:0"' : ''}>${label}${area ? `<textarea name="${k}" rows="${area}"${ed ? '' : ' readonly'}>${E(String(emp[k] || '').replace(/ · /g, '\n'))}</textarea>` : `<input type="text" name="${k}" value="${E(emp[k] || '')}"${ed ? '' : ' readonly'}>`}${hint ? `<span class="field-hint">${hint}</span>` : ''}</label>`;
     view().innerHTML = `<div class="page-head"><div><h1>Datos de la empresa</h1><p class="muted">Datos fijos y condiciones comerciales que salen en todas las cotizaciones</p></div></div>
       ${piloto() ? '' : '<div class="alert info" style="margin-bottom:12px"><div>En la demo estos datos son de ejemplo y los cambios no se guardan al recargar.</div></div>'}
@@ -7455,9 +7478,28 @@ const UI = (() => {
         </div><p class="small muted" style="margin:8px 0 0">La condición de pago, la validez y el plazo de entrega se eligen en cada cotización. Si una cotización necesita algo distinto, el Account Manager lo escribe en "Condición comercial especial".</p></section>
         ${ed ? `<div class="btn-row" style="justify-content:flex-end"><button type="submit" class="btn primary">${I('check')} Guardar cambios</button></div>` : ''}
       </form>
+      <section class="card" style="margin-top:14px"><div class="card-head"><h2>Pie de página de las cotizaciones</h2><span class="sub">Logos de las marcas, centrados sobre la dirección en cada página del PDF</span></div>
+        ${emp.pieMarcas ? `<div class="pie-prev"><img src="${E(emp.pieMarcas)}" alt="Pie de página actual" id="pie-actual"></div><p class="small muted" id="pie-info" style="margin:6px 0 0"></p>` : '<p class="small muted" style="margin:0">Sin imagen: las cotizaciones salen sin pie de marcas.</p>'}
+        ${ed ? `<div class="btn-row" style="margin-top:10px"><input type="file" id="pie-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" class="hidden"><button class="btn" data-action="pie-cambiar">${I('upload')} ${emp.pieMarcas ? 'Cambiar imagen' : 'Subir imagen'}</button>${emp.pieMarcas ? '<button class="btn bad" data-action="pie-quitar">Quitar</button>' : ''}</div>
+          <p class="small muted" style="margin:8px 0 0">PNG, JPG, WebP o SVG de hasta ${Config.PIE_MAX_MB} MB. Se usa tal cual (sin recomprimir), a lo más 2.5 cm de alto. Para que se imprima nítida, usa una imagen de al menos 1,200 px de ancho o un SVG.</p>` : ''}
+      </section>
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2></div>
         ${log.length ? `<ul class="timeline">${log.slice(0, 15).map(r => `<li><div class="t-date">${Util.fmtDate(r.fecha)}</div><div><strong>${E((usr(r.usuarioId) || {}).nombre || '—')}</strong> cambió ${r.campos.map(c => E(NOMBRES[c] || c)).join(', ')}</div></li>`).join('')}</ul>` : '<p class="muted">Sin cambios registrados.</p>'}</section>`;
   };
+  const PIE_ALTO_PT = 72;   // 2.5 cm, igual que en pdfCotizacion
+  ACTIONS['pie-cambiar'] = () => {
+    const inp = $('#pie-file');
+    inp.onchange = () => { const f = inp.files[0]; if (!f) return; const rd = new FileReader();
+      rd.onload = async () => { try { await Repo.guardarPieMarcas(rd.result, S.user.id); toast('Pie de página actualizado. Sale en las cotizaciones que se generen desde ahora.'); refresh(); } catch (e) { toast(e.message); } };
+      rd.readAsDataURL(f); };
+    inp.click();
+  };
+  ACTIONS['pie-quitar'] = () => modal({ title: 'Quitar el pie de página', body: '<p style="margin-top:0">Las cotizaciones saldrán sin los logos de las marcas. Puedes volver a subir una imagen cuando quieras.</p>',
+    actions: [{ label: 'Cancelar' }, { label: 'Quitar', cls: 'bad', onClick: async () => { await Repo.guardarPieMarcas('', S.user.id); toast('Pie de página quitado.'); refresh(); } }] });
+  /** Tamaño real con el que sale en el PDF (y su resolución), debajo de la vista previa */
+  document.addEventListener('load', e => { if (e.target.id !== 'pie-actual') return; const im = e.target, info = $('#pie-info'); if (!info) return;
+    const pt = Math.min(515, PIE_ALTO_PT * im.naturalWidth / im.naturalHeight, im.naturalWidth * 72 / 150), dpi = Math.round(im.naturalWidth / (pt / 72));
+    info.textContent = `${im.naturalWidth} × ${im.naturalHeight} px · en el PDF: ${(pt / 72 * 2.54).toFixed(1)} × ${(pt * im.naturalHeight / im.naturalWidth / 72 * 2.54).toFixed(1)} cm, ${dpi} dpi${dpi < 200 ? ' (para más nitidez, sube una versión de mayor resolución)' : ''}.`; }, true);
   SUBMITS['empresa'] = async form => {
     const v = n => (form.querySelector(`[name="${n}"]`) || {}).value || '';
     const datos = { enlaceTexto: v('enlaceTexto'), enlaceUrl: v('enlaceUrl') };
