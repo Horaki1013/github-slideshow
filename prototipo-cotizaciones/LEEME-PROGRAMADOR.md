@@ -27,7 +27,7 @@ Este paquete describe una plataforma que ya existe como **prototipo funcional** 
 | `admin` | Administración del sistema | Usuarios, lista de precios, post-venta |
 
 3. Los cambios viven en memoria: al recargar vuelve la data simulada inicial (menú de usuario → **Restablecer datos de demo**).
-4. Para revisar las reglas: la consola del navegador muestra `Autoverificación de reglas de negocio: 17/17 OK` (también `SelfTest.run()`).
+4. Para revisar las reglas: la consola del navegador muestra `Autoverificación de reglas de negocio: 18/18 OK` (también `SelfTest.run()`).
 
 ## Qué hace la plataforma (resumen funcional)
 
