@@ -604,6 +604,7 @@ const Config = {
     { id:'otro',       nombre:'Otro',                                        paso:null },
   ],
   DOC_MAX_MB: 20,
+  BORRADORES_MAX: 30,   // cotizaciones guardadas para continuar después, por vendedor
   PIE_MAX_MB: 3,   // imagen del pie de página de las cotizaciones (marcas)
   POSTVENTA: [
     { id:'oc',        nombre:'OC recibida' },
@@ -3670,6 +3671,26 @@ const Repo = (() => {
       touch();
       return u;
     },
+    /** PUT /borradores — cotización a medio hacer que el vendedor guarda para continuar después (solo la ve él) */
+    async guardarBorrador(usuarioId, { id, d }) {
+      const u = usuarioDe(usuarioId); if (!u) fail('Usuario no encontrado.');
+      if (!d || typeof d !== 'object') fail('No hay cotización que guardar.');
+      db.borradores = db.borradores || [];
+      let b = id && db.borradores.find(x => x.id === id && x.usuarioId === usuarioId);
+      if (!b) {
+        if (db.borradores.filter(x => x.usuarioId === usuarioId).length >= Config.BORRADORES_MAX) fail(`Ya tienes ${Config.BORRADORES_MAX} cotizaciones guardadas: continúa o elimina alguna antes de guardar otra.`);
+        b = { id: 'B-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), usuarioId, creado: Util.ahora() };
+        db.borradores.push(b);
+      }
+      Object.assign(b, { d: JSON.parse(JSON.stringify(d)), actualizado: Util.ahora() + ':' + Util.pad(new Date().getSeconds(), 2) });
+      touch();
+      return { id: b.id, actualizado: b.actualizado };
+    },
+    async eliminarBorrador(usuarioId, id) {
+      const n = (db.borradores || []).length;
+      db.borradores = (db.borradores || []).filter(x => !(x.id === id && x.usuarioId === usuarioId));
+      if (db.borradores.length !== n) touch();
+    },
     /* ---- Documentos de oportunidades: el archivo va aparte (carpeta compartida, navegador o memoria en la demo); en los datos solo la ficha ---- */
     async subirDocumento(oppId, archivo, meta, usuarioId) {
       const o = opp(oppId), u = usuarioDe(usuarioId);
@@ -5826,6 +5847,7 @@ const UI = (() => {
     view().innerHTML = `
       <div class="page-head"><div><h1>Hola, ${E(firstName(u))}</h1><p class="muted">${cap(Util.dayName(h))} ${Util.fmtDate(h)} · ${total} oportunidad${total === 1 ? '' : 'es'} requieren tu atención${ctas.length ? ` · ${ctas.length} cuenta${ctas.length === 1 ? '' : 's'} sin cotizar` : ''}</p></div>
         <a class="btn primary" href="#/nueva">${I('plus')} Nueva cotización</a></div>
+      ${(n => n ? `<div class="alert info" style="margin-bottom:12px"><div>${I('clock').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Tienes <strong>${n} cotizaci${n === 1 ? 'ón guardada' : 'ones guardadas'}</strong> para continuar después. <a href="#/nueva">Verlas en Nueva cotización</a></div></div>` : '')(borradores().length)}
       <section class="card">
         <div class="hero-progress">
           <div>
@@ -6419,6 +6441,56 @@ const UI = (() => {
     const q = { items: d.items.map(it => ({ cant: +it.cant || 0, valorUnit: +it.valorUnit || 0, opcional: !!it.opcional })), descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, moneda: d.moneda, tc: +d.tc || Config.TC_REFERENCIA };
     return { t: Rules.totales(q), usd: Rules.quoteNetoUSD(q) };
   }
+  /* ---------- Para continuar después: cotizaciones a medio hacer que el vendedor guarda (solo las ve él) ---------- */
+  const borradores = () => (S.db.borradores || []).filter(b => b.usuarioId === S.user.id).sort((a, b) => b.actualizado.localeCompare(a.actualizado));
+  const conContenido = d => !!d && !!(d.clienteId || String((d.clienteNuevo || {}).razonSocial || '').trim() || String(d.referencia || '').trim() || (d.items || []).some(it => String(it.codigo || '').trim() || String(it.descripcion || '').trim()));
+  const clienteBorrador = d => d.clienteId && d.clienteId !== '__nuevo' ? ((cli(d.clienteId) || {}).razonSocial || '—') : String((d.clienteNuevo || {}).razonSocial || '').trim() || '(sin cliente)';
+  const enCurso = () => S.nueva && S.nueva.tab === 'plataforma' && conContenido(S.nueva.d);
+  /** Guarda la cotización en curso (o actualiza su copia guardada); null si no hay nada que guardar */
+  async function guardarEnCurso() {
+    if (!enCurso()) return null;
+    const b = await Repo.guardarBorrador(S.user.id, { id: S.nueva.borradorId, d: S.nueva.d });
+    S.nueva.borradorId = b.id;
+    return b;
+  }
+  /** Antes de abrir otra cotización: la que está a medio hacer queda guardada, nunca se pierde */
+  async function resguardarEnCurso() {
+    if (!enCurso()) return true;
+    const cliente = clienteBorrador(S.nueva.d);
+    try { await guardarEnCurso(); toast(`Tu cotización en curso (${cliente}) quedó en "Para continuar después".`, { ms: 7000 }); return true; }
+    catch (e) { toast(e.message); return false; }
+  }
+  function borradoresHTML(N) {
+    const bs = borradores(); if (!bs.length) return '';
+    return `<section class="card" style="margin-bottom:14px"><div class="card-head"><h2>Para continuar después (${bs.length})</h2><span class="sub">Cotizaciones que guardaste a medio hacer · solo las ves tú</span></div>
+      <div class="table-wrap"><table class="tbl" style="min-width:760px"><thead><tr><th>Cliente</th><th>Referencia o proyecto</th><th class="r">Ítems</th><th class="r">Total sin IGV</th><th>Guardada</th><th></th></tr></thead><tbody>
+      ${bs.map(b => { const d = b.d, its = d.items.filter(it => String(it.codigo || '').trim() || String(it.descripcion || '').trim()), abierta = N && N.borradorId === b.id, p = d.proyectoSel && d.proyectoSel !== '__nuevo' ? proj(d.proyectoSel) : null;
+        return `<tr${abierta ? ' style="background:var(--brand-50)"' : ''}><td><strong>${E(clienteBorrador(d))}</strong>${abierta ? ' <span class="chip info">Abierta ahora</span>' : ''}</td><td class="small">${E(d.referencia || (p ? projName(p) : d.proyectoNuevo && d.proyectoNuevo.nombre) || '—')}</td>
+          <td class="r num">${its.length}</td><td class="r num nowrap">${Util.money(totalesDraft(d).t.neto, d.moneda)}</td><td class="small nowrap">${Util.fmtFechaHora(b.actualizado)}</td>
+          <td class="nowrap">${abierta ? '' : `<button class="btn sm primary" data-action="nq-borrador-abrir" data-id="${b.id}">Continuar</button> `}<button class="btn sm ghost" data-action="nq-borrador-borrar" data-id="${b.id}" aria-label="Eliminar">${I('x')}</button></td></tr>`; }).join('')}</tbody></table></div></section>`;
+  }
+  ACTIONS['nq-guardar-borrador'] = async () => {
+    if (!enCurso()) return toast('Aún no hay nada que guardar: elige el cliente o agrega un ítem.');
+    const cliente = clienteBorrador(S.nueva.d);
+    try { await guardarEnCurso(); S.nueva = null; toast(`Cotización de ${cliente} guardada. La encuentras en "Para continuar después".`); render(); } catch (e) { toast(e.message); }
+  };
+  ACTIONS['nq-borrador-abrir'] = async el => {
+    const b = borradores().find(x => x.id === el.dataset.id); if (!b) return;
+    if (!(await resguardarEnCurso())) return;
+    const d = JSON.parse(JSON.stringify(b.d)), avisos = [];
+    // Al retomarla otro día: la emisión, el tipo de cambio y el número se actualizan a hoy; el próximo contacto no queda en el pasado
+    if (d.fechaEmision < hoy()) { d.fechaEmision = hoy(); d.tc = tcDelDia(hoy()); avisos.push('la fecha de emisión pasó a hoy'); }
+    if (d.proxContacto && d.proxContacto < hoy()) { d.proxContacto = Util.addBizDays(hoy(), 3); avisos.push('el próximo contacto se movió a ' + Util.fmtDate(d.proxContacto)); }
+    S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '', borradorId: b.id };
+    if (d.numAuto && d.modo === 'nueva') d.numero = numeroSugerido(S.user, d.fechaEmision);
+    toast(`Continúas la cotización de ${clienteBorrador(d)}${avisos.length ? ' (' + avisos.join('; ') + ')' : ''}.`, { ms: 7000 });
+    if (S.ruta && S.ruta.startsWith('nueva')) render(); else go('nueva');
+  };
+  ACTIONS['nq-borrador-borrar'] = el => {
+    const b = borradores().find(x => x.id === el.dataset.id); if (!b) return;
+    modal({ title: 'Eliminar cotización guardada', body: `<p style="margin-top:0">¿Eliminar la cotización guardada de <strong>${E(clienteBorrador(b.d))}</strong>? No se puede recuperar.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarBorrador(S.user.id, b.id); if (S.nueva && S.nueva.borradorId === b.id) S.nueva.borradorId = null; toast('Cotización guardada eliminada.'); refresh(); } }] });
+  };
   PAGES['nueva'] = async () => {
     if (!S.nueva) S.nueva = { tab: 'plataforma', fase: 'form', d: null, archivo: '' };
     const N = S.nueva;
@@ -6439,7 +6511,7 @@ const UI = (() => {
     } else if (N.tab === 'pdf' && N.fase === 'leyendo') {
       cuerpo = `<div class="card center" style="padding:40px 16px"><div class="spinner" aria-hidden="true"></div><h2>Leyendo cotización…</h2><p class="muted">${E(N.archivo)}</p></div>`;
     } else {
-      cuerpo = formNueva(N);
+      cuerpo = (N.tab === 'plataforma' ? borradoresHTML(N) : '') + formNueva(N);
     }
     view().innerHTML = `<div class="page-head"><div><h1>Nueva cotización</h1><p class="muted">Cotiza aquí y el PDF se genera solo, o registra un PDF que ya enviaste.</p></div></div>
       <div class="tabs" role="tablist"><button role="tab" class="${N.tab === 'plataforma' ? 'active' : ''}" data-action="nq-tab" data-tab="plataforma">${I('file').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Cotizar en la plataforma</button>
@@ -6491,7 +6563,7 @@ const UI = (() => {
   }
   ACTIONS['nq-pick'] = () => $('#pdf-input').click();
   ACTIONS['nq-ejemplo'] = () => leerPDF('COTIZACION_ejemplo.pdf');
-  ACTIONS['nq-tab'] = el => { S.nueva = { tab: el.dataset.tab, fase: el.dataset.tab === 'pdf' ? 'subir' : 'form', d: null, archivo: '' }; render(true); };
+  ACTIONS['nq-tab'] = async el => { if (S.nueva && S.nueva.tab === el.dataset.tab) return; if (!(await resguardarEnCurso())) return; S.nueva = { tab: el.dataset.tab, fase: el.dataset.tab === 'pdf' ? 'subir' : 'form', d: null, archivo: '' }; render(true); };
 
   function lecturaHTML(N) {
     const { r, avisos } = N.lectura, d = N.d;
@@ -6600,7 +6672,7 @@ const UI = (() => {
         <label class="field"><span>Facturación estimada <span class="req">*</span></span><select name="facturacion" data-nq="facturacion">${factOpts(d.facturacion, 'Elige…')}</select><span class="field-hint">Dato interno para la proyección: no sale en el PDF.</span></label>
       </div>`)}
       <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-action="nq-cancelar">Cancelar</button>
-        ${plat ? `<button type="button" class="btn" data-action="nq-preview">${I('file')} Vista previa PDF</button>` : ''}
+        ${plat ? `<button type="button" class="btn" data-action="nq-guardar-borrador" title="Guarda lo que llevas y deja el formulario libre para otra cotización">${I('clock')} Guardar para continuar después</button><button type="button" class="btn" data-action="nq-preview">${I('file')} Vista previa PDF</button>` : ''}
         <button type="submit" class="btn primary">${I('check')} ${plat ? 'Registrar y generar PDF' : 'Registrar cotización'}</button></div>
     </form>`;
   }
@@ -6747,7 +6819,13 @@ const UI = (() => {
     pintar();
   };
   ACTIONS['nq-del-item'] = el => { const d = S.nueva.d; if (d.items.length > 1) { d.items.splice(+el.dataset.i, 1); render(true); } };
-  ACTIONS['nq-cancelar'] = () => { S.nueva = null; go('mi-dia'); };
+  ACTIONS['nq-cancelar'] = () => {
+    if (!enCurso()) { S.nueva = null; return go('mi-dia'); }
+    const guardada = S.nueva.borradorId;
+    modal({ title: '¿Qué hacemos con esta cotización?', body: `<p style="margin-top:0">Tienes una cotización a medio hacer para <strong>${E(clienteBorrador(S.nueva.d))}</strong>.${guardada ? ' Ya tiene una copia guardada; si la descartas, se pierden solo los cambios desde la última vez que la guardaste.' : ''}</p>`,
+      actions: [{ label: 'Seguir editando' }, { label: guardada ? 'Descartar cambios' : 'Descartar', cls: 'bad', onClick: () => { S.nueva = null; go('mi-dia'); } },
+        { label: `${I('clock')} Guardar para continuar después`, cls: 'primary', onClick: async () => { const c = clienteBorrador(S.nueva.d); await guardarEnCurso(); S.nueva = null; toast(`Cotización de ${c} guardada para continuar después.`); go('mi-dia'); } }] });
+  };
   ACTIONS['nq-preview'] = () => {
     const d = S.nueva.d;
     const c = Object.assign({}, d.clienteId && d.clienteId !== '__nuevo' ? cli(d.clienteId) : { razonSocial: d.clienteNuevo.razonSocial || '(cliente nuevo)', ruc: d.clienteNuevo.ruc || '—', ciudad: 'Lima', contactos: [] }, d.direccion ? { direccion: d.direccion } : {});
@@ -6759,17 +6837,19 @@ const UI = (() => {
     mostrarPDF({ q, cliente: c, contacto: d.contacto, proyecto: p, vendedor: S.user }, true);
   };
   /** Cuenta → "Cotizar": abre la plataforma con el cliente ya elegido */
-  ACTIONS['cotizar-cuenta'] = el => {
+  ACTIONS['cotizar-cuenta'] = async el => {
     const c = cli(el.dataset.id);
     if (!Rules.puede(S.user, 'gestionar_cuenta', c)) { toast('Solo el vendedor asignado puede cotizar a esta cuenta.'); return; }
+    if (!(await resguardarEnCurso())) return;
     const d = draftVacio();
     Object.assign(d, { clienteId: c.id, contacto: c.contactos[0] ? c.contactos[0].nombre : '', numAuto: true, numero: numeroSugerido(S.user) });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
     go('nueva');
   };
   /** Ficha → "Crear revisión desde la vigente": copia la cotización vigente a la plataforma para ajustarla */
-  ACTIONS['crear-rev'] = el => {
+  ACTIONS['crear-rev'] = async el => {
     const o = oppEditable(el.dataset.id); if (!o) return;
+    if (!(await resguardarEnCurso())) return;
     const q = Rules.vigente(S.db, o), d = draftVacio();
     Object.assign(d, { clienteId: o.clienteId, contacto: q.contacto, moneda: q.moneda, tc: q.moneda === 'PEN' ? q.tc : tcDelDia(hoy()), condicionPago: q.condicionPago,
       validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', distrito: q.clienteDistrito || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
@@ -6797,6 +6877,7 @@ const UI = (() => {
       const original = N.tab === 'pdf' && !N.manual && N.file;   // PDF ya enviado: se copia a la carpeta del vendedor
       if (original) { S.db = await Repo.snapshot(); const q = S.db.quotes.find(x => x.id === r.quoteId), o = oppById(r.oppId); guardarEnCarpeta(original, q, cli(o.clienteId)); }
       if (N.cola && N.cola.length) { toast(`Cotización ${p.numero} registrada. Sigue el siguiente PDF.`); siguienteDeCola(); return; }
+      if (N.borradorId) await Repo.eliminarBorrador(S.user.id, N.borradorId).catch(() => {});
       S.nueva = null;
       if (p.origen === 'plataforma') { S.pdfPendiente = r.quoteId; guardarCotizacionRegistrada(r.quoteId); }
       toast(p.origen === 'plataforma' ? 'Cotización registrada y PDF generado.' : p.modo === 'revision' ? 'Revisión registrada y marcada como vigente.' : p.modo === 'alternativa' ? 'Alternativa registrada en la oportunidad.' : 'Cotización registrada. Ya está en tu seguimiento.');
@@ -7951,12 +8032,13 @@ const UI = (() => {
       actions: [{ label: 'Cancelar' }, { label: 'Descartar', cls: 'bad', onClick: async r => { await Repo.descartarLead(l.id, val(r, 'motivo'), val(r, 'motivoOtro'), S.user.id); toast('Lead descartado.'); refresh(); } }] });
   };
   /** Convertir: abre Nueva cotización con la empresa y el contacto del lead; al registrarla, el lead queda "Convertido" y su origen pasa a la oportunidad */
-  ACTIONS['lead-convertir'] = el => {
+  ACTIONS['lead-convertir'] = async el => {
     const l = leadDe(el.dataset.id); if (!l) return;
     const db = S.db, sg = Rules.sugerirVendedor(db, l);
     const c = (l.ruc && db.clients.find(x => x.ruc === l.ruc)) || (sg && cli(sg.clienteId)) || (l.empresa && db.clients.find(x => Util.norm(x.razonSocial) === Util.norm(l.empresa)));
     const d = Object.assign(draftVacio(), c ? { clienteId: c.id } : { clienteId: '__nuevo', clienteNuevo: { razonSocial: l.empresa || '', ruc: l.ruc || '' } },
       { contacto: l.contacto || '', contactoCorreo: l.correo || '', contactoTelefono: l.telefono || '', leadId: l.id, numAuto: true, numero: numeroSugerido(S.user) });
+    if (!(await resguardarEnCurso())) return;
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
     go('nueva');
   };
