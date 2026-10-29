@@ -459,7 +459,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - **Contactar hoy.**
 - **Atrasado:** el próximo contacto ya pasó; se cuentan días hábiles con los feriados de Perú, incluidos Jueves y Viernes Santo. Más de 5 días hábiles se **escala a jefatura**.
 - **Primer seguimiento pendiente:** pasaron 3 días hábiles desde el envío y no hay contacto manual.
-- **Cotización por vencer:** emisión + validez; avisa el día anterior y el mismo día.
+- **Cotización por vencer:** emisión + validez; avisa el día anterior y el mismo día. La validez predeterminada de una cotización nueva es de 30 días (`Config.VALIDEZ_DIAS`); el vendedor puede cambiarla en cada cotización.
 - **Fecha estimada de OC vencida sin OC.**
 - **Pausa por reactivar.**
 

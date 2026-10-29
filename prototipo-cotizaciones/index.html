@@ -605,6 +605,7 @@ const Config = {
   ],
   DOC_MAX_MB: 20,
   BORRADORES_MAX: 30,   // cotizaciones guardadas para continuar después, por vendedor
+  VALIDEZ_DIAS: 30,     // validez predeterminada de una cotización nueva (el vendedor puede cambiarla)
   PIE_MAX_MB: 3,   // imagen del pie de página de las cotizaciones (marcas)
   POSTVENTA: [
     { id:'oc',        nombre:'OC recibida' },
@@ -6350,7 +6351,7 @@ const UI = (() => {
   }
   function draftVacio() {
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda: 'USD', tc: tcDelDia(hoy()),
-      condicionPago: '', validezDias: 10, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
+      condicionPago: '', validezDias: Config.VALIDEZ_DIAS, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
       modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
   }
   /** Número sugerido: INICIALES-AAMMDD-correlativo del vendedor (el mismo en la demo y en el piloto) */
@@ -6391,7 +6392,7 @@ const UI = (() => {
     if (!r.condicionPago) avisos.push(`Condición de pago no reconocida${r.condicionPagoTexto ? ` ("${r.condicionPagoTexto}")` : ''}: elígela.`);
     d.plazo = r.plazo;
     if (!r.plazo) avisos.push(`Plazo de entrega no reconocido${r.plazoTexto ? ` ("${r.plazoTexto}")` : ''}: elígelo.`);
-    d.validezDias = r.validezDias || 10;
+    d.validezDias = r.validezDias || Config.VALIDEZ_DIAS;
     const porCodigo = c => (db.catalogo || []).find(x => x.codigo.toLowerCase() === String(c || '').trim().toLowerCase());
     if (r.items.length) d.items = r.items.map(it => { const p = porCodigo(it.codigo); return { cant: it.cant, unidad: it.unidad, codigo: it.codigo, marca: it.marca || (p ? p.marca : ''), descripcion: it.descripcion || (p ? p.descripcion : ''), valorUnit: it.valorUnit, listaUSD: p ? p.precio : null }; });
     d.descuentoTipo = 'pct'; d.descuentoPct = r.descuentoPct || 0;
