@@ -500,6 +500,7 @@ const Config = {
   PRIMER_SEGUIMIENTO_DH: 3,           // días hábiles después del envío
   ESCALAR_ATRASO_DH: 5,               // atraso (días hábiles) que escala a jefatura
   AVISO_VENCIMIENTO_DIAS: 1,          // avisar 1 día antes del vencimiento de la cotización
+  SIN_CIERRE_POR_VENCIMIENTO: ['e6'], // etapas que no se cierran solas al vencer la cotización sin OC
   SEGMENTO_T1_USD: 75000,             // facturado últimos 12 meses
   SEGMENTO_T2_USD: 10000,
   OFERTA_GRANDE_USD: 200000,
@@ -560,6 +561,7 @@ const Config = {
     { id:'sin_respuesta',   nombre:'Sin respuesta del cliente' },
     { id:'resolvio',        nombre:'El cliente reparó o resolvió por su cuenta' },
     { id:'otro_integrador', nombre:'Ganó otro integrador que también cotizamos', noCuentaComoPerdida:true },
+    { id:'cotizacion_vencida', nombre:'Cotización vencida sin OC' },
     { id:'otro',            nombre:'Otro (especificar)', requiereTexto:true },
   ],
 
@@ -2152,6 +2154,17 @@ const DemoData = (() => {
       });
     }
 
+    // Las cotizaciones vencidas sin OC se cierran solas: en la demo las abiertas siguen vigentes, salvo una de u1, u3 y u5 para mostrar el cierre
+    for (const v of vendedores) {
+      let muestra = ['u1', 'u3', 'u5'].includes(v.id);
+      abiertas[v.id].forEach((opp, i) => {
+        const q = vigenteQ(opp);
+        if (!q || opp.etapa === 'e6' || addDays(q.fechaEmision, q.validezDias) >= hoy) return;
+        if (muestra) { muestra = false; return; }
+        q.validezDias = diffDays(q.fechaEmision, hoy) + 5 + (i * 7) % 20;
+      });
+    }
+
     /* ---- 6) Cotizaciones leídas del correo y aún sin completar (sin próximo contacto) ---- */
     [['u1', 1], ['u2', 2], ['u5', 1]].forEach(([vid, dias]) => {
       const inicio = prevBizDay(addBizDays(hoy, -dias));
@@ -2605,7 +2618,9 @@ const Rules = (() => {
       const q = vigente(db, opp);
       if (q) {
         const vence = Util.addDays(q.fechaEmision, q.validezDias), d = Util.diffDays(hoy, vence);
-        if (d >= 0 && d <= Config.AVISO_VENCIMIENTO_DIAS) out.push({ tipo: 'por_vencer', nivel: 'warn', texto: d === 0 ? 'La cotización vence hoy' : 'La cotización vence mañana', fecha: vence });
+        const exento = Config.SIN_CIERRE_POR_VENCIMIENTO.includes(opp.etapa), cierre = exento ? '' : ' · sin OC se cerrará como perdida';
+        if (d >= 0 && d <= Config.AVISO_VENCIMIENTO_DIAS) out.push({ tipo: 'por_vencer', nivel: 'warn', texto: (d === 0 ? 'La cotización vence hoy' : 'La cotización vence mañana') + cierre, fecha: vence });
+        else if (d < 0 && exento) out.push({ tipo: 'por_vencer', nivel: 'warn', texto: `Cotización vencida el ${Util.fmtDate(vence)}: emite una revisión o amplía la validez`, fecha: vence });
       }
       if (opp.fechaOC && opp.fechaOC < hoy) out.push({ tipo: 'oc_vencida', nivel: 'warn', texto: `Fecha estimada de OC vencida (${Util.fmtDate(opp.fechaOC)}) y sin OC` });
     } else if (opp.etapa === 'pausa' && opp.fechaReactivacion && opp.fechaReactivacion <= hoy) {
@@ -2656,6 +2671,16 @@ const Rules = (() => {
       else { atrasados++; if (Util.bizDaysBetween(o.proxContacto, hoy) > Config.ESCALAR_ATRASO_DH) escalados++; }
     });
     return { abiertas: abiertas.length, vigentes, atrasados, escalados, sinProx, pctVigente: abiertas.length ? vigentes / abiertas.length : null };
+  }
+
+  /** Abiertas cuya cotización vigente venció sin OC: se cierran como perdidas. No aplica a las etapas exentas
+   *  ni a una oportunidad que el vendedor reabrió o reactivó con esa misma cotización */
+  function vencidasSinOC(db, hoy = Util.today()) {
+    return db.opps.filter(o => {
+      if (!esAbierta(o) || Config.SIN_CIERRE_POR_VENCIMIENTO.includes(o.etapa)) return false;
+      const q = vigente(db, o);
+      return !!q && +q.validezDias > 0 && Util.addDays(q.fechaEmision, q.validezDias) < hoy && o.vencimientoAceptado !== q.id;
+    });
   }
 
   /* ---------- Validaciones (la UI las muestra; el Repo/backend las vuelve a exigir) ---------- */
@@ -3069,7 +3094,7 @@ const Rules = (() => {
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
-  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, totales, quoteNetoUSD,
+  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
@@ -3834,6 +3859,8 @@ const Repo = (() => {
       } else if (nueva === 'pausa') {
         Object.assign(o, { etapa: 'pausa', fechaReactivacion: d.fechaReactivacion, proxContacto: null, pendiente: false });
       } else {
+        // Reabrir o reactivar con la cotización ya vencida: queda abierta hasta que una revisión cambie la vigente
+        if (!Rules.esAbierta(o)) { const q = Rules.vigente(db, o); o.vencimientoAceptado = q && Util.addDays(q.fechaEmision, q.validezDias) < hoy() ? q.id : null; }
         Object.assign(o, { etapa: nueva, proxContacto: d.proxContacto, fechaReactivacion: null, fechaCierre: null, motivoPerdida: null, motivoOtro: '', postventa: null, pendiente: false });
         if (d.fechaOC) o.fechaOC = d.fechaOC;
       }
@@ -3844,6 +3871,17 @@ const Repo = (() => {
       if (eraGanada && nueva !== 'ganada') liberarOpp(o, usuarioId, 'pasó a ' + Rules.etapa(nueva).nombre.toLowerCase());
       guardar(o);
       return o;
+    },
+    /** POST /oportunidades/cerrar-vencidas — cotización vencida sin OC → Perdida (en producción, tarea diaria del servidor) */
+    async cerrarVencidas() {
+      const vs = Rules.vencidasSinOC(db, hoy());
+      vs.forEach(o => {
+        const q = Rules.vigente(db, o), vence = Util.addDays(q.fechaEmision, q.validezDias), antes = Rules.etapa(o.etapa).nombre;
+        Object.assign(o, { etapa: 'perdida', fechaCierre: vence, motivoPerdida: 'cotizacion_vencida', motivoOtro: '', proxContacto: null, pendiente: false });
+        log(o, `Etapa: ${antes} → Perdida · Motivo: Cotización vencida sin OC (N° ${q.numero} venció el ${Util.fmtDate(vence)}) · cierre automático`, 'sistema');
+      });
+      if (vs.length) touch();
+      return vs.map(o => ({ id: o.id, vendedorId: o.vendedorId }));
     },
     /** POST /proyectos/:id/cerrar-otros — cierra otras oportunidades del proyecto con "ganó otro integrador" */
     async cerrarPorOtroIntegrador(oppIds, usuarioId) {
@@ -4505,6 +4543,14 @@ const SelfTest = (() => {
     }],
     ['Días hábiles respetan feriados de Perú (28 y 29 de julio)', () =>
       Util.addBizDays('2026-07-27', 3) === '2026-08-03' && Util.bizDaysBetween('2026-07-24', '2026-07-30') === 2],
+    ['Cotización vencida sin OC se cierra como perdida (salvo OC comprometida o reabierta)', () => {
+      const db = miniDb();
+      addOpp(db, { etapa: 'e3' }, { fechaEmision: '2026-09-01', validezDias: 30 });
+      addOpp(db, { etapa: 'e3' }, { fechaEmision: '2026-09-10', validezDias: 30 });
+      addOpp(db, { etapa: 'e6' }, { fechaEmision: '2026-09-01', validezDias: 30 });
+      addOpp(db, { etapa: 'e3', vencimientoAceptado: 'qo4' }, { fechaEmision: '2026-09-01', validezDias: 30 });
+      return Rules.vencidasSinOC(db, '2026-10-06').map(o => o.id).join() === 'o1';
+    }],
     ['No se cierra como Perdida sin motivo ni queda abierta sin próximo contacto', () => {
       const o = { etapa: 'e3' };
       return !!Rules.validarCambioEtapa(o, 'perdida', {}, '2026-10-06').motivoPerdida &&
@@ -5812,6 +5858,9 @@ const UI = (() => {
   async function entrar(usuario, clave) {
     try {
       S.user = await Repo.login(usuario, clave);
+      const cerradas = await Repo.cerrarVencidas().catch(() => []);
+      const mias = Rules.puede(S.user, 'ver_todo') ? cerradas : cerradas.filter(c => c.vendedorId === S.user.id);
+      if (mias.length) setTimeout(() => toast(`${mias.length === 1 ? 'Se cerró 1 oportunidad' : 'Se cerraron ' + mias.length + ' oportunidades'} como perdida por cotización vencida sin OC (ver el historial de cada una).`), 900);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
       S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 }; S.catF = { q: '', marca: '' }; S.expand = {};

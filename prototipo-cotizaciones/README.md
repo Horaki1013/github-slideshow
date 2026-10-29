@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 18/18 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 19/19 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -459,7 +459,8 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - **Contactar hoy.**
 - **Atrasado:** el próximo contacto ya pasó; se cuentan días hábiles con los feriados de Perú, incluidos Jueves y Viernes Santo. Más de 5 días hábiles se **escala a jefatura**.
 - **Primer seguimiento pendiente:** pasaron 3 días hábiles desde el envío y no hay contacto manual.
-- **Cotización por vencer:** emisión + validez; avisa el día anterior y el mismo día. La validez predeterminada de una cotización nueva es de 30 días (`Config.VALIDEZ_DIAS`); el vendedor puede cambiarla en cada cotización.
+- **Cotización por vencer:** emisión + validez; avisa el día anterior y el mismo día.
+- **Cotización vencida sin OC → Perdida automática:** al ingresar al sistema, toda oportunidad abierta cuya cotización vigente venció sin OC pasa a Perdida con el motivo "Cotización vencida sin OC" (fecha de cierre = fecha de vencimiento; queda en el historial como cierre automático). Se aplica también a las ya vencidas. No aplica a la etapa "6. OC comprometida" (`Config.SIN_CIERRE_POR_VENCIMIENTO`), que recibe un aviso de cotización vencida. Si el vendedor reabre o reactiva la oportunidad, no se vuelve a cerrar con esa misma cotización; una revisión nueva reinicia el plazo. En producción, tarea diaria del servidor (`POST /oportunidades/cerrar-vencidas`). La validez predeterminada de una cotización nueva es de 30 días (`Config.VALIDEZ_DIAS`); el vendedor puede cambiarla en cada cotización.
 - **Fecha estimada de OC vencida sin OC.**
 - **Pausa por reactivar.**
 
