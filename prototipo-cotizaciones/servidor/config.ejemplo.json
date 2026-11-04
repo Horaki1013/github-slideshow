@@ -1,0 +1,13 @@
+{
+  "puerto": 8080,
+  "html": "Techvalue-Piloto.html",
+  "nombre": "Servidor de la empresa",
+  "datos": "datos",
+  "respaldos": "respaldos",
+  "copiaRespaldos": "",
+  "diasRespaldo": 30,
+  "horasRespaldo": [10, 12, 14, 16, 18],
+  "horaNoche": 23,
+  "tipoCambio": true,
+  "hojasDeDatos": true
+}

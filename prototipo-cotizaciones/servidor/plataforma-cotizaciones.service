@@ -1,0 +1,16 @@
+# Servicio para Linux (systemd). Copiar a /etc/systemd/system/ y ajustar las rutas:
+#   sudo cp plataforma-cotizaciones.service /etc/systemd/system/
+#   sudo systemctl enable --now plataforma-cotizaciones
+[Unit]
+Description=Plataforma de cotizaciones
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/plataforma-cotizaciones
+ExecStart=/usr/bin/node /opt/plataforma-cotizaciones/servidor.js
+Restart=always
+RestartSec=5
+User=cotizaciones
+
+[Install]
+WantedBy=multi-user.target

@@ -3239,10 +3239,120 @@ const AlmacenCompartido = (() => {
   };
 })();
 
+/* =====================================================================
+   CAPA 3c · SERVIDOR LOCAL — cuando la plataforma se abre desde el
+   servidor de la empresa (http://servidor:8080), reemplaza a la carpeta
+   compartida con la misma interfaz. Base de datos SQLite en el servidor,
+   registro por registro: cada escritura envía solo lo que cambió.
+   ===================================================================== */
+const AlmacenServidor = (() => {
+  const SEP = '\u0001', cache = new Map();
+  let token = null, version = 0, epoca = null;
+  try { token = sessionStorage.getItem('tv-token'); } catch (e) { /* sin sesión guardada */ }
+  const guardarToken = t => { token = t; try { if (t) sessionStorage.setItem('tv-token', t); else sessionStorage.removeItem('tv-token'); } catch (e) { /* sin efecto */ } };
+  async function api(ruta, { metodo, cuerpo, blob } = {}) {
+    const bin = cuerpo instanceof Blob, h = { 'X-Sesion': token || '' };
+    if (cuerpo !== undefined && !bin) h['Content-Type'] = 'application/json';
+    let r;
+    try { r = await fetch('api/' + ruta, { method: metodo || (cuerpo !== undefined ? 'POST' : 'GET'), headers: h, body: cuerpo === undefined ? undefined : bin ? cuerpo : JSON.stringify(cuerpo) }); }
+    catch (e) { throw new Error('Sin conexión con el servidor de la empresa.'); }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); const e = new Error(j.error || 'El servidor respondió ' + r.status); e.status = r.status; throw e; }
+    return blob ? r : r.json();
+  }
+  const conIds = v => Array.isArray(v) && v.length > 0 && v.every(e => e && typeof e === 'object' && (typeof e.id === 'string' || typeof e.id === 'number')) && new Set(v.map(e => String(e.id))).size === v.length;
+  function registros(datos) {
+    const out = [];
+    for (const k of Object.keys(datos)) {
+      if (k === '_v' || k === '_escrito' || datos[k] === undefined) continue;
+      const v = datos[k];
+      if (conIds(v)) { v.forEach(e => out.push([k, String(e.id), JSON.stringify(e)])); out.push([k, '#orden', JSON.stringify(v.map(e => String(e.id)))]); }
+      else out.push(['_', k, JSON.stringify(v)]);
+    }
+    return out;
+  }
+  function construir() {
+    const out = {}, cols = {};
+    for (const [k, d] of cache) {
+      const i = k.indexOf(SEP), c = k.slice(0, i), id = k.slice(i + 1);
+      if (c === '_') { if (!(id in out)) out[id] = JSON.parse(d); }
+      else (cols[c] = cols[c] || {})[id] = d;
+    }
+    for (const c of Object.keys(cols)) {
+      const orden = cols[c]['#orden'];
+      if (orden) out[c] = JSON.parse(orden).filter(id => id in cols[c]).map(id => JSON.parse(cols[c][id]));
+    }
+    return out;
+  }
+  function cargar(r) { cache.clear(); r.registros.forEach(([c, id, d]) => cache.set(c + SEP + id, d)); version = r.version; epoca = r.epoca; }
+  return {
+    activo: () => typeof window !== 'undefined' && !!window.__SERVIDOR,
+    vacio: () => !!(window.__SERVIDOR && window.__SERVIDOR.vacio),
+    conSesion: () => !!token,
+    async entrar(usuario, clave) { const r = await api('login', { cuerpo: { usuario, clave } }); guardarToken(r.token); return r; },
+    async salir() { try { await api('salir', { cuerpo: {} }); } catch (e) { /* ya cerrada */ } guardarToken(null); cache.clear(); version = 0; },
+    /** Primera carga del servidor con los datos de este navegador (seed del piloto o data de demo) */
+    async inicializar(datos, usuario, clave) {
+      const regs = registros(datos);
+      const r = await api('inicializar', { cuerpo: { registros: regs, usuario, clave } });
+      guardarToken(r.token); cache.clear(); regs.forEach(([c, id, d]) => cache.set(c + SEP + id, d)); version = r.version; epoca = r.epoca;
+      window.__SERVIDOR.vacio = false;
+      return r;
+    },
+    estado: () => api('estado'),
+    respaldos: () => api('respaldos'),
+    crearRespaldo: () => api('respaldos', { cuerpo: {} }),
+    restaurar: nombre => api('restaurar', { cuerpo: { nombre } }),
+    descargarRespaldo: async nombre => (await api('respaldo?n=' + encodeURIComponent(nombre), { blob: true })).blob(),
+    tiposCambio: (actualizar) => actualizar ? api('tc', { cuerpo: {} }) : api('tc'),
+    async hoja(url, forzar) {
+      const r = await api('hoja?url=' + encodeURIComponent(url) + (forzar ? '&forzar=1' : ''), { blob: true });
+      return { blob: await r.blob(), estado: r.headers.get('X-Hoja-Estado'), fecha: r.headers.get('X-Hoja-Fecha'), error: decodeURIComponent(r.headers.get('X-Hoja-Error') || '') };
+    },
+    hojas: () => api('hojas'),
+    // ---- Misma interfaz que AlmacenCompartido ----
+    metodos: {
+      soportado: () => true,
+      nombre: () => (window.__SERVIDOR && window.__SERVIDOR.nombre) || 'Servidor',
+      async elegir() { return null; }, async recordada() { return null; }, async olvidar() { /* no aplica */ }, async permiso() { return true; }, usar() { /* no aplica */ },
+      async vacia() { return !!(window.__SERVIDOR && window.__SERVIDOR.vacio); },
+      async leer() { const r = await api('datos'); cargar(r); return construir(); },
+      async leerSiCambio() {
+        const r = await api('cambios?desde=' + version + '&epoca=' + encodeURIComponent(epoca || ''));
+        if (r.completo) { cargar(r); return construir(); }
+        if (r.sinCambios) { version = r.version; return null; }
+        r.registros.forEach(([c, id, d]) => cache.set(c + SEP + id, d));
+        (r.borrados || []).forEach(([c, id]) => cache.delete(c + SEP + id));
+        version = r.version;
+        return construir();
+      },
+      async escribir(datos) {
+        const regs = registros(datos), nuevas = new Set(), cambios = [];
+        for (const [c, id, d] of regs) { const k = c + SEP + id; nuevas.add(k); if (cache.get(k) !== d) cambios.push([c, id, d]); }
+        const borrados = [...cache.keys()].filter(k => !nuevas.has(k)).map(k => { const i = k.indexOf(SEP); return [k.slice(0, i), k.slice(i + 1)]; });
+        if (!cambios.length && !borrados.length) return;
+        const r = await api('escribir', { cuerpo: { version, cambios, borrados } });
+        cambios.forEach(([c, id, d]) => cache.set(c + SEP + id, d));
+        borrados.forEach(([c, id]) => cache.delete(c + SEP + id));
+        version = r.version;
+      },
+      async bloquear() { await api('bloqueo', { cuerpo: {} }); return true; },
+      async liberar() { await api('liberar', { cuerpo: {} }); },
+      async guardarDoc(carpeta, nombre, blob) { await api('doc?c=' + encodeURIComponent(carpeta) + '&n=' + encodeURIComponent(nombre), { metodo: 'PUT', cuerpo: blob instanceof Blob ? blob : new Blob([blob]) }); },
+      async leerDoc(carpeta, nombre) {
+        const r = await api('doc?c=' + encodeURIComponent(carpeta) + '&n=' + encodeURIComponent(nombre), { blob: true });
+        return new File([await r.blob()], nombre, { type: r.headers.get('Content-Type') || '' });
+      },
+      async borrarDoc(carpeta, nombre) { await api('doc?c=' + encodeURIComponent(carpeta) + '&n=' + encodeURIComponent(nombre), { metodo: 'DELETE' }).catch(() => {}); },
+      async horaCarpeta() { try { return (await api('estado')).ahora; } catch (e) { return null; } },
+    },
+  };
+})();
+
 const Repo = (() => {
   let db = null;
   let modo = 'demo';                       // 'demo' (memoria) | 'piloto' (se guarda en el navegador)
-  const estado = { guardado: null, error: null, pendiente: false, compartida: false, carpeta: '', remoto: null };
+  const estado = { guardado: null, error: null, pendiente: false, compartida: false, carpeta: '', remoto: null, servidor: false, inicializar: false };
+  const donde = () => estado.servidor ? 'el servidor' : 'la carpeta compartida';
   let quien = '';                          // nombre del usuario que escribe (para el bloqueo y el registro en la carpeta)
   const docsMemoria = new Map();           // documentos en la demo (no se guardan)
   const oyentesRemotos = [];
@@ -3252,7 +3362,7 @@ const Repo = (() => {
   // La lista de precios (varios MB) se guarda aparte y solo cuando cambia: cada guardado serializa únicamente los datos
   let listaGuardada = null, listaSucia = false;
   function programarGuardado() {
-    if (modo !== 'piloto') return;
+    if (modo !== 'piloto' || estado.servidor) return;   // con servidor, los datos no se guardan en cada navegador
     estado.pendiente = true; avisar();
     clearTimeout(tGuardar);
     tGuardar = setTimeout(async () => {
@@ -3525,7 +3635,7 @@ const Repo = (() => {
         catch (e) {
           try { db = await AlmacenCompartido.leer(); db._v = Date.now(); } catch (e2) { /* queda lo de memoria */ }
           avisarRemoto();
-          throw new Error('No se pudo guardar en la carpeta compartida (' + e.message + '). El cambio no se aplicó; intenta de nuevo.');
+          throw new Error(`No se pudo guardar en ${donde()} (${e.message}). El cambio no se aplicó; intenta de nuevo.`);
         }
         estado.guardado = new Date(); estado.error = null;
       }
@@ -3535,10 +3645,31 @@ const Repo = (() => {
       estado.pendiente = false; avisar();
     }
   }
+  const dbVacia = () => ({ modo: 'piloto', users: [], clients: [], projects: [], opps: [], quotes: [], followups: [], gestiones: [], historico: [], catalogo: [], catalogoLog: [],
+    empresa: {}, numeracion: {}, seq: {}, config: {}, auditoria: [], _v: 1 });
+  /** Abierta desde el servidor de la empresa: los datos se cargan del servidor después de ingresar */
+  async function iniciarServidor() {
+    modo = 'piloto'; estado.servidor = true;
+    Object.assign(AlmacenCompartido, AlmacenServidor.metodos);
+    estado.carpeta = AlmacenCompartido.nombre();
+    if (AlmacenServidor.vacio()) {   // primera vez: el ingreso de jefatura o administración sube los datos iniciales
+      const seed = SEED();
+      if (seed && seed.id !== 'servidor') db = desdeSeed(seed); else { db = DemoData.generate(hoy()); cargarListaPrivada(); }
+      estado.inicializar = true;
+      return true;
+    }
+    db = dbVacia();
+    if (AlmacenServidor.conSesion()) {
+      try { db = await AlmacenCompartido.leer(); db._v = Date.now(); Object.assign(estado, { compartida: true, guardado: new Date(), error: null }); }
+      catch (e) { db = dbVacia(); if (e.status !== 401) estado.error = e.message; }
+    }
+    return true;
+  }
   const api = {
     /** GET /demo/reset  (en producción: carga inicial desde la API) */
     /** Carga inicial: en el piloto, lo guardado en este navegador; si no hay nada, la data inicial (FUP migrados). En la demo, data ficticia. */
     async init() {
+      if (AlmacenServidor.activo()) return iniciarServidor();
       const seed = SEED();
       if (seed) {
         modo = 'piloto';
@@ -3597,13 +3728,30 @@ const Repo = (() => {
     async snapshot() { return db; },
     /** POST /auth/login (simulado: no es seguridad real) */
     async login(usuario, clave) {
+      if (estado.servidor && !estado.inicializar) {
+        await AlmacenServidor.entrar(usuario, clave);
+        db = await AlmacenCompartido.leer(); db._v = Date.now();
+        Object.assign(estado, { compartida: true, error: null, guardado: new Date() }); avisar();
+      }
       const u = db.users.find(x => x.usuario.toLowerCase() === String(usuario || '').trim().toLowerCase());
       const ok = u && (u.claveHash ? Util.sha256(u.salt + clave) === u.claveHash : u.clave === clave);
       if (!ok) fail('Usuario o contraseña incorrectos.');
       if (u.activo === false) fail('Este usuario está desactivado. Consulta con el administrador.');
       quien = u.nombre;
+      if (estado.inicializar) {
+        await AlmacenServidor.inicializar(db, usuario, clave);
+        estado.inicializar = false; Object.assign(estado, { compartida: true, guardado: new Date(), error: null }); avisar();
+      }
+      if (estado.servidor) await this.migrar().catch(() => {});
       return u;
     },
+    /** Cierra la sesión; con servidor, los datos se descargan del navegador */
+    async salir() {
+      if (!estado.servidor || estado.inicializar) return;
+      await AlmacenServidor.salir();
+      db = dbVacia(); Object.assign(estado, { compartida: false, error: null }); avisar();
+    },
+    servidor: () => estado.servidor,
     sesion(id) { const u = db.users.find(x => x.id === id); if (u && u.activo !== false) { quien = u.nombre; return u; } return null; },
     /* ---- Carpeta compartida (piloto) ---- */
     compartida: () => estado.compartida,
@@ -3636,7 +3784,7 @@ const Repo = (() => {
     },
     /** Ajustes de datos al abrir una versión nueva (una sola vez). Renumera TV-AAAA-0001 al formato INICIALES-AAAA-0001 */
     async migrar() {
-      if (!db || modo !== 'piloto') return false;
+      if (!db || modo !== 'piloto' || (estado.servidor && !estado.compartida)) return false;
       const renumeradas = migrarNumeracion(), altas = aplicarAltas();
       // Las altas del archivo (usuarios, inventario inicial) no son registros propios de este navegador: sin carpeta se guardan sin contarse como cambio;
       // con carpeta se escriben en ella (la escritura compartida solo ocurre si cambia la versión)
@@ -3766,12 +3914,12 @@ const Repo = (() => {
       return enCola(async () => {
         try {
           const n = await AlmacenCompartido.leerSiCambio();
-          if (estado.error && /carpeta/i.test(estado.error)) { estado.error = null; avisar(); }
+          if (estado.error && /carpeta|servidor|sesión/i.test(estado.error)) { estado.error = null; avisar(); }
           if (!n) return false;
           db = n; db._v = Date.now(); estado.remoto = new Date(); programarGuardado();
           oyentesRemotos.forEach(f => { try { f(); } catch (e) { /* sin efecto */ } });
           return true;
-        } catch (e) { estado.error = 'Sin conexión con la carpeta compartida'; avisar(); return false; }
+        } catch (e) { estado.error = e.status === 401 ? e.message : 'Sin conexión con ' + donde(); avisar(); return false; }
       });
     },
 
@@ -4376,7 +4524,7 @@ const Repo = (() => {
     },
   };
   // Todo método que no sea de lectura pasa por escrituraCompartida cuando hay carpeta conectada
-  const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'sesion', 'leerDocumento',
+  const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'salir', 'servidor', 'sesion', 'leerDocumento',
     'compartida', 'alCambioRemoto', 'revisarCarpeta', 'conectarCarpeta', 'desconectarCarpeta', 'refrescar', 'adoptarSeedNuevo']);
   Object.keys(api).forEach(k => {
     const f = api[k];
@@ -4727,8 +4875,8 @@ const UI = (() => {
     const u = S.user;
     const items = NAV[u.rol];
     $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
-      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? (Repo.compartida() ? `Piloto Techvalue Perú. Datos del equipo en la carpeta compartida «${E(Repo.estadoGuardado().carpeta)}».` : 'Piloto Techvalue Perú. Los datos se guardan en este navegador.') : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
-    $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia';
+      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? (Repo.servidor() ? `Piloto Techvalue. Datos del equipo en ${E(Repo.estadoGuardado().carpeta)} (base de datos con respaldos automáticos).` : Repo.compartida() ? `Piloto Techvalue Perú. Datos del equipo en la carpeta compartida «${E(Repo.estadoGuardado().carpeta)}».` : 'Piloto Techvalue Perú. Los datos se guardan en este navegador.') : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
+    $('#mode-badge').textContent = piloto() ? (Repo.servidor() ? 'Piloto · servidor de la empresa' : Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia';
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
@@ -4799,11 +4947,12 @@ const UI = (() => {
         <button class="btn" data-action="mis-datos">${I('users')} Mis datos (teléfono, correo, cargo)</button>
         ${piloto() ? `<button class="btn" data-action="cambiar-clave">${I('key')} Cambiar contraseña</button>` : ''}
         ${piloto() && adm ? `<button class="btn" data-action="respaldo-exportar">${I('download')} Exportar respaldo (JSON)</button>
+          ${Repo.servidor() ? `<button class="btn" data-action="srv-respaldos">${I('box')} Respaldos del servidor…</button>` : ''}
           <button class="btn" data-action="respaldo-importar">${I('upload')} Restaurar respaldo…</button><input type="file" id="respaldo-file" accept=".json" class="hidden">
           <button class="btn bad" data-action="piloto-reiniciar">${I('refresh')} Reiniciar con los datos iniciales…</button>` : ''}
         ${piloto() ? '' : `<button class="btn" data-action="reset-demo">${I('refresh')} Restablecer datos de demo</button>`}
         <button class="btn" data-action="logout">${I('logout')} Cerrar sesión</button>
-        <p class="small muted" style="margin:4px 0 0">${piloto() ? (Repo.compartida() ? 'Piloto: los datos del equipo están en la carpeta compartida (con una copia diaria en «respaldos»). Más adelante se guardarán en el servidor local de la empresa.' : 'Piloto: los datos se guardan solo en este navegador y equipo. Conecta la carpeta compartida en la pantalla de ingreso para trabajar en equipo.') : 'Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.'}</p>
+        <p class="small muted" style="margin:4px 0 0">${piloto() ? (Repo.servidor() ? 'Piloto: los datos del equipo están en el servidor de la empresa, con respaldos automáticos cada 2 horas en horario laboral y cada noche.' : Repo.compartida() ? 'Piloto: los datos del equipo están en la carpeta compartida (con una copia diaria en «respaldos»). Más adelante se guardarán en el servidor local de la empresa.' : 'Piloto: los datos se guardan solo en este navegador y equipo. Conecta la carpeta compartida en la pantalla de ingreso para trabajar en equipo.') : 'Los cambios viven solo en memoria durante la sesión. No se guarda nada en el navegador.'}</p>
       </footer></div>`;
     S.popover = 'user';
     const inp = $('#respaldo-file');
@@ -4827,6 +4976,26 @@ const UI = (() => {
       Util.descargar(await Repo.adoptarSeedNuevo(), `respaldo-version-anterior-${hoy()}.json`);
       S.db = await Repo.snapshot(); S.user = null; guardarSesion(null); location.hash = '#/login'; toast('Versión nueva cargada. Ingresa con tu contraseña inicial.'); render();
     } catch (e) { toast(e.message); }
+  };
+  /* ---- Respaldos del servidor (administración, gerencia y jefatura) ---- */
+  ACTIONS['srv-respaldos'] = async () => {
+    closePopover();
+    let r; try { r = await AlmacenServidor.respaldos(); } catch (e) { toast(e.message); return; }
+    const filas = r.respaldos.map(x => `<tr><td class="nowrap">${E(new Date(x.fecha).toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' }))}</td><td class="small muted">${E(x.nombre)}</td><td class="num nowrap">${(x.bytes / 1048576).toFixed(1)} MB</td>
+      <td class="nowrap"><button class="btn sm" data-action="srv-resp-bajar" data-n="${E(x.nombre)}">${I('download')}</button> <button class="btn sm bad" data-action="srv-resp-restaurar" data-n="${E(x.nombre)}">Restaurar</button></td></tr>`).join('');
+    modal({ title: 'Respaldos del servidor', wide: true, body: `<p class="small muted" style="margin-top:0">Automáticos cada 2 horas en horario laboral y cada noche; se conservan ${r.dias} días${r.copia ? ` y se copian también a «${E(r.copia)}»` : ''}. Incluyen la base de datos y los archivos (documentos y hojas de datos).</p>
+      <div class="table-wrap" style="max-height:50vh;overflow:auto"><table class="tbl"><thead><tr><th>Fecha</th><th>Archivo</th><th class="num">Tamaño</th><th></th></tr></thead><tbody>${filas || '<tr><td colspan="4" class="muted">Aún no hay respaldos.</td></tr>'}</tbody></table></div>`,
+      actions: [{ label: 'Cerrar' }, { label: 'Crear respaldo ahora', cls: 'primary', onClick: async () => { const x = await AlmacenServidor.crearRespaldo(); toast('Respaldo creado: ' + x.nombre); } }] });
+  };
+  ACTIONS['srv-resp-bajar'] = async el => { try { const b = await AlmacenServidor.descargarRespaldo(el.dataset.n); Util.descargar(b, el.dataset.n); } catch (e) { toast(e.message); } };
+  ACTIONS['srv-resp-restaurar'] = el => {
+    const n = el.dataset.n;
+    modal({ title: 'Restaurar respaldo del servidor', body: `<div class="alert bad"><div>Todo el equipo vuelve a los datos de <strong>${E(n)}</strong>. Antes se crea un respaldo de lo actual, así que se puede deshacer restaurando ese respaldo.</div></div>
+      <label class="field" style="margin-top:12px">Escribe RESTAURAR para confirmar<input type="text" name="conf"></label>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Restaurar', cls: 'bad', onClick: async root => {
+        if (val(root, 'conf').trim().toUpperCase() !== 'RESTAURAR') { const e = new Error('Escribe RESTAURAR para confirmar.'); e.campos = { conf: 'Requerido' }; throw e; }
+        await AlmacenServidor.restaurar(n); await Repo.refrescar(); S.db = await Repo.snapshot(); S.user = Repo.sesion(S.user.id); toast('Respaldo restaurado para todo el equipo.'); render();
+      } }] });
   };
   ACTIONS['respaldo-importar'] = () => { const i = $('#respaldo-file'); if (i) i.click(); };
   ACTIONS['piloto-reiniciar'] = () => {
@@ -4896,7 +5065,7 @@ const UI = (() => {
     toast('Datos de demo restablecidos.');
     render();
   };
-  ACTIONS['logout'] = () => { closePopover(); S.user = null; S.nueva = null; guardarSesion(null); location.hash = '#/login'; render(); };
+  ACTIONS['logout'] = async () => { closePopover(); S.user = null; S.nueva = null; guardarSesion(null); await Repo.salir().catch(() => {}); location.hash = '#/login'; render(); };
 
   /* ---------- Modal y toast ---------- */
   function modal({ title, body, actions = [], wide = false, onOpen }) {
@@ -5805,6 +5974,9 @@ const UI = (() => {
   /* ---- Carpeta compartida (recurso compartido de red, sin servidor ni nube) ---- */
   function carpetaHTML() {
     const e = Repo.estadoGuardado();
+    if (e.servidor) return e.inicializar
+      ? `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Servidor sin datos.</strong> El primer ingreso de gerencia, jefatura o administración carga los datos iniciales en el servidor. Si el equipo ya trabajaba con la carpeta compartida, exporta un respaldo desde allí y restáuralo aquí después de ingresar.</div></div>`
+      : `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos, guardados en la base de datos del servidor.</div></div>`;
     if (!AlmacenCompartido.soportado()) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Este navegador no puede usar la carpeta compartida.</strong> Abre el archivo en Microsoft Edge o Google Chrome para trabajar con los datos del equipo. Aquí los datos quedan solo en este navegador.</div></div>`;
     if (e.compartida) return `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ Carpeta compartida: ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos.</div><button class="btn sm ghost" data-action="carpeta-elegir">Cambiar</button></div>`;
     if (S.carpetaRecordada) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Conecta la carpeta compartida «${E(S.carpetaRecordada.name)}»</strong> para ver los datos del equipo. El navegador te pedirá permiso.
@@ -8188,12 +8360,12 @@ const UI = (() => {
           <label class="field">Almacén<select data-change="stkf" name="almacen">${options(alms.map(a => [a.id, a.nombre]), F.almacen, 'Todos')}</select></label>
         </div><div class="small muted" style="margin-top:8px">${ms.length} movimientos · del más reciente al más antiguo</div></div>
         <div class="table-wrap" style="margin-top:12px"><table class="tbl" style="min-width:1100px"><thead><tr><th>Fecha</th><th>Tipo</th><th>Código</th><th>Almacén</th><th>Efecto</th><th>Referencia</th>${costos ? '<th class="r">Costo u.</th>' : ''}<th>Usuario</th><th>Nota</th></tr></thead><tbody>
-          ${ms.slice(0, 300).map(m => `<tr><td class="nowrap">${Util.fmtDate(m.fecha)}<div class="cell-sub">${E(m.id)}</div></td><td class="small">${E(Config.TIPOS_MOV[m.tipo])}${m.tipo === 'transferencia' ? `<div class="cell-sub">${m.recibidaPor ? 'recibida' : '<span class="chip warn">en tránsito</span>'}</div>` : ''}</td>
+          ${ms.slice(0, F.lim).map(m => `<tr><td class="nowrap">${Util.fmtDate(m.fecha)}<div class="cell-sub">${E(m.id)}</div></td><td class="small">${E(Config.TIPOS_MOV[m.tipo])}${m.tipo === 'transferencia' ? `<div class="cell-sub">${m.recibidaPor ? 'recibida' : '<span class="chip warn">en tránsito</span>'}</div>` : ''}</td>
             <td class="nowrap"><strong>${E(m.codigo)}</strong><div class="cell-sub">${E(m.marca || '')}</div></td><td class="small">${E(nombreAlm(m.almacenId))}${m.destinoId ? ' → ' + E(nombreAlm(m.destinoId)) : ''}</td>
             <td class="small nowrap">${m.efectos.map(e => `${e.delta > 0 ? '+' : ''}${e.delta} ${E(e.estado === 'transito' ? 'en tránsito' : Config.ESTADOS_STOCK[e.estado].toLowerCase())}${m.destinoId || m.tipo === 'recepcion' ? ' · ' + E(nombreAlm(e.almacenId)) : ''}`).join('<br>')}</td>
             <td class="small">${m.ref ? E(m.ref.tipo + ' ' + m.ref.valor) : ''}${m.oppId ? `<div><a href="#/op/${m.oppId}">${E(m.oppId)}</a></div>` : ''}</td>${costos ? `<td class="r num">${m.costoUSD ? Util.nf2.format(m.costoUSD) : ''}</td>` : ''}
             <td class="small">${E(m.usuarioId === 'sistema' ? 'Carga inicial' : (usr(m.usuarioId) || {}).nombre || '')}</td><td class="small">${E(m.nota || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="center muted" style="padding:20px">Sin movimientos.</td></tr>'}
-        </tbody></table></div>`;
+        </tbody></table></div>${ms.length > F.lim ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="stk-mas">Ver más (${ms.length - F.lim} restantes)</button></div>` : ''}`;
     } else if (F.tab === 'reservas') {
       const vend = u.rol === 'vendedor', mias = r => !vend || (r.oppId && (oppById(r.oppId) || {}).vendedorId === u.id);
       const rs = (db.reservas || []).filter(r => r.estado === 'activa' && mias(r)), ps = (db.pedidosFab || []).filter(p => p.estado === 'pendiente' && mias(p));
@@ -8377,7 +8549,7 @@ const UI = (() => {
         const ocupado = document.querySelector('#modal-root .modal') || S.ruta === 'nueva' || S.ruta === 'login' || (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
         if (!ocupado && S.user) refresh();
       });
-      setInterval(() => Repo.refrescar(), 8000);
+      setInterval(() => Repo.refrescar(), Repo.servidor() ? 4000 : 8000);
       window.addEventListener('focus', () => Repo.refrescar());
       try { const id = sessionStorage.getItem('tv-sesion'); if (id && !Repo.estadoGuardado().seedNuevo && !(S.carpetaRecordada && !Repo.compartida())) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
     }
