@@ -9,5 +9,15 @@
   "horasRespaldo": [10, 12, 14, 16, 18],
   "horaNoche": 23,
   "tipoCambio": true,
-  "hojasDeDatos": true
+  "hojasDeDatos": true,
+  "microsoft365": {
+    "tenantId": "",
+    "clientId": "",
+    "clientSecret": "",
+    "buzonComun": "ventas@empresa.com",
+    "remitente": "plataforma@empresa.com",
+    "teamsWebhook": "",
+    "resumenDiario": true,
+    "horaResumen": 8
+  }
 }

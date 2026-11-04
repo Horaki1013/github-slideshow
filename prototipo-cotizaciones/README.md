@@ -2,8 +2,8 @@
 
 Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FUP). Lee cada cotización enviada, pide al vendedor solo lo mínimo (etapa, próximo contacto y fecha estimada de OC), le recuerda los seguimientos y muestra a jefatura y finanzas las metas, el funnel y la proyección de caja.
 
-- **Archivo único:** `index.html` (HTML + CSS + JS). Se abre con doble clic en Chrome o Edge. No necesita servidor, build ni internet.
-- **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
+- **Archivo único:** `index.html` (HTML + CSS + JS). Se abre con doble clic en Chrome o Edge, sin build ni internet. Con el **servidor local** (`servidor/`, ver `servidor/LEEME-SERVIDOR.md`), todo el equipo trabaja a la vez desde cualquier navegador.
+- **Sin dependencias externas por CDN:** los gráficos son SVG propios. Lo único incluido de terceros es [pdf-lib](https://pdf-lib.js.org) (licencia MIT, dentro del mismo HTML), que une la cotización con sus anexos y hojas de datos en un solo PDF.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
 - **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 21/21 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
@@ -18,8 +18,10 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 | `js` | `demo` | Vendedor | Cerca de la meta |
 | `lp` | `demo` | Vendedor | Cerca de la meta |
 | `dh` | `demo` | Vendedor | Por debajo de la meta |
-| `vc` | `demo` | Vendedor | Nuevo, con poco historial |
-| `jefatura` | `demo` | Jefatura | Ve todo, filtra por vendedor y reasigna |
+| `vc` | `demo` | Vendedor | Nuevo, con poco historial · oficina **Chile** |
+| `jefatura` | `demo` | Gerencia general | Ve Perú y Chile, filtra por vendedor y reasigna |
+| `jefpe` | `demo` | Jefatura de Perú | Solo ve su oficina |
+| `jefcl` | `demo` | Jefatura de Chile | Solo ve su oficina |
 | `finanzas` | `demo` | Finanzas | Proyección y facturado (solo lectura); mantiene la lista de precios |
 | `admin` | `demo` | Administración | Mantiene la lista de precios |
 | `gestion` | `demo` | Gestión / Administración local | Stock del almacén de Perú (oficina PE) |
@@ -36,6 +38,69 @@ El login es **solo de apariencia: no es seguridad real**. La tabla de usuarios a
 En la interfaz, el rol "Vendedor" se muestra como **Account Manager**.
 
 Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario entra por URL a una ruta o a una oportunidad que no le corresponde, el sistema lo redirige o le muestra "Sin acceso".
+
+## Versión 2.0: lo nuevo
+
+**Servidor y datos**
+- **Servidor local** (Node.js con SQLite, carpeta `servidor/`):
+  - una escritura a la vez con un turno corto, para que nadie pierda cambios;
+  - sesiones y documentos guardados en el servidor;
+  - respaldos automáticos (cada 2 horas en horario laboral y cada noche, por 30 días) con restauración desde la plataforma;
+  - tipo de cambio del día y copia de las hojas de datos;
+  - el HTML con doble clic y la carpeta compartida siguen funcionando como respaldo.
+- **Mantenedores:**
+  - **Listas de precios:** pestañas por lista, paginación, selección en lote (quitar o ajustar el precio en %), exportar lo filtrado y link de la hoja de datos.
+  - **Stock:** los movimientos ahora se paginan.
+
+**Oficinas, usuarios y permisos**
+- **Oficinas y alcance:**
+  - *Gerencia general* ve Perú y Chile, y la *jefatura de oficina* ve solo la suya. El filtro se aplica en un solo lugar: `Rules.vista()`.
+  - Finanzas, administración, logística y gestión pueden tener una oficina o ambas.
+  - Cada oficina define su moneda, país, ciudad, impuesto (IGV 18 % o IVA 19 %), zona horaria y plantilla.
+- **Permisos por usuario** (administración): sobre los del rol, para los permisos configurables (`Config.PERMISOS_EDITABLES`).
+- **Usuarios:**
+  - eliminar un usuario conserva su historial;
+  - "Reasignar cartera" pasa sus cuentas, oportunidades abiertas y leads a otro vendedor.
+- **Borrado de cotizaciones:** el vendedor lo solicita con una justificación y administración lo aprueba o rechaza. El borrado es recuperable y el número no se reutiliza.
+- **Cliente de prueba** (uno por oficina):
+  - numeración propia `PRUEBA-INI-NNNN` y marca de agua en el PDF;
+  - no cuenta en métricas, metas, ranking, comisiones ni alertas (`Rules.reales()`).
+- **Ranking:** la comparación entre vendedores la ven jefatura, gerencia y finanzas. Cada vendedor ve sus propios rankings:
+  - clientes a los que más cotiza;
+  - clientes que más le facturan;
+  - clientes que más ítems le compran;
+  - marcas por cliente, productos y tipos de lead, todo exportable a Excel.
+
+**Cotizaciones**
+- **Monedas USD, PEN, CLP y EUR:**
+  - tipo de cambio del día por oficina (SUNAT o Banco Central de Chile, vía servidor), editable en cada cotización y mostrado respecto de una moneda base elegible;
+  - la cotización guarda los tipos que usó, y los montos se llevan a USD con el suyo.
+- **Varias listas de precios, cada una con su moneda:**
+  - la cotización tiene una lista predeterminada y en cada ítem se puede elegir otra;
+  - si un producto está en varias listas, se ven todos sus precios.
+- **Kits y globales:** desglose interno de partes, con precios de lista editables y su suma como precio. Las partes no salen en el PDF.
+- **Descuento por ítem** en monto o en %, también en opcionales.
+- **Alternativa de otra marca** en el mismo documento: queda ligada al ítem que reemplaza ("Alt. 1") y no suma al total.
+
+**Plantilla y PDF**
+- **Plantilla por país:**
+  - título, identificador fiscal, color, textos, columnas visibles, impuesto, moneda por defecto y texto de cierre;
+  - los datos y condiciones de Chile se ajustan sobre los de Perú (`Rules.empresaOficina()`).
+- **PDF único:** cotización, luego los anexos de la plantilla (por ejemplo términos y condiciones, subidos o por link) y al final las hojas de datos de los productos cotizados.
+  - Si un link no responde, el servidor usa su copia y avisa.
+  - Sin servidor, los links que no se pudieron adjuntar quedan en una página final.
+
+**Reportes y asistencia**
+- **Reportes de follow up personalizables:**
+  - filtros: vigentes, ganadas, perdidas (con o sin motivo), en pausa, período, vendedor, origen y búsqueda;
+  - columnas a elección y resumen por estado, etapa y vendedor (montos y ponderado);
+  - salida en Excel y PDF, vistas guardadas y envío programado.
+- **Asistencia** (solo en el piloto): reporte mensual de horas trabajadas, esperadas, extra y faltantes según el régimen semanal de cada persona (40 h por defecto), con la hora de referencia de su oficina. El historial se conserva aunque la persona ya no esté activa.
+
+**Microsoft 365** (vía servidor, `servidor/m365.js`)
+- Envío de cotizaciones desde el Outlook de cada vendedor con su **speech predeterminado** (editable en "Mis datos"), copia al buzón común y el PDF completo adjunto. Sin servidor, se descarga un borrador `.eml`.
+- Agenda de Outlook visible y administrable desde la plataforma ("Mi agenda"); "Agendar en Outlook" desde cada oportunidad. Sin servidor, un archivo `.ics`.
+- Resumen diario de pendientes y reportes programados por correo (calculados en el servidor con las mismas `Rules`) y avisos al canal de Teams.
 
 ## Modo piloto (uso interno de prueba)
 

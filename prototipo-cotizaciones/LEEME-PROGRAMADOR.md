@@ -20,8 +20,9 @@ Este paquete describe una plataforma que ya existe como **prototipo funcional** 
 
 | Usuario | Rol | Para ver |
 |---|---|---|
-| `cm`, `js`, `lp`, `dh`, `vc` | Account Manager (vendedor) | Mi día, oportunidades, nueva cotización y su PDF, cuentas, leads, proyección, ranking |
-| `jefatura` | Gerencia / Jefatura | Dashboard, todo el equipo, asignaciones, leads, usuarios, datos de la empresa |
+| `cm`, `js`, `lp`, `dh`, `vc` | Account Manager (vendedor; `vc` es de Chile) | Mi día, oportunidades, nueva cotización y su PDF, cuentas, leads, proyección, mis rankings, reportes, agenda |
+| `jefatura` | Gerencia general (Perú y Chile) | Dashboard, todo el equipo, asignaciones, leads, usuarios, empresa y plantilla, reportes |
+| `jefpe`, `jefcl` | Jefatura de oficina | Lo mismo, solo con los datos de su oficina |
 | `finanzas` | Finanzas | Proyección de facturación y cobranza, facturado, post-venta, lista de precios |
 | `gestion` | Gestión / Administración local | Stock del almacén de Perú, movimientos, post-venta |
 | `admin` | Administración del sistema | Usuarios, lista de precios, post-venta |
@@ -43,6 +44,19 @@ Este paquete describe una plataforma que ya existe como **prototipo funcional** 
 - **Usuarios y empresa:** alta, roles, metas, oficina (PE / CL), datos de la empresa y condiciones comerciales que salen en el PDF.
 - **Notificaciones:** vista previa de los correos de resumen diario y semanal y de los eventos de Outlook (no se envía nada).
 - **Historial:** todo cambio de datos (stock, leads, asignaciones, precios, post-venta) queda registrado con usuario y fecha.
+
+## Versión 2.0
+
+El detalle de lo nuevo está en `README.md` (sección "Versión 2.0: lo nuevo"). En resumen:
+- servidor local con SQLite y respaldos;
+- oficinas, permisos por usuario y borrado de cotizaciones con aprobación;
+- monedas con tipo de cambio del día y varias listas de precios;
+- kits, descuentos por ítem y alternativas de marca;
+- plantilla por país y PDF único con anexos y hojas de datos;
+- reportes de follow up personalizables;
+- integración con Microsoft 365 (Outlook y Teams).
+
+La carpeta `servidor/` es una **implementación de referencia**: muestra cómo se concurre, respalda e integra. El proveedor puede reutilizarla o reemplazarla.
 
 ## Arquitectura del prototipo
 
@@ -84,11 +98,11 @@ El modelo de datos completo (usuarios, clientes, proyectos, oportunidades, cotiz
 
 | Hoy en el prototipo | Lo que se necesita en producción |
 |---|---|
-| Datos en el navegador (IndexedDB) o en una carpeta de red compartida | **Servidor propio con base de datos y API** (la empresa prefiere **no usar nube pública**; confirmar opción on-premise o servidor local) |
+| Servidor local de referencia (`servidor/`: Node.js + SQLite, escritura serializada, respaldos) o, sin él, navegador / carpeta compartida | **Servidor propio con base de datos y API** con validación de permisos en el servidor (la empresa prefiere **no usar nube pública**: on-premise) |
 | Login de apariencia | Login corporativo con **Microsoft 365 / Entra ID** y permisos validados en el servidor |
 | PDF generado en el navegador | Generación en el servidor, guardado en el repositorio documental (OneDrive / SharePoint o carpeta del servidor) y envío desde el Outlook del vendedor con copia al buzón común |
 | Lectura de PDF en el navegador; "cotizaciones leídas del correo" simuladas | **Lectura automática con IA** de las cotizaciones enviadas (buzón común y carpeta de enviados de cada vendedor) vía **Microsoft Graph** |
-| Correos de resumen y eventos de Outlook solo en vista previa | Envío real de correos (resumen diario 8:00 a. m., semanal los lunes) y creación de eventos en el calendario de Outlook |
+| Microsoft 365 por Graph ya integrado en el servidor de referencia (envío de cotizaciones, agenda, resúmenes, Teams), activado por configuración | Ingreso único con Microsoft 365 (Entra ID) y endurecimiento de la integración |
 | Leads importados desde un archivo de HubSpot; correos de fabricante pegados a mano | Integración con la **API de HubSpot** y lectura del buzón de leads; orquestación (por ejemplo **n8n** o colas) |
 | Tipo de cambio ficticio | Tipo de cambio diario real (SBS / SUNAT) con histórico |
 | Carpeta de cotizaciones local del vendedor | Guardado automático en el repositorio documental |

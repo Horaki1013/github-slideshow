@@ -480,6 +480,14 @@ tr.quick-open>td{border-bottom:0}
 .h-cierre { margin: 10px 0 0; font-size: 12px; }
 .h-anexos { margin-top: 10px; font-size: 11px; color: var(--brand-700); }
 .field input[type="color"] { height: 38px; min-height: 38px; padding: 3px 4px; width: 100%; box-sizing: border-box; }
+.agenda-sem { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 10px; margin-top: 12px; }
+.agenda-dia { margin: 0; }
+.agenda-dia.hoy { border-color: var(--brand-400); }
+.ag-ev { display: grid; grid-template-columns: 74px 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.ag-ev .ag-h { color: var(--muted); font-size: 12px; }
+.ag-ev > div { min-width: 0; overflow-wrap: anywhere; }
+.agenda-dia, .agenda-sem > * { min-width: 0; }
+.ag-ev.plat .ag-h { color: var(--brand-700); }
 </style>
 </head>
 <body class="logged-out">
@@ -554,6 +562,11 @@ const Config = {
   OFICINA_DEF: {
     PE: { moneda: 'USD', pais: 'Perú', ciudad: 'Lima', impuesto: 0.18, nombreImpuesto: 'IGV', zona: 'America/Lima' },
     CL: { moneda: 'USD', pais: 'Chile', ciudad: 'Santiago', impuesto: 0.19, nombreImpuesto: 'IVA', zona: 'America/Santiago' },
+  },
+  /** Texto predeterminado del correo con que se envía una cotización; cada vendedor lo ajusta en "Mis datos" */
+  SPEECH_DEF: {
+    asunto: 'Cotización N° {numero} · {cliente}',
+    cuerpo: 'Estimado(a) {contacto}:\n\nJunto con saludar, le envío la cotización N° {numero}{referencia}, por un total de {total}, válida por {validez} días. En el mismo PDF van los términos y condiciones y las hojas de datos de los productos.\n\nQuedo atento(a) a sus comentarios.\n\nSaludos cordiales,\n{vendedor}\n{cargo}\n{telefono}',
   },
   /** Permisos que administración puede dar o quitar a cada usuario (sobre los de su rol) */
   PERMISOS_EDITABLES: {
@@ -2891,8 +2904,8 @@ const Rules = (() => {
 
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
-    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'reportes', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'ranking', 'reportes', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
+    vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'reportes', 'agenda', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'ranking', 'reportes', 'agenda', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
     finanzas: ['proyeccion', 'facturado', 'reportes', 'postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo', 'empresa'],
     logistica: ['postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo'],
     gestion: ['stock', 'postventa', 'cotizaciones', 'catalogo', 'contactos'],
@@ -3507,6 +3520,15 @@ const AlmacenServidor = (() => {
       return { blob: await r.blob(), estado: r.headers.get('X-Hoja-Estado'), fecha: r.headers.get('X-Hoja-Fecha'), error: decodeURIComponent(r.headers.get('X-Hoja-Error') || '') };
     },
     hojas: () => api('hojas'),
+    // Microsoft 365 (Outlook y Teams) por el servidor
+    m365: () => api('m365'),
+    enviarCorreo: d => api('correo', { cuerpo: d }),
+    agenda: (desde, hasta) => api('agenda?desde=' + encodeURIComponent(desde) + '&hasta=' + encodeURIComponent(hasta)),
+    guardarEvento: d => api('evento', { cuerpo: d }),
+    borrarEvento: id => api('evento?id=' + encodeURIComponent(id), { metodo: 'DELETE' }),
+    teams: (texto, titulo) => api('teams', { cuerpo: { texto, titulo } }),
+    envios: () => api('envios'),
+    probarM365: () => api('probar', { cuerpo: {} }),
     // ---- Misma interfaz que AlmacenCompartido ----
     metodos: {
       soportado: () => true,
@@ -4158,8 +4180,17 @@ const Repo = (() => {
       const t = v => String(v == null ? '' : v).trim();
       if (t(datos.correo) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(datos.correo))) fail('Correo no válido.', { correo: 'Correo no válido.' });
       Object.assign(u, { telefono: t(datos.telefono), correo: t(datos.correo), cargo: t(datos.cargo) || u.cargo });
+      if (datos.speech) { const sp = { asunto: t(datos.speech.asunto).slice(0, 200), cuerpo: String(datos.speech.cuerpo || '').slice(0, 4000) }; if (sp.asunto || sp.cuerpo.trim()) u.speech = sp; else delete u.speech; }
+      if (datos.notificaciones) u.notificaciones = { resumenDiario: datos.notificaciones.resumenDiario !== false, teams: !!datos.notificaciones.teams };
       touch();
       return u;
+    },
+    /** Deja en el seguimiento que la cotización se envió por correo (y a quién) */
+    async registrarEnvioCotizacion(quoteId, d, usuarioId) {
+      const q = db.quotes.find(x => x.id === quoteId) || fail('Cotización no encontrada.'), o = opp(q.oppId);
+      q.envios = (q.envios || []).concat([{ en: Util.ahora(), para: String(d.para || '').slice(0, 300), via: d.via === 'outlook' ? 'outlook' : 'eml', usuarioId }]);
+      db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Correo', nota: `Cotización N° ${q.numero} enviada ${d.via === 'outlook' ? 'desde Outlook' : '(borrador de correo descargado)'} a ${String(d.para || '').slice(0, 200)}`, proxContacto: o.proxContacto || null, usuarioId, auto: true });
+      touch();
     },
     /** PUT /borradores — cotización a medio hacer que el vendedor guarda para continuar después (solo la ve él) */
     async guardarBorrador(usuarioId, { id, d }) {
@@ -5366,8 +5397,8 @@ const UI = (() => {
   /* ---------- Enrutador ---------- */
   const PAGES = {};
   const NAV = {
-    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Mis rankings', 'trophy'], ['reportes', 'Reportes', 'list'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['reportes', 'Reportes de follow up', 'list'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Empresa y plantilla', 'file']],
+    vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Mis rankings', 'trophy'], ['reportes', 'Reportes', 'list'], ['agenda', 'Mi agenda (Outlook)', 'cal'], ['notificaciones', 'Notificaciones', 'bell']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['reportes', 'Reportes de follow up', 'list'], ['agenda', 'Mi agenda (Outlook)', 'cal'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Empresa y plantilla', 'file']],
     finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['reportes', 'Reportes de follow up', 'list'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['stock', 'Stock', 'stock'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Empresa y plantilla', 'file']],
     logistica: [['postventa', 'Post-venta', 'box'], ['stock', 'Stock', 'stock'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
     gestion: [['stock', 'Stock', 'stock'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
@@ -5418,8 +5449,8 @@ const UI = (() => {
     const u = S.user;
     const items = NAV[u.rol];
     $('#sidenav').innerHTML = items.map(([r, l, ic]) => `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(ic)}<span>${E(l)}</span></a>`).join('') +
-      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? (Repo.servidor() ? `Piloto Techvalue. Datos del equipo en ${E(Repo.estadoGuardado().carpeta)} (base de datos con respaldos automáticos).` : Repo.compartida() ? `Piloto Techvalue Perú. Datos del equipo en la carpeta compartida «${E(Repo.estadoGuardado().carpeta)}».` : 'Piloto Techvalue Perú. Los datos se guardan en este navegador.') : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
-    $('#mode-badge').textContent = piloto() ? (Repo.servidor() ? 'Piloto · servidor de la empresa' : Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia';
+      `<div class="nav-sep"></div><div class="nav-foot">${piloto() ? (Repo.servidor() ? `Piloto Techvalue. Datos del equipo en ${E(Repo.estadoGuardado().carpeta)} (base de datos con respaldos automáticos).` : Repo.compartida() ? `Piloto Techvalue. Datos del equipo en la carpeta compartida «${E(Repo.estadoGuardado().carpeta)}».` : 'Piloto Techvalue. Los datos se guardan en este navegador.') : 'Prototipo navegable · data ficticia generada en el navegador. Los cambios se pierden al recargar.'}<div id="save-status" style="margin-top:6px">${textoGuardado(Repo.estadoGuardado())}</div></div>`;
+    $('#mode-badge').textContent = piloto() ? (Repo.servidor() ? 'Piloto · servidor de la empresa' : Repo.compartida() ? 'Piloto Techvalue · carpeta compartida' : 'Piloto Techvalue · datos en este navegador') : 'Prototipo · data ficticia';
     $('#bottomnav').innerHTML = NAV_MOBILE[u.rol].map(r => { const it = items.find(x => x[0] === r); return `<a href="#/${r}" class="${ruta === r || (ruta === 'op' && r === 'oportunidades') || (ruta === 'cuenta' && r === 'cuentas') ? 'active' : ''}">${I(it[2])}<span>${CORTO[r]}</span></a>`; }).join('');
     const n = Rules.alertasUsuario(S.db, u, hoy()).length;
     const bell = $('#bell-btn');
@@ -5448,7 +5479,7 @@ const UI = (() => {
   /** El piloto guarda los datos del equipo en una carpeta de red, que solo Edge y Chrome pueden usar */
   function renderNavegadorNoSoportado() {
     document.body.classList.add('logged-out');
-    renderChromeLoggedOut(); $('#mode-badge').textContent = 'Piloto Perú';
+    renderChromeLoggedOut(); $('#mode-badge').textContent = 'Piloto Techvalue';
     view().innerHTML = `<div class="login-wrap"><div class="card login-card"><div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${marcaLogin()}<div><h1 style="margin:0">Abre la plataforma en Edge o Chrome</h1></div></div>
       <div class="alert warn"><div>Este navegador (por ejemplo Firefox o Safari) no puede usar la <strong>carpeta compartida</strong> donde el equipo guarda los datos del piloto. Si trabajaras aquí, lo que registres no lo vería nadie más y tú no verías lo del equipo.</div></div>
       <ol class="small" style="margin:12px 0 0;padding-left:18px"><li>Abre <strong>Microsoft Edge</strong> (viene con Windows) o <strong>Google Chrome</strong>.</li><li>Abre el mismo archivo o el acceso directo de la plataforma.</li><li>Ingresa con tu usuario de siempre.</li></ol></div></div>`;
@@ -5556,13 +5587,21 @@ const UI = (() => {
     const u = S.user, f = (n, l, t) => `<label class="field">${l}<input type="${t || 'text'}" name="${n}" value="${E(u[n] || '')}"></label>`;
     modal({ title: 'Mis datos', body: `<p class="small muted" style="margin-top:0">Salen en el PDF de tus cotizaciones ("Emitido por"). Tu rol, meta e iniciales los cambia gerencia o administración.</p>
       <div class="form-grid">${f('telefono', 'Teléfono', 'tel')}${f('correo', 'Correo', 'email')}${f('cargo', 'Cargo')}</div>
+      ${['vendedor', 'jefatura'].includes(u.rol) ? `<section class="cc-box"><h3>Speech predeterminado para enviar cotizaciones</h3>
+        <p class="small muted" style="margin:0 0 8px">Se usa al enviar una cotización por correo; lo puedes ajustar en cada envío. Variables: {cliente} {contacto} {numero} {referencia} {total} {validez} {vendedor} {cargo} {telefono}.</p>
+        <label class="field">Asunto<input type="text" name="spAsunto" value="${E((u.speech || {}).asunto || Config.SPEECH_DEF.asunto)}"></label>
+        <label class="field" style="margin-top:8px">Mensaje<textarea name="spCuerpo" rows="8">${E((u.speech || {}).cuerpo || Config.SPEECH_DEF.cuerpo)}</textarea></label></section>` : ''}
+      <section class="cc-box"><h3>Avisos</h3>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="ntDiario"${(u.notificaciones || {}).resumenDiario !== false ? ' checked' : ''}> Recibir cada mañana (8:00) el resumen de mis pendientes en mi correo de Outlook</label>
+        <p class="small muted" style="margin:6px 0 0">Se envía cuando el servidor de la empresa está conectado a Microsoft 365.</p></section>
       ${u.rol === 'vendedor' ? `<section class="cc-box"><h3>Carpeta de cotizaciones</h3>
         ${CarpetaCot.soportado() ? `<p class="small muted" style="margin:0 0 8px">Elige una carpeta de tu PC una sola vez: cada cotización que registres se guarda ahí sola, como <em>N° de cotización - Cliente.pdf</em>, y también se copia el PDF de las cotizaciones ya enviadas que registres. Nunca se sobrescribe un archivo.</p>
           <div class="cc-row"><span id="cc-estado" class="small">Revisando…</span><button type="button" class="btn sm" data-cc="elegir">Elegir carpeta…</button><button type="button" class="btn sm ghost hidden" data-cc="quitar">Dejar de usar</button></div>
           <label class="field" style="margin-top:8px">Subcarpetas<select data-cc="sub">${options([['ninguna', 'Ninguna (todo en la carpeta elegida)'], ['mes', 'Por año-mes (2026-10)'], ['cliente', 'Por cliente']], 'ninguna')}</select></label>
           <p class="small muted" style="margin:8px 0 0">${I('alert').replace('<svg', '<svg width="12" height="12"')} Si eliges una carpeta dentro de tu carpeta de <strong>OneDrive</strong> (sincronizada en tu PC), los PDF quedan respaldados en OneDrive automáticamente.</p>`
         : '<p class="small" style="margin:0">Tu navegador no permite guardar en una carpeta elegida: los PDF se descargan como siempre. Para usar esta opción, abre la plataforma en <strong>Chrome</strong> o <strong>Edge</strong>.</p>'}</section>` : ''}`,
-      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { await Repo.guardarMisDatos(u.id, { telefono: val(root, 'telefono'), correo: val(root, 'correo'), cargo: val(root, 'cargo') }); S.user = Repo.sesion(u.id); toast('Tus datos se actualizaron.'); render(true); } }],
+      actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async root => { await Repo.guardarMisDatos(u.id, { telefono: val(root, 'telefono'), correo: val(root, 'correo'), cargo: val(root, 'cargo'),
+        speech: root.querySelector('[name=spAsunto]') ? { asunto: val(root, 'spAsunto'), cuerpo: root.querySelector('[name=spCuerpo]').value } : undefined, notificaciones: { resumenDiario: root.querySelector('[name=ntDiario]').checked } }); S.user = Repo.sesion(u.id); toast('Tus datos se actualizaron.'); render(true); } }],
       onOpen: root => { if (u.rol === 'vendedor' && CarpetaCot.soportado()) configCarpeta(root); } });
   };
   /** Mis datos → Carpeta de cotizaciones: se aplica al momento (no depende del botón Guardar) */
@@ -6105,7 +6144,7 @@ const UI = (() => {
         const cod = C.cod ? doc.partir(it.codigo, C.cod.w - 6, 'F2', 7.5) : [], mar = C.mar ? doc.partir(it.marca, C.mar.w - 6, 'F2', 7.5) : [], des = doc.partir((C.cod ? '' : it.codigo + (C.mar ? '' : ' · ' + it.marca) + '\n') + txtD, C.des.w - 10, 'F1', 7);
         const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1), h = nl * lh + 10;
         if (asegurar(h)) cabecera();
-        const mid = y + h / 2, base = k => mid - (nl * lh) / 2 + lh * (k + 0.8);
+        const mid = y + h / 2;
         doc.rect(C.des.x + 2, y + 2, C.des.w - 4, h - 4, { fill: CELESTE });
         doc.texto(etiqueta(i), C.item.x, mid + 2.5, { t: 7.5, align: 'center', w: C.item.w, color: NEGRO });
         doc.texto(Util.nf2.format(+it.cant || 0).replace(/\.00$/, ''), C.cant.x, mid + 2.5, { t: 7.5, align: 'center', w: C.cant.w, color: NEGRO });
@@ -6318,7 +6357,7 @@ const UI = (() => {
     $('#print-root').innerHTML = `<div class="pdf-back" role="dialog" aria-modal="true" aria-label="Cotización en PDF">
       <div class="pdf-toolbar"><span class="sim-label">${borrador ? 'Vista previa · aún no registrada' : 'PDF generado por la plataforma'}</span>
         <button class="btn primary" data-action="pdf-descargar">${I('download')} Descargar PDF</button>
-        ${borrador || !['vendedor', 'jefatura'].includes(S.user.rol) ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo (simulado)</button>`}
+        ${borrador || !['vendedor', 'jefatura'].includes(S.user.rol) ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo</button>`}
         <button class="btn" data-action="pdf-close">${I('x')} Cerrar</button></div>
       ${pdfHTML(ctx)}</div>`;
   }
@@ -6338,7 +6377,53 @@ const UI = (() => {
     } catch (e) { toast('No se pudo generar el PDF: ' + e.message); }
   };
   ACTIONS['pdf-close'] = () => { $('#print-root').innerHTML = ''; S.pdf = null; };
-  ACTIONS['pdf-enviar'] = () => toast(`Simulación: se enviaría a ${S.pdf && S.pdf.contacto ? S.pdf.contacto : 'el contacto'} desde tu Outlook, con copia al buzón común de ventas.`);
+  /* ---------- Enviar la cotización por correo: con el speech del vendedor y el PDF completo adjunto ---------- */
+  let M365 = null;   // estado de la conexión del servidor con Microsoft 365
+  const m365 = async () => { if (!Repo.servidor()) return { configurado: false }; if (!M365) M365 = await AlmacenServidor.m365().catch(() => ({ configurado: false })); return M365; };
+  function speechDe(u, ctx) {
+    const q = ctx.q, t = Rules.totales(q), sp = Object.assign({}, Config.SPEECH_DEF, u.speech || {});
+    const v = { cliente: ctx.cliente.razonSocial, contacto: ctx.contacto || 'cliente', numero: q.numero, referencia: q.referencia ? ` (${q.referencia})` : '', total: Util.money(t.total, q.moneda), validez: q.validezDias, vendedor: (ctx.vendedor || u).nombre, cargo: (ctx.vendedor || u).cargo || '', telefono: (ctx.vendedor || u).telefono || '' };
+    const r = s => String(s || '').replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m);
+    return { asunto: r(sp.asunto), cuerpo: r(sp.cuerpo).replace(/\n{3,}/g, '\n\n').trim() };
+  }
+  const aHtml = txt => `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px">${E(txt).replace(/\n/g, '<br>')}</div>`;
+  const b64 = async blob => { const u8 = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+  /** Borrador de correo .eml (Outlook lo abre listo para enviar) con el PDF adjunto: sirve sin servidor */
+  async function eml({ para, cc, asunto, html, adjunto }) {
+    const lim = 'tv' + Date.now().toString(36), enc = s => '=?UTF-8?B?' + btoa(unescape(encodeURIComponent(s))) + '?=';
+    const partes = [`To: ${para}`, cc ? `Cc: ${cc}` : '', `Subject: ${enc(asunto)}`, 'X-Unsent: 1', 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${lim}"`, '',
+      `--${lim}`, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', btoa(unescape(encodeURIComponent(html))).replace(/.{76}/g, '$&\r\n'), '',
+      `--${lim}`, `Content-Type: application/pdf; name="${adjunto.nombre}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${adjunto.nombre}"`, '', (await b64(adjunto.blob)).replace(/.{76}/g, '$&\r\n'), '', `--${lim}--`, ''];
+    return new Blob([partes.filter((x, i) => x !== '' || i > 4).join('\r\n')], { type: 'message/rfc822' });
+  }
+  ACTIONS['pdf-enviar'] = async () => {
+    const ctx = S.pdf; if (!ctx) return;
+    const u = S.user, sp = speechDe(u, ctx), k = (ctx.cliente.contactos || []).find(x => x.nombre === ctx.contacto) || {}, para = ctx.q.contactoCorreo || k.correo || '', st = await m365();
+    const nombrePdf = `COT_${String(ctx.q.numero || 'cotizacion').replace(/[\\/:*?"<>|]+/g, '-')}.pdf`;
+    modal({ title: `Enviar cotización N° ${ctx.q.numero}`, wide: true, body: `${st.configurado ? `<div class="alert ok" style="margin-top:0"><div>Se envía desde <strong>tu Outlook</strong> (${E(u.correo || 'sin correo registrado')})${st.buzonComun ? ` con copia al buzón común <strong>${E(st.buzonComun)}</strong>` : ''}, con el PDF completo adjunto. Queda en tus enviados.</div></div>`
+        : `<div class="alert info" style="margin-top:0"><div>${Repo.servidor() ? 'El servidor aún no está conectado a Microsoft 365.' : 'Sin el servidor de la empresa conectado a Microsoft 365.'} Se descargará un <strong>borrador de correo</strong> con el PDF adjunto: ábrelo y Outlook lo deja listo para enviar.</div></div>`}
+      <div class="form-grid"><label class="field"><span>Para <span class="req">*</span></span><input type="text" name="para" value="${E(para)}" placeholder="correo@cliente.com"></label>
+        <label class="field">CC<input type="text" name="cc" value="" placeholder="Opcional (separados por coma)"></label></div>
+      <label class="field" style="margin-top:8px">Asunto<input type="text" name="asunto" value="${E(sp.asunto)}"></label>
+      <label class="field" style="margin-top:8px">Mensaje <span class="muted small">(tu speech predeterminado; cámbialo en "Mis datos")</span><textarea name="cuerpo" rows="10">${E(sp.cuerpo)}</textarea></label>
+      <p class="small muted">Adjunto: ${E(nombrePdf)} (cotización${anexosPrevistos(ctx).length ? ' + ' + anexosPrevistos(ctx).map(a => E(a.nombre)).join(' + ') : ''}).</p>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('mail')} ${st.configurado ? 'Enviar' : 'Descargar borrador de correo'}`, cls: 'primary', onClick: async r => {
+        const d = { para: val(r, 'para'), cc: val(r, 'cc'), asunto: val(r, 'asunto'), cuerpo: r.querySelector('[name=cuerpo]').value };
+        if (!/@/.test(d.para)) { const e = new Error('Indica el correo del destinatario.'); e.campos = { para: 'Obligatorio' }; throw e; }
+        toast('Armando el PDF con sus anexos…');
+        const doc = await documentoCotizacion(ctx);
+        if (st.configurado) {
+          await AlmacenServidor.enviarCorreo({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjuntos: [{ nombre: nombrePdf, tipo: 'application/pdf', base64: await b64(doc.blob) }] });
+          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook' }, u.id).catch(() => {});
+          toast(`Cotización enviada a ${d.para}${st.buzonComun ? ' (copia al buzón común)' : ''}.`);
+        } else {
+          Util.descargar(await eml({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjunto: { nombre: nombrePdf, blob: doc.blob } }), nombrePdf.replace(/\.pdf$/, '.eml'));
+          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'eml' }, u.id).catch(() => {});
+          toast('Borrador de correo descargado: ábrelo con Outlook y pulsa Enviar.', { ms: 7000 });
+        }
+        if (doc.avisos.length) setTimeout(() => toast(doc.avisos.join(' '), { ms: 9000 }), 800);
+      } }] });
+  };
 
   /* ---------- Fúnel vertical: leads arriba, por cerrar y cerradas abajo ---------- */
   function funnelHTML({ vendedorId = null } = {}) {
@@ -6577,7 +6662,7 @@ const UI = (() => {
     if (piloto()) {
       view().innerHTML = `<div class="login-wrap"><div class="card login-card">
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${marcaLogin()}
-          <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A. · Piloto Perú</div></div></div>
+          <div><h1 style="margin:0">Ingresar</h1><div class="muted small">Seguimiento de cotizaciones · Techvalue S.A. · Piloto Techvalue</div></div></div>
         ${carpetaHTML()}
         <form data-submit="login" class="stack" autocomplete="on"${S.carpetaRecordada && !Repo.compartida() ? ' inert style="opacity:.5"' : ''}>
           <label class="field">Usuario<input type="text" name="usuario" autocapitalize="none" autocomplete="username"></label>
@@ -6664,7 +6749,7 @@ const UI = (() => {
     m.outerHTML = `<span class="logo-img"><img src="${logoEmpresa()}" alt="Techvalue"></span>`;
     $('.topbar .logo-text').innerHTML = '<small>Seguimiento de cotizaciones</small>';
   }
-  function renderChromeLoggedOut() { $('#sidenav').innerHTML = ''; $('#bottomnav').innerHTML = ''; $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Perú · carpeta compartida' : 'Piloto Perú · datos en este navegador') : 'Prototipo · data ficticia'; }
+  function renderChromeLoggedOut() { $('#sidenav').innerHTML = ''; $('#bottomnav').innerHTML = ''; $('#mode-badge').textContent = piloto() ? (Repo.compartida() ? 'Piloto Techvalue · carpeta compartida' : 'Piloto Techvalue · datos en este navegador') : 'Prototipo · data ficticia'; }
   async function entrar(usuario, clave) {
     try {
       S.user = await Repo.login(usuario, clave);
@@ -6948,7 +7033,7 @@ const UI = (() => {
           <div class="fact"><div class="l">Probabilidad <span class="muted">derivada</span></div><div class="v">${probTxt(o)}</div></div>
           <div class="fact"><div class="l">Monto (neto sin IGV)</div><div class="v">${money(monto)}</div>${q && q.moneda !== 'USD' ? `<div class="small muted">${Util.money(Rules.totales(q).neto, q.moneda)} · 1 USD = ${(+Rules.tcUSD(q)).toFixed(q.moneda === 'CLP' ? 2 : 4)} ${q.moneda}</div>` : ''}</div>
           <div class="fact"><div class="l">Ponderado</div><div class="v">${money(Rules.ponderado(db, o))}</div></div>
-          <div class="fact"><div class="l">Próximo contacto ${abierta && !o.proxContacto ? '<span class="chip bad">Falta</span>' : ''}</div>${proxCampo}</div>
+          <div class="fact"><div class="l">Próximo contacto ${abierta && !o.proxContacto ? '<span class="chip bad">Falta</span>' : ''}</div>${proxCampo}${abierta && o.proxContacto && ed ? `<button class="btn sm ghost" data-action="ag-op" data-id="${o.id}" data-f="${o.proxContacto}" style="margin-top:4px">${I('cal')} Agendar en Outlook</button>` : ''}</div>
           <div class="fact"><div class="l">Fecha estimada de OC</div>${ocCampo}</div>
           <div class="fact"><div class="l">Origen</div><div class="v small">${o.origenOpp && o.origenOpp.id ? E(Rules.origenNombre(db, o.origenOpp)) : '<span class="chip warn">Sin origen</span>'}${o.origenOpp && o.origenOpp.leadId ? ` · lead ${E(o.origenOpp.leadId)}` : ''}</div>
             ${S.user.rol === 'jefatura' || ed ? `<button class="btn sm ghost" data-action="opp-origen" data-id="${o.id}">${o.origenOpp && o.origenOpp.id ? 'Cambiar' : 'Completar'}</button>` : ''}</div>
@@ -7522,7 +7607,6 @@ const UI = (() => {
           <thead><tr><th>Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th>V. unit. (${d.moneda})</th><th>Dscto.</th><th class="r">Total</th><th></th></tr></thead>`;
         const conI = d.items.map((it, i) => [it, i]);
         const principales = conI.filter(([it]) => !it.opcional && !it.alternativa), alternativas = conI.filter(([it]) => it.alternativa && !it.opcional), opcionales = conI.filter(([it]) => it.opcional);
-        const nroDe = uid => { const k = principales.findIndex(([x]) => x.uid === uid); return k >= 0 ? k + 1 : null; };
         const ls = Rules.listas(S.db), variasListas = ls.length > 1;
         const fila = ([it, i]) => `<tr${it.opcional ? ' class="fila-opc"' : it.alternativa ? ' class="fila-alt"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
@@ -7725,7 +7809,7 @@ const UI = (() => {
       convertirItems(d, antes); render(true); }
     else if (el.dataset.nqTcbase) { S.nueva.d.tcBase = el.value; render(true); }
     else if (el.dataset.nqAltde) { S.nueva.d.items[+el.dataset.nqAltde].alternativaDe = el.value; }
-    else if (el.dataset.nqLista) { const d = S.nueva.d, i = +el.dataset.nqLista, it = d.items[i], p = (S.db.catalogo || []).find(x => x.id === el.value); if (p) { aplicarProducto(i, p); render(true); } }
+    else if (el.dataset.nqLista) { const i = +el.dataset.nqLista, p = (S.db.catalogo || []).find(x => x.id === el.value); if (p) { aplicarProducto(i, p); render(true); } }
     else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; render(true); }
   });
   ACTIONS['nq-add-item'] = () => { S.nueva.d.items.push(itemVacio()); render(true); };
@@ -8057,6 +8141,75 @@ const UI = (() => {
       { nombre: 'Productos', fija: true, anchos: [24, 16, 50, 10, 16], filas: [['Código', 'Marca', 'Descripción', 'Unidades', 'USD'], ...R.productos.map(p => [p.codigo, p.marca, p.descripcion, p.n, p.usd])] },
       { nombre: 'Tipos de lead', fija: true, anchos: [36, 10, 10], filas: [['Tipo de lead', 'Leads', 'Ganadas'], ...R.tipos.map(x => [(Rules.origenDe(S.db, x.id) || { nombre: x.id }).nombre, x.n, x.ganadas])] },
     ]), `mis_rankings_${S.user.iniciales || ''}_${h}.xlsx`);
+  };
+
+  /* =====================================================================
+     MI AGENDA (OUTLOOK) — eventos del calendario de Outlook y seguimientos de la plataforma; se crean y editan desde aquí
+     ===================================================================== */
+  /** Fecha y hora de la oficina del usuario (Lima o Santiago) → instante UTC */
+  function aUTC(fecha, hora, zona) {
+    const [a, m, d] = fecha.split('-').map(Number), [h, mi] = hora.split(':').map(Number), guess = Date.UTC(a, m - 1, d, h, mi);
+    const p = {}; new Intl.DateTimeFormat('en-GB', { timeZone: zona, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(guess)).forEach(x => { p[x.type] = x.value; });
+    const visto = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+    return new Date(guess - (visto - guess));
+  }
+  /** Instante → { fecha, hora } en la oficina del usuario */
+  function enZona(iso, zona) { const p = {}; new Intl.DateTimeFormat('en-GB', { timeZone: zona, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso)).forEach(x => { p[x.type] = x.value; }); return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` }; }
+  const zonaUsuario = () => (Config.OFICINA_DEF[S.user.oficina || 'PE'] || Config.OFICINA_DEF.PE).zona;
+  /** Evento .ics (sin servidor): Outlook lo abre y lo agrega al calendario */
+  function ics({ asunto, inicio, fin, lugar, nota }) {
+    const f = d => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''), e = s => String(s || '').replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
+    return new Blob([['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Plataforma de cotizaciones//ES', 'BEGIN:VEVENT', `UID:${Date.now()}@cotizaciones`, `DTSTAMP:${f(new Date())}`, `DTSTART:${f(inicio)}`, `DTEND:${f(fin)}`,
+      `SUMMARY:${e(asunto)}`, `LOCATION:${e(lugar)}`, `DESCRIPTION:${e(nota)}`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n')], { type: 'text/calendar' });
+  }
+  PAGES['agenda'] = async () => {
+    const u = S.user, z = zonaUsuario(), F = S.agO = S.agO || { semana: Util.addDays(hoy(), -((new Date(hoy() + 'T12:00:00').getDay() + 6) % 7)) };
+    const dias = [...Array(7)].map((_, i) => Util.addDays(F.semana, i)), st = await m365();
+    let eventos = [], error = '';
+    if (st.configurado) { try { eventos = (await AlmacenServidor.agenda(aUTC(dias[0], '00:00', z).toISOString(), aUTC(Util.addDays(dias[6], 1), '00:00', z).toISOString())).eventos; } catch (e) { error = e.message; } }
+    // Lo de la plataforma: próximos contactos y fechas de OC de mis oportunidades en esta semana
+    const mias = S.db.opps.filter(o => (u.rol !== 'vendedor' || o.vendedorId === u.id) && Rules.esAbierta(o));
+    const plat = []; mias.forEach(o => { if (dias.includes(o.proxContacto)) plat.push({ fecha: o.proxContacto, tipo: 'Próximo contacto', o }); if (dias.includes(o.fechaOC)) plat.push({ fecha: o.fechaOC, tipo: 'Fecha estimada de OC', o }); });
+    const porDia = d => eventos.map(e => Object.assign({}, e, { z: enZona(e.inicio, z), zf: enZona(e.fin, z) })).filter(e => e.z.fecha === d).sort((a, b) => a.z.hora.localeCompare(b.z.hora));
+    view().innerHTML = `<div class="page-head"><div><h1>Mi agenda (Outlook)</h1><p class="muted">Semana del ${Util.fmtDate(dias[0])} al ${Util.fmtDate(dias[6])} · hora de ${E(Config.OFICINAS[u.oficina || 'PE'])}</p></div>
+        <div class="btn-row" style="flex-wrap:wrap"><button class="btn" data-action="ag-sem" data-d="-7">‹ Semana anterior</button><button class="btn" data-action="ag-sem" data-d="0">Esta semana</button><button class="btn" data-action="ag-sem" data-d="7">Semana siguiente ›</button><button class="btn primary" data-action="ag-evento">${I('plus')} Nuevo evento</button></div></div>
+      ${st.configurado ? (error ? `<div class="alert bad"><div>No se pudo leer tu calendario: ${E(error)}</div></div>` : `<div class="alert ok"><div>Conectado al calendario de Outlook de <strong>${E(u.correo || '')}</strong>. Lo que crees o cambies aquí se ve en Outlook y en Teams.</div></div>`)
+        : `<div class="alert info"><div>${Repo.servidor() ? 'El servidor aún no está conectado a Microsoft 365: ' : 'Sin el servidor de la empresa: '}aquí ves tus seguimientos de la plataforma. "Agendar" descarga el evento para abrirlo en Outlook. Cuando el servidor se conecte a Microsoft 365 verás y editarás tu calendario de Outlook aquí mismo.</div></div>`}
+      <div class="agenda-sem">${dias.map(d => { const ev = porDia(d), pl = plat.filter(x => x.fecha === d);
+        return `<section class="card agenda-dia${d === hoy() ? ' hoy' : ''}"><div class="card-head"><h2>${E(cap(Util.dayName(d)))} ${Util.fmtDate(d).slice(0, 5)}</h2></div>
+          ${ev.map(e => `<div class="ag-ev"><div class="ag-h">${e.todoElDia ? 'Todo el día' : e.z.hora + '–' + e.zf.hora}</div><div><strong>${E(e.asunto || '(sin asunto)')}</strong>${e.lugar ? `<div class="small muted">${E(e.lugar)}</div>` : ''}
+            <div class="btn-row" style="margin-top:4px">${e.enlace ? `<a class="btn sm ghost" href="${E(e.enlace)}" target="_blank" rel="noopener">Abrir en Outlook</a>` : ''}<button class="btn sm ghost" data-action="ag-evento" data-id="${E(e.id)}" data-ini="${E(e.inicio)}" data-fin="${E(e.fin)}" data-as="${E(e.asunto || '')}" data-lu="${E(e.lugar || '')}">Editar</button><button class="btn sm ghost" data-action="ag-borrar" data-id="${E(e.id)}">Eliminar</button></div></div></div>`).join('')}
+          ${pl.map(x => `<div class="ag-ev plat"><div class="ag-h">${E(x.tipo)}</div><div><a href="#/op/${x.o.id}">${E(cli(x.o.clienteId).razonSocial)}</a><div class="small muted">${E(x.o.id)} · ${E(Rules.etapa(x.o.etapa).nombre)}</div>
+            <button class="btn sm ghost" data-action="ag-op" data-id="${x.o.id}" data-f="${x.fecha}" style="margin-top:4px;white-space:normal;max-width:100%;text-align:left">${I('cal')} Agendar en Outlook</button></div></div>`).join('')}
+          ${ev.length || pl.length ? '' : '<p class="small muted" style="margin:0">Libre.</p>'}</section>`; }).join('')}</div>`;
+  };
+  ACTIONS['ag-sem'] = el => { const F = S.agO; F.semana = +el.dataset.d ? Util.addDays(F.semana, +el.dataset.d) : Util.addDays(hoy(), -((new Date(hoy() + 'T12:00:00').getDay() + 6) % 7)); render(true); };
+  /** Crear o editar un evento (con servidor: en Outlook; sin servidor: descarga .ics) */
+  async function guardarEvento(d) {
+    const z = zonaUsuario(), ini = aUTC(d.fecha, d.hora, z), fin = new Date(ini.getTime() + (+d.duracion || 30) * 60000), st = await m365();
+    if (st.configurado) { await AlmacenServidor.guardarEvento({ id: d.id || undefined, asunto: d.asunto, inicio: ini.toISOString().slice(0, 19), fin: fin.toISOString().slice(0, 19), lugar: d.lugar, nota: d.nota }); toast(d.id ? 'Evento actualizado en Outlook.' : 'Evento creado en tu calendario de Outlook.'); }
+    else { Util.descargar(ics({ asunto: d.asunto, inicio: ini, fin, lugar: d.lugar, nota: d.nota }), 'evento.ics'); toast('Evento descargado: ábrelo para agregarlo a tu calendario de Outlook.'); }
+  }
+  function modalEvento(pre) {
+    const z = zonaUsuario(), i = pre.inicio ? enZona(pre.inicio, z) : { fecha: pre.fecha || hoy(), hora: '09:00' }, dur = pre.inicio && pre.fin ? Math.round((new Date(pre.fin) - new Date(pre.inicio)) / 60000) : 30;
+    modal({ title: pre.id ? 'Editar evento' : 'Nuevo evento', body: `<label class="field"><span>Asunto <span class="req">*</span></span><input type="text" name="asunto" value="${E(pre.asunto || '')}"></label>
+      <div class="form-grid" style="margin-top:8px"><label class="field">Fecha<input type="date" name="fecha" value="${i.fecha}"></label><label class="field">Hora (${E(Config.OFICINAS[S.user.oficina || 'PE'])})<input type="time" name="hora" value="${i.hora}"></label>
+        <label class="field">Duración<select name="duracion">${options([['15', '15 min'], ['30', '30 min'], ['60', '1 hora'], ['90', '1 h 30'], ['120', '2 horas']], String(dur))}</select></label></div>
+      <label class="field" style="margin-top:8px">Lugar o enlace<input type="text" name="lugar" value="${E(pre.lugar || '')}"></label>
+      <label class="field" style="margin-top:8px">Nota<textarea name="nota" rows="3">${E(pre.nota || '')}</textarea></label>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
+        if (!val(r, 'asunto').trim()) { const e = new Error('Ponle un asunto.'); e.campos = { asunto: 'Obligatorio' }; throw e; }
+        await guardarEvento({ id: pre.id, asunto: val(r, 'asunto'), fecha: val(r, 'fecha'), hora: val(r, 'hora'), duracion: val(r, 'duracion'), lugar: val(r, 'lugar'), nota: r.querySelector('[name=nota]').value });
+        if (String(S.ruta || '').startsWith('agenda')) render(true);
+      } }] });
+  }
+  ACTIONS['ag-evento'] = el => modalEvento(el.dataset.id ? { id: el.dataset.id, inicio: el.dataset.ini, fin: el.dataset.fin, asunto: el.dataset.as, lugar: el.dataset.lu } : {});
+  ACTIONS['ag-borrar'] = el => modal({ title: 'Eliminar evento', body: '<p style="margin-top:0">Se elimina también de tu calendario de Outlook.</p>',
+    actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await AlmacenServidor.borrarEvento(el.dataset.id); toast('Evento eliminado.'); render(true); } }] });
+  /** Desde una oportunidad: el próximo contacto como evento de Outlook */
+  ACTIONS['ag-op'] = el => {
+    const o = oppById(el.dataset.id), c = cli(o.clienteId), q = Rules.vigente(S.db, o);
+    modalEvento({ fecha: el.dataset.f || o.proxContacto || hoy(), asunto: `Seguimiento: ${c.razonSocial}${q ? ' · N° ' + q.numero : ''}`, nota: `Oportunidad ${o.id} (${Rules.etapa(o.etapa).nombre}).${q && q.contacto ? ' Contacto: ' + q.contacto + '.' : ''}` });
   };
 
   /* =====================================================================
@@ -8802,6 +8955,7 @@ const UI = (() => {
           <label style="display:flex;gap:8px;align-items:center;grid-column:1 / -1"><input type="checkbox" name="hojasDatos"${pl.hojasDatos !== false ? ' checked' : ''}${ro}> Adjuntar automáticamente las hojas de datos de los productos cotizados (las que tengan link en la lista de precios)</label>
         </div>${edP ? `<div class="btn-row" style="justify-content:flex-end;margin-top:10px"><button type="submit" class="btn primary">${I('check')} Guardar plantilla</button></div>` : ''}</section>
       </form>
+      ${['admin', 'jefatura'].includes(S.user.rol) ? `<section class="card" style="margin-top:14px" id="m365-panel"><div class="card-head"><h2>Microsoft 365 (Outlook y Teams)</h2><span class="sub">Correo, agenda y avisos</span></div><p class="small muted" style="margin:0">Revisando…</p></section>` : ''}
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Anexos que van en el mismo PDF · ${E(Config.OFICINAS[of])}</h2><span class="sub">Orden del PDF: cotización → estos anexos → hojas de datos de los productos</span></div>
         ${anexos.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>Anexo</th><th>Origen</th><th>Subido</th><th></th></tr></thead><tbody>${anexos.map((a, i) => `<tr><td>${i + 1}</td><td><strong>${E(a.nombre)}</strong></td>
           <td class="small">${a.tipo === 'link' ? `<a href="${E(a.url)}" target="_blank" rel="noopener">Link</a>${S.db.linksCaidos && S.db.linksCaidos[a.url] ? ' <span class="chip bad">no respondió</span>' : ''}` : `PDF subido · ${(a.tamano / 1048576).toFixed(1)} MB`}</td><td class="small nowrap">${Util.fmtFechaHora(a.subido)}</td>
@@ -8816,6 +8970,7 @@ const UI = (() => {
       </section>
       <section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2></div>
         ${log.length ? `<ul class="timeline">${log.slice(0, 15).map(r => `<li><div class="t-date">${Util.fmtDate(r.fecha)}</div><div><strong>${E((usr(r.usuarioId) || {}).nombre || '—')}</strong> cambió ${r.campos.map(c => E(NOMBRES[c] || c)).join(', ')}</div></li>`).join('')}</ul>` : '<p class="muted">Sin cambios registrados.</p>'}</section>`;
+    pintarM365();
   };
   const PIE_ALTO_PT = 72;   // 2.5 cm, igual que en pdfCotizacion
   ACTIONS['pie-cambiar'] = () => {
@@ -8832,6 +8987,18 @@ const UI = (() => {
     const pt = Math.min(515, PIE_ALTO_PT * im.naturalWidth / im.naturalHeight, im.naturalWidth * 72 / 150), dpi = Math.round(im.naturalWidth / (pt / 72));
     info.textContent = `${im.naturalWidth} × ${im.naturalHeight} px · en el PDF: ${(pt / 72 * 2.54).toFixed(1)} × ${(pt * im.naturalHeight / im.naturalWidth / 72 * 2.54).toFixed(1)} cm, ${dpi} dpi${dpi < 200 ? ' (para más nitidez, sube una versión de mayor resolución)' : ''}.`; }, true);
   ACTIONS['emp-of'] = el => { S.empF.of = el.dataset.of; render(true); };
+  /** Estado de la conexión con Microsoft 365 y últimos envíos (se completa después de dibujar la página) */
+  async function pintarM365() {
+    const p = $('#m365-panel'); if (!p) return;
+    const st = await m365(); let env = [];
+    if (st.configurado) env = (await AlmacenServidor.envios().catch(() => ({ envios: [] }))).envios;
+    p.innerHTML = `<div class="card-head"><h2>Microsoft 365 (Outlook y Teams)</h2><span class="sub">Correo, agenda y avisos</span></div>
+      ${st.configurado ? `<div class="alert ok"><div>Conectado. Las cotizaciones salen desde el Outlook de cada vendedor${st.buzonComun ? ` con copia a <strong>${E(st.buzonComun)}</strong>` : ''}; los resúmenes diarios y los reportes programados salen a las 8:00${st.remitente ? ` desde ${E(st.remitente)}` : ''}. Teams: ${st.teams ? 'avisos al canal configurado' : 'sin canal configurado'}.</div></div>
+        <div class="btn-row"><button class="btn" data-action="m365-probar">Enviarme un correo de prueba</button></div>
+        <div class="table-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Fecha</th><th>Para</th><th>Asunto</th><th>Estado</th></tr></thead><tbody>${env.slice(0, 30).map(x => `<tr><td class="small nowrap">${E(new Date(x.fecha).toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' }))}</td><td class="small">${E(x.para)}</td><td class="small">${E(x.asunto)}</td><td>${x.estado === 'enviado' ? '<span class="chip ok">Enviado</span>' : `<span class="chip bad" title="${E(x.error || '')}">Error</span>`}</td></tr>`).join('') || '<tr><td colspan="4" class="muted center">Aún no hay envíos.</td></tr>'}</tbody></table></div>`
+        : `<p class="small" style="margin:0">${Repo.servidor() ? 'El servidor está listo para conectarse a Microsoft 365' : 'Funciona con el servidor de la empresa'}: TI registra una aplicación en el Entra ID de la empresa (permisos Mail.Send y Calendars.ReadWrite) y completa <code>microsoft365</code> en <code>config.json</code> del servidor (ver LEEME-SERVIDOR). Mientras tanto, las cotizaciones se envían con un borrador de correo que se abre en Outlook y los eventos se agregan con un archivo de calendario.</p>`}`;
+  }
+  ACTIONS['m365-probar'] = async () => { try { await AlmacenServidor.probarM365(); toast('Correo de prueba enviado a tu buzón.'); } catch (e) { toast(e.message); } };
   SUBMITS['plantilla'] = async form => {
     const v = n => (form.querySelector(`[name="${n}"]`) || {}), of = S.empF.of;
     const datos = { titulo: v('titulo').value, etiquetaFiscal: v('etiquetaFiscal').value, color: v('color').value === '#015088' ? '' : v('color').value, intro: v('intro').value, notaPrecio: v('notaPrecio').value, cierre: v('cierre').value,

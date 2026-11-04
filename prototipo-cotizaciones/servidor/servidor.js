@@ -18,6 +18,7 @@
      node servidor.js importar datos.json  carga un respaldo (.json de la plataforma)
      node servidor.js respaldo             crea un respaldo ahora
      node servidor.js restaurar archivo    restaura un respaldo .sqlite (con el servidor detenido)
+     node servidor.js probar-m365 correo   prueba el envío por Microsoft 365
    ===================================================================== */
 'use strict';
 process.removeAllListeners('warning');
@@ -40,6 +41,7 @@ const CONFIG_DEF = {
   horaNoche: 23,
   tipoCambio: true,                       // bajar el tipo de cambio del día (requiere salida a internet)
   hojasDeDatos: true,                     // descargar y guardar copia de las hojas de datos
+  microsoft365: null,                     // { tenantId, clientId, clientSecret, buzonComun, remitente, teamsWebhook } (ver LEEME-SERVIDOR)
   demo: false,                            // permite inicializar con data simulada (modelo para el programador)
 };
 const CONFIG = (() => {
@@ -70,7 +72,8 @@ function abrir() {
     CREATE TABLE IF NOT EXISTS operaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT NOT NULL, usuario TEXT, ip TEXT, registros INTEGER, borrados INTEGER, version INTEGER);
     CREATE TABLE IF NOT EXISTS sesiones (token TEXT PRIMARY KEY, usuario_id TEXT NOT NULL, nombre TEXT, creado TEXT NOT NULL, visto TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tipos_cambio (fecha TEXT NOT NULL, moneda TEXT NOT NULL, pais TEXT NOT NULL, valor REAL NOT NULL, fuente TEXT, PRIMARY KEY (fecha, moneda, pais));
-    CREATE TABLE IF NOT EXISTS hojas (url TEXT PRIMARY KEY, archivo TEXT, tipo TEXT, bytes INTEGER, descargada TEXT, revisada TEXT, estado TEXT, error TEXT);`);
+    CREATE TABLE IF NOT EXISTS hojas (url TEXT PRIMARY KEY, archivo TEXT, tipo TEXT, bytes INTEGER, descargada TEXT, revisada TEXT, estado TEXT, error TEXT);
+    CREATE TABLE IF NOT EXISTS envios (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT NOT NULL, de TEXT, para TEXT, asunto TEXT, estado TEXT, error TEXT);`);
   if (!meta('epoca')) meta('epoca', crypto.randomUUID());
 }
 function meta(k, v) {
@@ -391,6 +394,11 @@ const RUTAS = {
 };
 function exigirAdmin(s) { if (!['admin', 'gerencia', 'jefatura'].includes(s.usuario.rol)) { const e = new Error('Solo administración, gerencia o jefatura gestionan los respaldos del servidor.'); e.codigo = 403; throw e; } }
 const PUBLICAS = new Set(['GET estado', 'POST login', 'POST inicializar']);
+/* ---------- Microsoft 365 (Outlook y Teams): correo, agenda, avisos y envíos programados ---------- */
+const M365 = require('./m365.js')({ CONFIG, log, usuarios, todos, meta, db: () => db });
+Object.assign(RUTAS, M365.rutas);
+const htmlPlataforma = () => fs.readFileSync(ruta(CONFIG.html), 'utf8');
+setInterval(() => { M365.programados(htmlPlataforma).catch(e => log('Envíos programados: ' + e.message)); }, 5 * 60000).unref();
 
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -400,11 +408,10 @@ const servidor = http.createServer(async (req, res) => {
       if (!h) { res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Falta el archivo de la plataforma: ' + CONFIG.html); }
       const b = Buffer.from(h); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': b.length, 'Cache-Control': 'no-store' }); return res.end(b);
     }
-    const m = /^\/api\/([a-z]+)$/.exec(url.pathname);
+    const m = /^\/api\/([a-z0-9]+)$/.exec(url.pathname);
     const clave = m && req.method + ' ' + m[1], fn = clave && RUTAS[clave];
     if (!fn) return enviar(res, 404, { error: 'No encontrado' });
     const s = PUBLICAS.has(clave) ? null : sesion(req);
-    if (process.env.TV_DEBUG && /bloqueo|liberar|escribir/.test(clave)) log('DBG', clave, s && s.usuario.usuario, bloqueo && bloqueo.quien);
     if (!PUBLICAS.has(clave) && !s) return enviar(res, 401, { error: 'Tu sesión venció. Vuelve a ingresar.' });
     const cuerpo = ['POST', 'PUT'].includes(req.method) ? await leerCuerpo(req) : null;
     const r = await fn(req, res, url.searchParams, req.method === 'PUT' ? cuerpo : cuerpo && cuerpo.toString('utf8'), s);
@@ -445,6 +452,11 @@ if (cmd === 'importar') {
   process.exit(0);
 } else if (cmd === 'respaldo') { console.log('Respaldo:', respaldar('manual')); process.exit(0); }
 else if (cmd === 'restaurar') { restaurar(arg); console.log('Listo.'); process.exit(0); }
+else if (cmd === 'probar-m365') {
+  if (!M365.configurado()) { console.error('Falta configurar microsoft365 en config.json (tenantId, clientId, clientSecret).'); process.exit(1); }
+  M365.enviarCorreo({ de: (CONFIG.microsoft365 || {}).remitente || arg, para: arg, asunto: 'Prueba de la plataforma de cotizaciones', html: '<p>La conexión con Microsoft 365 funciona.</p>' })
+    .then(() => { console.log('Correo de prueba enviado a', arg); process.exit(0); }).catch(e => { console.error(e.message); process.exit(1); });
+}
 else {
   servidor.listen(CONFIG.puerto, () => {
     const ips = Object.values(require('node:os').networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
