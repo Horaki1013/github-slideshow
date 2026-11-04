@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas:** los gráficos son SVG propios, sin librerías por CDN.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 19/19 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 21/21 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
