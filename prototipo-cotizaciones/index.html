@@ -488,6 +488,8 @@ tr.quick-open>td{border-bottom:0}
 .ag-ev > div { min-width: 0; overflow-wrap: anywhere; }
 .agenda-dia, .agenda-sem > * { min-width: 0; }
 .ag-ev.plat .ag-h { color: var(--brand-700); }
+.hoja-item { display: inline-flex; align-items: center; gap: 3px; margin-top: 3px; padding: 1px 6px; font-size: 11px; border: 1px dashed var(--border-2); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.hoja-item.con { border-style: solid; color: var(--ok); }
 </style>
 </head>
 <body class="logged-out">
@@ -574,7 +576,7 @@ const Config = {
     editar_empresa: 'Editar datos de la empresa', editar_plantilla: 'Editar plantilla de cotización y anexos', gestionar_usuarios: 'Administrar usuarios',
     asignar_clientes: 'Asignar cuentas y cargar clientes', gestionar_leads: 'Gestionar y asignar leads', mover_stock: 'Registrar movimientos de stock',
     editar_minimos: 'Editar mínimos de stock', ver_postventa: 'Ver post-venta', crear_cliente: 'Crear clientes', ver_ranking_equipo: 'Ver ranking del equipo',
-    aprobar_borrado: 'Aprobar borrado de cotizaciones',
+    aprobar_borrado: 'Aprobar borrado de cotizaciones', eliminar_clientes: 'Eliminar empresas y contactos',
   },
   // Inventario: el stock nunca se edita directo; resulta de los movimientos. Estados del stock físico en un almacén
   ESTADOS_STOCK: { libre: 'En almacén', demo: 'Demo / Panel Tech', prestamo: 'Préstamo', malogrado: 'Malogrado' },
@@ -2472,9 +2474,13 @@ const Rules = (() => {
 
   /** Totales de una cotización en su moneda: suma, descuento, neto sin IGV, IGV 18 % y total */
   /** Descuento de un ítem (en monto o % de su línea), también en opcionales y alternativas */
+  /** El descuento del ítem es en % salvo que se elija monto (el selector parte en %) */
+  const descEsPct = it => it.descTipo !== 'monto';
+  /** Con descuentos por ítem, el descuento general de la cotización no se aplica */
+  const conDescItems = q => (q && q.items || []).some(it => +it.desc > 0);
   function descItem(it, cur) {
     const bruto = (+it.cant || 0) * (+it.valorUnit || 0);
-    const d = it.descTipo === 'pct' ? bruto * Math.min(100, +it.desc || 0) / 100 : Math.min(bruto, +it.desc || 0);
+    const d = descEsPct(it) ? bruto * Math.min(100, +it.desc || 0) / 100 : Math.min(bruto, +it.desc || 0);
     return Util.redondear(Math.max(0, d), cur);
   }
   /** Total de la línea con su descuento */
@@ -2485,11 +2491,11 @@ const Rules = (() => {
     const cur = q.moneda, r = v => Util.redondear(v, cur);
     const suma = r(Util.sum(principales(q), it => lineaNeta(it, cur)));   // los opcionales y las alternativas no suman
     // descuento general en monto o en porcentaje sobre la suma
-    const descuento = q.descuentoTipo === 'pct' ? r(suma * (+q.descuentoPct || 0) / 100) : r(+q.descuento || 0);
+    const descuento = conDescItems(q) ? 0 : q.descuentoTipo === 'pct' ? r(suma * (+q.descuentoPct || 0) / 100) : r(+q.descuento || 0);
     const neto = r(suma - descuento);
     const igv = r(neto * impuestoDe(q).tasa);
     const descItems = r(Util.sum(principales(q), it => descItem(it, cur)));
-    return { suma, descuento, neto, igv, total: r(neto + igv), descItems, descuentoPct: q.descuentoTipo === 'pct' ? (+q.descuentoPct || 0) : (suma ? Util.round2(descuento / suma * 100) : 0) };
+    return { suma, descuento, neto, igv, total: r(neto + igv), descItems, descuentoPct: conDescItems(q) ? 0 : q.descuentoTipo === 'pct' ? (+q.descuentoPct || 0) : (suma ? Util.round2(descuento / suma * 100) : 0) };
   }
   /** Unidades de la moneda de la cotización por 1 USD (el tipo de cambio guardado al emitirla) */
   const tcUSD = q => !q || !q.moneda || q.moneda === 'USD' ? 1 : (+q.tc || Config.TC_REF[q.moneda] || Config.TC_REFERENCIA);
@@ -2698,6 +2704,7 @@ const Rules = (() => {
     });
     (db.gestiones || []).forEach(g => { const r = res[g.clienteId]; if (r) r.contactos.push({ fecha: g.fecha, resultado: g.resultado, canal: g.canal, nota: g.nota, gestion: true, usuarioId: g.usuarioId }); });
     db.clients.forEach(c => {
+      if (c.archivado) return;
       const r = res[c.id];
       r.contactos.sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0);
       r.ultimoContacto = r.contactos[0] || null;
@@ -2795,6 +2802,7 @@ const Rules = (() => {
     });
     // Cuentas sin cotizar (~2 meses): llegan al vendedor asignado y a jefatura
     db.clients.forEach(c => {
+      if (c.archivado) return;
       if (user.rol === 'vendedor' && c.vendedorId !== user.id) return;
       const a = alertaCuenta(db, c, hoy);
       if (a) out.push({ cliente: c, alerta: a });
@@ -2952,6 +2960,7 @@ const Rules = (() => {
       case 'editar_empresa': return ['jefatura', 'finanzas', 'admin'].includes(user.rol);   // datos de la empresa y condiciones comerciales del PDF
       case 'editar_plantilla': return ['jefatura', 'admin'].includes(user.rol);   // plantilla de cotización por país y anexos
       case 'editar_permisos': return user.rol === 'admin';
+      case 'eliminar_clientes': return ['admin', 'finanzas'].includes(user.rol);   // empresas y contactos que ya no son clientes
       case 'aprobar_borrado': return user.rol === 'admin';      // borra cotizaciones a pedido del vendedor
       case 'ver_ranking_equipo': return user.rol === 'jefatura' || user.rol === 'finanzas';   // la comparación entre vendedores
       case 'editar_hoja_datos': return ['vendedor', 'jefatura', 'finanzas', 'admin'].includes(user.rol);   // link de la hoja de datos de un producto
@@ -3304,7 +3313,7 @@ const Rules = (() => {
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
-  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, lineaNeta, impuestoDe, tcUSD, convertir, alternativas, opcionales,
+  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, descEsPct, conDescItems, lineaNeta, impuestoDe, tcUSD, convertir, alternativas, opcionales,
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
@@ -3842,6 +3851,18 @@ const Repo = (() => {
     db.seq.producto = L.length + 1;
     db.catalogoInfo = { actualizado: f, por: null, origen: 'privado', archivo: window.__LISTA_PRECIOS_ARCHIVO || '' };
     db.catalogoLog.unshift({ fecha: f, usuarioId: null, accion: `Lista de precios real cargada desde archivo privado (${L.length} productos)` });
+  }
+  /** Links de hojas de datos que el vendedor puso en la cotización: quedan para las próximas cotizaciones de ese producto */
+  function guardarHojasDeItems(items, usuarioId) {
+    (items || []).forEach(it => {
+      const url = String(it.hojaDatos || '').trim(), c = String(it.codigo || '').trim().toUpperCase();
+      if (!c || !/^https?:\/\/\S+$/i.test(url)) return;
+      // Se guardan aparte de la lista de precios (no se reescribe la lista en cada cotización); mandan sobre el link de la lista
+      const k = c + '|' + (it.marca || ''), p = db.catalogo.find(x => x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca));
+      if ((db.hojasDatos || {})[k] === url || (!(db.hojasDatos || {})[k] && p && p.hojaDatos === url)) return;
+      db.hojasDatos = db.hojasDatos || {}; db.hojasDatos[k] = url;
+      auditar(usuarioId, `Hoja de datos de ${it.marca || ''} ${it.codigo} registrada al cotizar`);
+    });
   }
   /** Datos propios de una oficina distinta de Perú (lo vacío se toma de los datos generales) */
   function guardarDatosOficina(of, datos, usuarioId) {
@@ -4574,6 +4595,36 @@ const Repo = (() => {
       else c.contactos.push(Object.assign({ id: 'K-' + (db.seq.contacto++) }, data));
       touch();
     },
+    /** DELETE /clientes/:id/contactos/:k — administración y finanzas limpian contactos que ya no sirven (las cotizaciones guardan el nombre) */
+    async eliminarContacto(clienteId, kId, usuarioId) {
+      exigir(usuarioId, 'eliminar_clientes', 'Solo administración del sistema o finanzas eliminan contactos.');
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), k = c.contactos.find(x => x.id === kId) || fail('Contacto no encontrado.');
+      c.contactos = c.contactos.filter(x => x.id !== kId);
+      auditar(usuarioId, `Contacto eliminado: ${k.nombre} (${c.razonSocial})`);
+      touch();
+      return k;
+    },
+    /** DELETE /clientes/:id — empresa que ya no es cliente: si no tiene historial se borra; si lo tiene, deja de aparecer y su historial se conserva */
+    async eliminarCliente(clienteId, motivo, usuarioId) {
+      exigir(usuarioId, 'eliminar_clientes', 'Solo administración del sistema o finanzas eliminan empresas.');
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
+      if (c.prueba) fail('El cliente de prueba no se elimina.');
+      const abiertas = db.opps.filter(o => o.clienteId === clienteId && (Rules.esAbierta(o) || o.etapa === 'pausa')).length;
+      if (abiertas) fail(`Tiene ${abiertas} oportunidad${abiertas === 1 ? '' : 'es'} abierta${abiertas === 1 ? '' : 's'} o en pausa: ciérralas o reasígnalas antes.`);
+      const conHistoria = db.opps.some(o => o.clienteId === clienteId) || (db.leads || []).some(l => l.clienteId === clienteId) || (db.gestiones || []).some(g => g.clienteId === clienteId);
+      if (conHistoria) c.archivado = { fecha: hoy(), por: usuarioId, motivo: String(motivo || '').trim().slice(0, 300) };
+      else db.clients = db.clients.filter(x => x.id !== clienteId);
+      auditar(usuarioId, `Empresa eliminada: ${c.razonSocial}${conHistoria ? ' (su historial se conserva)' : ''}${motivo ? ' · ' + motivo : ''}`);
+      touch();
+      return { archivada: conHistoria };
+    },
+    async restaurarCliente(clienteId, usuarioId) {
+      exigir(usuarioId, 'eliminar_clientes');
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.');
+      delete c.archivado;
+      auditar(usuarioId, `Empresa restaurada: ${c.razonSocial}`);
+      touch();
+    },
     /** POST /clientes/:id/gestiones — contacto con la cuenta sin oportunidad (cuenta sin cotizar) */
     async registrarGestionCuenta(clienteId, g, usuarioId) {
       if (!db.clients.some(x => x.id === clienteId)) fail('Cuenta no encontrada.');
@@ -4677,6 +4728,7 @@ const Repo = (() => {
       if (url && !/^https?:\/\/\S+$/i.test(url)) fail('El link debe empezar con http:// o https://', { url: 'Link no válido' });
       const mismos = db.catalogo.filter(x => x.marca === p.marca && x.codigo.toUpperCase() === p.codigo.toUpperCase());
       mismos.forEach(x => { if (url) x.hojaDatos = url; else delete x.hojaDatos; });
+      if (db.hojasDatos) delete db.hojasDatos[p.codigo.toUpperCase() + '|' + p.marca];
       logCatalogo(usuarioId, `Hoja de datos de ${p.marca} ${p.codigo} ${url ? 'registrada' : 'quitada'}`);
       touch();
       return mismos.length;
@@ -5029,10 +5081,10 @@ const Repo = (() => {
       const conCodigo = p.items.filter(it => String(it.codigo || '').trim()), uids = new Set(conCodigo.filter(it => !it.opcional && !it.alternativa).map(it => it.uid).filter(Boolean));
       const items = conCodigo.map(it => Object.assign({ cant: +it.cant, unidad: it.unidad || 'Und', codigo: it.codigo.trim(), marca: it.marca,
         descripcion: (it.descripcion || '').trim(), valorUnit: rd(+it.valorUnit), listaUSD: +it.listaUSD > 0 ? +it.listaUSD : null },
-        it.uid ? { uid: String(it.uid) } : {}, it.opcional ? { opcional: true } : {},
+        it.uid ? { uid: String(it.uid) } : {}, it.opcional ? { opcional: true } : {}, /^https?:\/\//i.test(it.hojaDatos || '') ? { hojaDatos: String(it.hojaDatos).trim() } : {},
         // Alternativa de otra marca para un ítem principal: va en el mismo documento y no suma al total
         it.alternativa && !it.opcional ? { alternativa: true, alternativaDe: uids.has(it.alternativaDe) ? it.alternativaDe : null } : {},
-        +it.desc > 0 ? { descTipo: it.descTipo === 'pct' ? 'pct' : 'monto', desc: it.descTipo === 'pct' ? Math.min(100, +it.desc) : rd(+it.desc) } : {},
+        +it.desc > 0 ? { descTipo: Rules.descEsPct(it) ? 'pct' : 'monto', desc: Rules.descEsPct(it) ? Math.min(100, +it.desc) : rd(+it.desc) } : {},
         it.listaId ? { listaId: it.listaId, listaPrecio: +it.listaPrecio || null, listaMoneda: it.listaMoneda || 'USD' } : {},
         // Desglose interno de un kit o global: no sale en el PDF
         Array.isArray(it.partes) && it.partes.some(x => String(x.codigo || x.descripcion || '').trim()) ? { partes: it.partes.filter(x => String(x.codigo || x.descripcion || '').trim()).map(x => ({ cant: +x.cant || 0, codigo: String(x.codigo || '').trim(),
@@ -5047,6 +5099,7 @@ const Repo = (() => {
         // Copia de las condiciones vigentes al emitir: si luego cambian los datos de la empresa, esta cotización no cambia
         condiciones: db.empresa ? (eo => CAMPOS_CONDICIONES.reduce((o, k) => { if (eo[k] != null) o[k] = eo[k]; return o; }, {}))(Rules.empresaOficina(db, Rules.oficinaDe(db, p.vendedorId))) : undefined,
         vigente: true, contacto: p.contacto || '', contactoCorreo: String(p.contactoCorreo || '').trim(), contactoTelefono: String(p.contactoTelefono || '').trim(), origen: p.origen, archivo: p.archivo || undefined };
+      if (Rules.conDescItems(q)) Object.assign(q, { descuentoTipo: 'monto', descuentoPct: 0 });
       q.descuento = Rules.totales(q).descuento;
       let o;
       if ((p.modo === 'revision' || p.modo === 'alternativa') && p.oppDestinoId) {
@@ -5076,6 +5129,7 @@ const Repo = (() => {
         db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: p.fechaEmision, canal: 'Correo', nota: `Cotización enviada (N° ${q.numero}) — ${p.origen === 'plataforma' ? 'cotizada en la plataforma (PDF generado)' : p.origen === 'pdf' ? 'registrada desde el PDF' : 'registrada manualmente'}.`, proxContacto: o.proxContacto, usuarioId: 'sistema', auto: true });
       }
       if (cliP && cliP.prueba) o.prueba = true;
+      guardarHojasDeItems(p.items, usuarioId);
       if (esNueva || (lead && !(o.origenOpp && o.origenOpp.id))) o.origenOpp = origenOpp;
       if (lead) {   // el lead pasa a oportunidad: queda enlazado y cuenta como primer contacto si no lo había
         Object.assign(lead, { estado: 'convertido', oppId: o.id, contactadoEn: lead.contactadoEn || Util.ahora(), asignadoEn: lead.asignadoEn || Util.ahora(), vendedorId: lead.vendedorId || p.vendedorId });
@@ -5268,6 +5322,11 @@ const SelfTest = (() => {
         { cant: 1, valorUnit: 90000, alternativa: true }, { cant: 1, valorUnit: 20000, opcional: true, descTipo: 'pct', desc: 50 }] };
       const t = Rules.totales(q);
       return t.suma === 225000 && t.igv === 42750 && t.total === 267750 && Rules.descItem(q.items[3], 'CLP') === 10000 && Math.round(Rules.quoteNetoUSD(q)) === 237;
+    }],
+    ['Descuento de ítem sin tipo = %; con descuentos por ítem se anula el descuento general', () => {
+      const q = { moneda: 'USD', descuentoTipo: 'pct', descuentoPct: 5, items: [{ cant: 1, valorUnit: 1000, desc: 10 }, { cant: 1, valorUnit: 500 }] };
+      const sinItem = Rules.totales({ moneda: 'USD', descuentoTipo: 'pct', descuentoPct: 5, items: [{ cant: 1, valorUnit: 1000 }] });
+      return Rules.descItem(q.items[0], 'USD') === 100 && Rules.totales(q).descuento === 0 && Rules.totales(q).neto === 1400 && sinItem.descuento === 50;
     }],
     ['Conversión entre monedas de listas (EUR → PEN con tipos por USD)', () =>
       Math.abs(Rules.convertir(100, 'EUR', 'PEN', { EUR: 0.9, PEN: 3.6 }) - 400) < 1e-9 && Rules.convertir(5, 'USD', 'USD') === 5],
@@ -5988,7 +6047,7 @@ const UI = (() => {
     const n2 = v => Util.nfMon(v, cur), imp = Rules.impuestoDe(q);
     const princ = Rules.principales(q), alt = Rules.alternativas(q), opc = Rules.opcionales(q);
     const nroDe = uid => { const k = princ.findIndex(x => x.uid && x.uid === uid); return k >= 0 ? k + 1 : null; };
-    const descTxt = it => { const dsc = Rules.descItem(it, cur); return dsc ? `<div class="h-desc">Descuento${it.descTipo === 'pct' ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}</div>` : ''; };
+    const descTxt = it => { const dsc = Rules.descItem(it, cur); return dsc ? `<div class="h-desc">Descuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}</div>` : ''; };
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}${descTxt(it)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
     const cabItems = `<thead><tr><th>Item</th><th class="r">Cant.</th>${col.unidad ? '<th>Uni.</th>' : ''}${col.codigo ? '<th>Código</th>' : ''}${col.marca ? '<th>Marca</th>' : ''}<th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead>`;
     const anx = anexosPrevistos({ q, vendedor });
@@ -6140,7 +6199,7 @@ const UI = (() => {
     const filas = (items, etiqueta) => {
       cabecera();
       items.forEach((it, i) => {
-        const dsc = Rules.descItem(it, cur), txtD = it.descripcion + (dsc ? `\nDescuento${it.descTipo === 'pct' ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}` : '');
+        const dsc = Rules.descItem(it, cur), txtD = it.descripcion + (dsc ? `\nDescuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}` : '');
         const cod = C.cod ? doc.partir(it.codigo, C.cod.w - 6, 'F2', 7.5) : [], mar = C.mar ? doc.partir(it.marca, C.mar.w - 6, 'F2', 7.5) : [], des = doc.partir((C.cod ? '' : it.codigo + (C.mar ? '' : ' · ' + it.marca) + '\n') + txtD, C.des.w - 10, 'F1', 7);
         const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1), h = nl * lh + 10;
         if (asegurar(h)) cabecera();
@@ -6292,7 +6351,7 @@ const UI = (() => {
   }
   /* ---------- Documento único: cotización + anexos de la plantilla (términos y condiciones) + hojas de datos de los productos ---------- */
   /** Hoja de datos de un ítem: la del producto en la lista de precios (mismo código y marca) */
-  const hojaDeItem = it => { const c = String(it.codigo || '').trim().toUpperCase(); const p = c && (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return p ? p.hojaDatos : null; };
+  const hojaDeItem = it => { if (/^https?:\/\//i.test(it.hojaDatos || '')) return it.hojaDatos; const c = String(it.codigo || '').trim().toUpperCase(); const p = c && (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return (c && (S.db.hojasDatos || {})[c + '|' + (it.marca || '')]) || (p ? p.hojaDatos : null); };
   /** Qué se adjunta al PDF (nombres, en orden): anexos activos de la plantilla de la oficina y hojas de datos de los productos cotizados */
   function anexosPrevistos({ q, vendedor }) {
     const of = (vendedor && vendedor.oficina) || 'PE', emp = empresaPDF(of), out = [];
@@ -6512,7 +6571,7 @@ const UI = (() => {
   }
   /* ---------- Directorio de clientes: búsqueda de empresas para elegir rápido (propias primero) ---------- */
   const etiquetaCliente = c => `${c.razonSocial} · ${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID ') + c.ruc : 'sin RUC'}${c.vendedorId && c.vendedorId !== S.user.id ? ' · cuenta de ' + usr(c.vendedorId).nombre : !c.vendedorId ? ' · sin asignar' : ''}`;
-  const clientesOrdenados = () => S.db.clients.slice().sort((a, b) => (b.vendedorId === S.user.id) - (a.vendedorId === S.user.id) || a.razonSocial.localeCompare(b.razonSocial));
+  const clientesOrdenados = () => S.db.clients.filter(c => !c.archivado).sort((a, b) => (b.vendedorId === S.user.id) - (a.vendedorId === S.user.id) || a.razonSocial.localeCompare(b.razonSocial));
   const opcionesClientes = () => clientesOrdenados().map(c => `<option value="${E(etiquetaCliente(c))}">`).join('');
   /** Encuentra la empresa por la etiqueta elegida, por RUC o por razón social exacta */
   function clientePorTexto(txt) {
@@ -7122,7 +7181,7 @@ const UI = (() => {
         </dl>
         <div class="table-wrap"><table class="tbl"><thead><tr><th class="r">Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">V. unit.</th><th class="r">Total</th></tr></thead><tbody>
           ${q.items.map(it => `<tr${it.opcional || it.alternativa ? ' class="muted"' : ''}><td class="r">${it.cant}</td><td>${E(it.unidad)}</td><td class="nowrap"><strong>${E(it.codigo)}</strong>${it.opcional ? ' <span class="chip">opcional</span>' : it.alternativa ? ' <span class="chip warn">alternativa</span>' : ''}</td><td>${E(it.marca)}</td>
-            <td class="small">${E(it.descripcion)}${it.partes && it.partes.length ? `<div class="cell-sub" title="${E(it.partes.map(x => `${x.cant} × ${x.codigo} ${x.descripcion} · ${Util.nfMon(x.valorUnit, cur)}`).join('\n'))}">Kit con ${it.partes.length} partes (detalle interno)</div>` : ''}${Rules.descItem(it, cur) ? `<div class="cell-sub">Descuento ${it.descTipo === 'pct' ? it.desc + ' %' : ''} − ${Util.nfMon(Rules.descItem(it, cur), cur)}</div>` : ''}</td>
+            <td class="small">${E(it.descripcion)}${it.partes && it.partes.length ? `<div class="cell-sub" title="${E(it.partes.map(x => `${x.cant} × ${x.codigo} ${x.descripcion} · ${Util.nfMon(x.valorUnit, cur)}`).join('\n'))}">Kit con ${it.partes.length} partes (detalle interno)</div>` : ''}${Rules.descItem(it, cur) ? `<div class="cell-sub">Descuento ${Rules.descEsPct(it) ? it.desc + ' %' : ''} − ${Util.nfMon(Rules.descItem(it, cur), cur)}</div>` : ''}</td>
             <td class="r num">${Util.nfMon(it.valorUnit, cur)}${it.listaUSD && Math.abs(it.valorUnit - Rules.convertir(it.listaUSD, 'USD', cur, Object.assign({}, q.tcs || {}, cur !== 'USD' ? { [cur]: Rules.tcUSD(q) } : {}))) > 0.01 ? `<div class="cell-sub" title="Precio de lista: ${Util.money(it.listaUSD)}">editado vs lista</div>` : ''}</td><td class="r num">${Util.nfMon(Rules.lineaNeta(it, cur), cur)}</td></tr>`).join('')}
         </tbody></table></div>
         <div class="totals">
@@ -7414,7 +7473,7 @@ const UI = (() => {
     return cands;
   }
   function totalesDraft(d) {
-    const q = Object.assign({ items: d.items.map(it => ({ cant: +it.cant || 0, valorUnit: +it.valorUnit || 0, opcional: !!it.opcional, alternativa: !!it.alternativa, descTipo: it.descTipo, desc: +it.desc || 0 })),
+    const q = Object.assign({ items: d.items.map(it => ({ cant: +it.cant || 0, valorUnit: +it.valorUnit || 0, opcional: !!it.opcional, alternativa: !!it.alternativa, descTipo: it.descTipo || 'pct', desc: +it.desc || 0 })),
       descuento: +d.descuento || 0, descuentoTipo: d.descuentoTipo, descuentoPct: +d.descuentoPct || 0, moneda: d.moneda, tc: d.moneda === 'USD' ? null : (+d.tc || Config.TC_REF[d.moneda]) }, impuestoOficina());
     return { t: Rules.totales(q), usd: Rules.quoteNetoUSD(q) };
   }
@@ -7602,7 +7661,7 @@ const UI = (() => {
         <label class="field c12"><span>Condición comercial especial <span class="muted" style="font-weight:400">(opcional)</span></span><textarea name="condicionEspecial" data-nq="condicionEspecial" rows="2" maxlength="1500" placeholder="Ej.: Precio válido por la compra conjunta de los 3 ítems. Entrega parcial: 50 % en 2 semanas y el saldo en 6.">${E(d.condicionEspecial || '')}</textarea><span class="field-hint">Sale en el PDF dentro de "Condiciones comerciales". Cuentas, entrega y despacho los mantiene gerencia en "Datos de la empresa".</span></label>
       </div>`)}
       ${sec(3, 'Ítems', (() => {
-        d.items.forEach(it => { if (!it.uid) it.uid = uidItem(); });
+        d.items.forEach(it => { if (!it.uid) it.uid = uidItem(); if (!it.descTipo) it.descTipo = 'pct'; });
         const cab = `<colgroup><col style="width:72px"><col style="width:84px"><col style="width:170px"><col style="width:130px"><col><col style="width:124px"><col style="width:118px"><col style="width:104px"><col style="width:104px"></colgroup>
           <thead><tr><th>Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th>V. unit. (${d.moneda})</th><th>Dscto.</th><th class="r">Total</th><th></th></tr></thead>`;
         const conI = d.items.map((it, i) => [it, i]);
@@ -7611,7 +7670,7 @@ const UI = (() => {
         const fila = ([it, i]) => `<tr${it.opcional ? ' class="fila-opc"' : it.alternativa ? ' class="fila-alt"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios">${variasListas ? listaItemHTML(it, i) : ''}
+          <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios">${variasListas ? listaItemHTML(it, i) : ''}${hojaItemHTML(it, i)}
             ${it.alternativa ? `<label class="field-hint" style="display:block">Alternativa a<select data-nq-altde="${i}" aria-label="Alternativa al ítem">${options(principales.map(([x], k) => [x.uid, `Ítem ${k + 1}${x.codigo ? ' · ' + x.codigo : ''}`]), it.alternativaDe || '', 'Elige el ítem…')}</select></label>` : ''}</td>
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options([...new Set([...marcasDisponibles(), it.marca].filter(Boolean))].map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción" title="${E(it.descripcion)}"></td>
@@ -7706,12 +7765,12 @@ const UI = (() => {
   }
   const grandeHTML = (d, usd) => usd > Config.OFERTA_GRANDE_USD && d.etapa !== 'grande' ? `<span class="chip info" style="white-space:normal;margin-top:4px">Supera 200K USD: considera “Oferta grande sin feedback” (1 %).</span>` : '';
   function totalesHTML(d, t, usd) {
-    const cur = d.moneda, imp = impuestoOficina();
+    const cur = d.moneda, imp = impuestoOficina(), conItem = d.items.some(it => +it.desc > 0);
     return `<span class="t">Suma</span><span class="num right" id="nq-t-suma">${Util.money(t.suma, cur)}</span>
-      <span class="t">Descuento</span><span style="display:flex;gap:4px;justify-content:flex-end;align-items:center;flex-wrap:wrap">
-        <select data-nq="descuentoTipo" aria-label="Tipo de descuento" style="width:76px;min-height:30px;padding:3px 6px">${options([['pct', '%'], ['monto', cur]], d.descuentoTipo)}</select>
-        <input type="number" min="0" step="${d.descuentoTipo === 'pct' ? '0.5' : '0.01'}" name="descuento" data-nq="${d.descuentoTipo === 'pct' ? 'descuentoPct' : 'descuento'}" value="${E(d.descuentoTipo === 'pct' ? d.descuentoPct : d.descuento)}" style="width:96px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento">
-        <span class="small muted" id="nq-desc-monto" style="width:100%;text-align:right">${d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, cur) : '≈ ' + t.descuentoPct + '%'}</span></span>
+      <span class="t">Descuento general</span><span style="display:flex;gap:4px;justify-content:flex-end;align-items:center;flex-wrap:wrap" id="nq-desc-gen">
+        <select data-nq="descuentoTipo" aria-label="Tipo de descuento general" style="width:76px;min-height:30px;padding:3px 6px"${conItem ? ' disabled' : ''}>${options([['pct', '%'], ['monto', cur]], d.descuentoTipo)}</select>
+        <input type="number" min="0" step="${d.descuentoTipo === 'pct' ? '0.5' : '0.01'}" name="descuento" data-nq="${d.descuentoTipo === 'pct' ? 'descuentoPct' : 'descuento'}" value="${E(d.descuentoTipo === 'pct' ? d.descuentoPct : d.descuento)}" style="width:96px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento general"${conItem ? ' disabled' : ''}>
+        <span class="small muted" id="nq-desc-monto" style="width:100%;text-align:right">${conItem ? 'Anulado: hay descuentos por ítem' : d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, cur) : '≈ ' + t.descuentoPct + '%'}</span></span>
       <span class="t">Neto sin ${E(imp.nombreImpuesto)}</span><span class="num right" id="nq-t-neto">${Util.money(t.neto, cur)}</span>
       <span class="t">${E(imp.nombreImpuesto)} ${Math.round(imp.impuesto * 100)}%</span><span class="num right" id="nq-t-igv">${Util.money(t.igv, cur)}</span>
       <span class="t grand">Total</span><span class="num right grand" id="nq-t-total">${Util.money(t.total, cur)}</span>
@@ -7728,7 +7787,10 @@ const UI = (() => {
     pon('suma', Util.money(t.suma, cur)); pon('neto', Util.money(t.neto, cur)); pon('igv', Util.money(t.igv, cur)); pon('total', Util.money(t.total, cur)); pon('usd', money(usd));
     pon('descit', Util.money(t.descItems, cur));
     pon('alt', Util.money(Util.sum(d.items.filter(it => it.alternativa && !it.opcional), it => Rules.lineaNeta(it, cur)), cur)); pon('opc', Util.money(Util.sum(d.items.filter(it => it.opcional), it => Rules.lineaNeta(it, cur)), cur));
-    const dm = $('#nq-desc-monto'); if (dm) dm.textContent = d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, d.moneda) : '≈ ' + t.descuentoPct + '%';
+    // Con descuentos por ítem el descuento general queda anulado (se actualiza sin redibujar para no perder el foco)
+    const conItem = d.items.some(it => +it.desc > 0), gen = $('#nq-desc-gen');
+    if (gen) gen.querySelectorAll('select, input').forEach(x => { x.disabled = conItem; });
+    const dm = $('#nq-desc-monto'); if (dm) dm.textContent = conItem ? 'Anulado: hay descuentos por ítem' : d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, d.moneda) : '≈ ' + t.descuentoPct + '%';
     const dp = $('#nq-dup'); if (dp) dp.innerHTML = dupHTML(Rules.numeroDuplicado(S.db, d.numero));
     const g = $('#nq-grande'); if (g) g.innerHTML = grandeHTML(d, usd);
   }
@@ -7821,6 +7883,23 @@ const UI = (() => {
     if (it.alternativa) { const prev = d.items.slice(0, i).reverse().find(x => !x.opcional && !x.alternativa) || d.items.find(x => x !== it && !x.opcional && !x.alternativa); it.alternativaDe = prev ? prev.uid : null; }
     else delete it.alternativaDe;
     render(true);
+  };
+  /** Link de la hoja de datos del ítem: no se imprime; se adjunta al PDF y queda guardado para las próximas cotizaciones */
+  const hojaGuardada = it => { const c = String(it.codigo || '').trim().toUpperCase(); if (!c) return null; const p = (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return (S.db.hojasDatos || {})[c + '|' + (it.marca || '')] || (p ? p.hojaDatos : null); };
+  function hojaItemHTML(it, i) {
+    if (!String(it.codigo || '').trim()) return '';
+    const u = it.hojaDatos || hojaGuardada(it);
+    return `<button type="button" class="hoja-item${u ? ' con' : ''}" data-action="nq-hoja" data-i="${i}" title="${u ? 'Hoja de datos: ' + E(u) + ' (se adjunta al PDF)' : 'Agregar el link de la hoja de datos (se adjunta al PDF y queda guardado)'}">${I('file').replace('<svg', '<svg width="12" height="12"')} ${u ? 'Hoja de datos ✓' : 'Hoja de datos'}</button>`;
+  }
+  ACTIONS['nq-hoja'] = el => {
+    const it = S.nueva.d.items[+el.dataset.i], u = it.hojaDatos || hojaGuardada(it) || '';
+    modal({ title: `Hoja de datos · ${it.codigo}`, body: `<p class="small muted" style="margin-top:0">El link no sale escrito en la cotización: el PDF del fabricante se adjunta al documento. Queda guardado para las próximas cotizaciones de este producto.</p>
+      <label class="field">Link del PDF<input type="url" name="url" value="${E(u)}" placeholder="https://…/datasheet.pdf"></label>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Usar este link`, cls: 'primary', onClick: r => {
+        const v = val(r, 'url').trim();
+        if (v && !/^https?:\/\/\S+$/i.test(v)) { const e = new Error('El link debe empezar con http:// o https://'); e.campos = { url: 'Link no válido' }; throw e; }
+        it.hojaDatos = v || ''; render(true);
+      } }] });
   };
   /** Si el producto está en varias listas: elegir de cuál sale el precio */
   function listaItemHTML(it, i) {
@@ -8516,7 +8595,7 @@ const UI = (() => {
   PAGES['cuentas'] = async () => {
     const db = S.db, u = S.user, h = hoy(), jef = u.rol === 'jefatura', F = S.ctaF;
     const inf = Rules.cuentas(db, h);
-    const base = jef ? db.clients.slice() : db.clients.filter(c => c.vendedorId === u.id);
+    const base = (jef ? db.clients.slice() : db.clients.filter(c => c.vendedorId === u.id)).filter(c => !c.archivado);
     let cs = base;
     if (F.estado === '__verificar') cs = cs.filter(c => c.verificar);
     else if (F.estado) cs = cs.filter(c => inf[c.id].estado === F.estado);
@@ -8641,20 +8720,33 @@ const UI = (() => {
      AGENDA DE CONTACTOS — común para todo el equipo
      ===================================================================== */
   /* ---------- Directorio de clientes: empresas (RUC, rubro, sedes) con sus contactos. Común para todo el equipo ---------- */
+  ACTIONS['contacto-eliminar'] = el => {
+    const c = cli(el.dataset.cliente), k = c.contactos.find(x => x.id === el.dataset.k);
+    modal({ title: 'Eliminar contacto', body: `<p style="margin-top:0">¿Eliminar a <strong>${E(k.nombre)}</strong> de ${E(c.razonSocial)}? Las cotizaciones ya emitidas conservan su nombre.</p>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarContacto(c.id, k.id, S.user.id); toast('Contacto eliminado.'); refresh(); } }] });
+  };
+  ACTIONS['empresa-eliminar'] = el => {
+    const c = cli(el.dataset.cliente), n = S.db.opps.filter(o => o.clienteId === c.id).length;
+    modal({ title: 'Eliminar empresa', body: `<p style="margin-top:0"><strong>${E(c.razonSocial)}</strong> dejará de aparecer en el directorio, en las cuentas y al cotizar.${n ? ` Sus ${n} oportunidades y cotizaciones se conservan en el historial (y se puede restaurar).` : ' No tiene historial: se borra.'}</p>
+      <label class="field">Motivo (opcional)<input type="text" name="motivo" placeholder="Ej.: ya no es cliente; empresa duplicada"></label>`,
+      actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async r => { const x = await Repo.eliminarCliente(c.id, val(r, 'motivo'), S.user.id); toast(x.archivada ? 'Empresa eliminada del directorio; su historial se conserva.' : 'Empresa eliminada.'); refresh(); } }] });
+  };
+  ACTIONS['empresa-restaurar'] = async el => { await Repo.restaurarCliente(el.dataset.cliente, S.user.id); toast('Empresa restaurada.'); refresh(); };
   PAGES['contactos'] = async () => {
     const db = S.db, u = S.user, F = S.agF;
     if (!F.lim) F.lim = 30;
     const nrm = Util.norm;
-    let cs = clientesOrdenados();
-    const totalK = db.clients.reduce((a, c) => a + c.contactos.length, 0);
+    const elim = Rules.puede(u, 'eliminar_clientes');
+    let cs = F.vendedor === '__archivadas' && elim ? db.clients.filter(c => c.archivado) : clientesOrdenados();
+    const totalK = db.clients.reduce((a, c) => a + (c.archivado ? 0 : c.contactos.length), 0), nActivas = db.clients.filter(c => !c.archivado).length;
     // Vendedor: "Mis clientes" (acceso rápido a su cartera para el seguimiento) o el directorio general de la empresa
     const vend = u.rol === 'vendedor', mios = vend && F.vista !== 'todos', nMios = vend ? cs.filter(c => c.vendedorId === u.id).length : 0;
     if (mios) cs = cs.filter(c => c.vendedorId === u.id);
-    else if (F.vendedor) cs = cs.filter(c => F.vendedor === '__mias' ? c.vendedorId === u.id : F.vendedor === '__sin' ? !c.vendedorId : F.vendedor === '__conk' ? c.contactos.length : c.vendedorId === F.vendedor);
+    else if (F.vendedor && F.vendedor !== '__archivadas') cs = cs.filter(c => F.vendedor === '__mias' ? c.vendedorId === u.id : F.vendedor === '__sin' ? !c.vendedorId : F.vendedor === '__conk' ? c.contactos.length : c.vendedorId === F.vendedor);
     const t = nrm(F.q.trim());
     const enK = (c, k) => nrm([k.nombre, k.cargo, k.rol, k.correo, k.telefono].join(' ')).includes(t);
     if (t) cs = cs.filter(c => nrm([c.razonSocial, c.ruc, c.rubro, c.tipo, ...Rules.sedesDe(c).map(x => [x.nombre, x.direccion, x.ciudad, x.pais].join(' '))].join(' ')).includes(t) || c.contactos.some(k => enK(c, k)));
-    const vOpts = [...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar'], ['__conk', 'Solo empresas con contactos']];
+    const vOpts = [...vendedores().map(v => [v.id, 'Cuentas de ' + v.nombre]), ['__sin', 'Cuentas sin asignar'], ['__conk', 'Solo empresas con contactos'], ...(elim ? [['__archivadas', `Empresas eliminadas (${db.clients.filter(c => c.archivado).length})`]] : [])];
     const puedeK = Rules.puede(u, 'agregar_contacto', {}), puedeC = Rules.puede(u, 'crear_cliente'), asig = Rules.puede(u, 'asignar_clientes');
     const vendOpts = asig ? options(vendedores().map(v => [v.id, v.iniciales + ' · ' + v.nombre])) : '';
     const tarjeta = c => {
@@ -8664,21 +8756,21 @@ const UI = (() => {
         <div class="dir-head"><div style="min-width:0">
           <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${asig ? '' : c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
           <div class="small muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : '<span style="color:var(--warn)">Sin RUC</span>'} · ${E(c.tipo || 'Integrador')}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div></div>
-          <div class="btn-row">${asig ? `<select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" title="Vendedor asignado" style="width:auto;min-width:150px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${vendOpts.replace(`value="${c.vendedorId}"`, `value="${c.vendedorId}" selected`)}</select>` : ''}${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}</div></div>
+          <div class="btn-row">${asig ? `<select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" title="Vendedor asignado" style="width:auto;min-width:150px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${vendOpts.replace(`value="${c.vendedorId}"`, `value="${c.vendedorId}" selected`)}</select>` : ''}${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC && !c.archivado ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}${elim && !c.prueba ? (c.archivado ? `<span class="chip">Eliminada ${Util.fmtDate(c.archivado.fecha)}</span><button class="btn sm" data-action="empresa-restaurar" data-cliente="${c.id}">Restaurar</button>` : `<button class="btn sm bad" data-action="empresa-eliminar" data-cliente="${c.id}">Eliminar empresa</button>`) : ''}</div></div>
         ${mios ? (() => { const r = Rules.cuenta(db, c.id, hoy()); return `<div class="dir-seg">${estadoChip(r.estado)}<span class="small muted">Última cotización: ${r.ultimaCot ? `${Util.fmtDate(r.ultimaCot)} (hace ${r.diasSinCotizar} días)` : 'ninguna'} · Último contacto: ${r.ultimoContacto ? Util.fmtDate(r.ultimoContacto.fecha) : '—'} · ${r.abiertas} abiertas</span>
           <span class="btn-row"><a class="btn sm" href="#/cuenta/${c.id}">Ver cuenta</a><button class="btn sm" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn sm primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Cotizar</button></span></div>`; })() : ''}
         <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
         ${ks.length ? `<div class="table-wrap"><table class="tbl dir-k"><thead><tr><th>Contacto</th><th>Cargo</th><th>Rol</th><th>Correo</th><th>Teléfono</th><th></th></tr></thead><tbody>
           ${ks.map(k => `<tr${t && enK(c, k) ? ' class="dir-hit"' : ''}><td class="cell-main">${E(k.nombre)}</td><td class="small">${E(k.cargo || '—')}</td><td class="small">${E(k.rol || '—')}</td>
             <td class="small">${k.correo ? `<a href="mailto:${E(k.correo)}">${E(k.correo)}</a>` : '—'}</td><td class="small nowrap">${E(k.telefono || '—')}</td>
-            <td class="nowrap"><div class="btn-row" style="flex-wrap:nowrap;justify-content:flex-end">${contactoLinks(k)}${edC ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></td></tr>`).join('')}
+            <td class="nowrap"><div class="btn-row" style="flex-wrap:nowrap;justify-content:flex-end">${contactoLinks(k)}${edC ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}${elim ? `<button class="btn sm ghost" data-action="contacto-eliminar" data-cliente="${c.id}" data-k="${k.id}" aria-label="Eliminar contacto" title="Eliminar contacto">${I('x')}</button>` : ''}</div></td></tr>`).join('')}
         </tbody></table></div>` : '<p class="small muted" style="margin:6px 0 0">Sin contactos registrados.</p>'}
       </section>`;
     };
     view().innerHTML = `
-      <div class="page-head"><div><h1>Directorio de clientes</h1><p class="muted">Común para todo el equipo · ${db.clients.length} empresas · ${totalK} contactos</p></div>
+      <div class="page-head"><div><h1>Directorio de clientes</h1><p class="muted">Común para todo el equipo · ${nActivas} empresas · ${totalK} contactos</p></div>
         <div class="btn-row">${puedeC ? `<button class="btn" data-action="cuenta-nueva" data-quedarse="1">${I('plus')} Agregar empresa</button>` : ''}${puedeK ? `<button class="btn primary" data-action="contacto-nuevo">${I('plus')} Agregar contacto</button>` : ''}</div></div>
-      ${vend ? `<div class="seg-toggle" role="group" aria-label="Vista del directorio" style="margin-bottom:10px"><button class="${mios ? 'active' : ''}" data-action="dir-vista" data-v="mios">Mis clientes (${nMios})</button><button class="${mios ? '' : 'active'}" data-action="dir-vista" data-v="todos">Todos los clientes (${db.clients.length})</button></div>` : ''}
+      ${vend ? `<div class="seg-toggle" role="group" aria-label="Vista del directorio" style="margin-bottom:10px"><button class="${mios ? 'active' : ''}" data-action="dir-vista" data-v="mios">Mis clientes (${nMios})</button><button class="${mios ? '' : 'active'}" data-action="dir-vista" data-v="todos">Todos los clientes (${nActivas})</button></div>` : ''}
       <div class="card" style="padding:12px"><div class="filters" style="margin:0">
         <label class="field" style="flex:2 1 320px">Buscar${mios ? ' en mis clientes' : ''}<input type="text" data-input="agf" name="q" value="${E(F.q)}" placeholder="Empresa, RUC, rubro, ciudad, contacto, correo o teléfono"></label>
         ${mios ? '' : `<label class="field">Mostrar<select data-change="agf" name="vendedor">${options(vOpts, F.vendedor, 'Todas las empresas')}</select></label>`}
@@ -8772,7 +8864,7 @@ const UI = (() => {
         ${ed && sel.size ? `<span class="chip info">${sel.size} seleccionados</span><button class="btn sm" data-action="cat-lote-precio">Ajustar precio %</button><button class="btn sm bad" data-action="cat-lote-quitar">Quitar</button><button class="btn sm ghost" data-action="cat-lote-limpiar">Quitar selección</button>` : ''}
         <button class="btn sm ghost" style="margin-left:auto" data-action="cat-exportar">${I('download')} Exportar lo filtrado</button></div>
       <div class="table-wrap"><table class="tbl" style="min-width:${ed ? 1100 : 920}px"><thead><tr>${ed ? `<th style="width:28px"><input type="checkbox" data-change="cat-sel-todo" aria-label="Seleccionar lo mostrado"${res.length && res.every(p => sel.has(p.id)) ? ' checked' : ''}></th>` : ''}<th>Marca</th><th>Código</th><th>Descripción</th>${variasL && !F.lista ? '<th>Lista</th>' : ''}<th class="r">Precio lista</th><th>Hoja de datos</th><th>Actualizado</th>${ed || edH ? '<th></th>' : ''}</tr></thead><tbody>
-        ${res.map(p => { const l = Rules.listaDe(db, Rules.listaIdDe(p)), h = p.hojaDatos && hojas[p.hojaDatos];
+        ${res.map(p => { const l = Rules.listaDe(db, Rules.listaIdDe(p)); p = Object.assign({}, p, { hojaDatos: (db.hojasDatos || {})[p.codigo.toUpperCase() + '|' + p.marca] || p.hojaDatos }); const h = p.hojaDatos && hojas[p.hojaDatos];
           return `<tr>${ed ? `<td><input type="checkbox" data-change="cat-sel" data-id="${p.id}"${sel.has(p.id) ? ' checked' : ''} aria-label="Seleccionar ${E(p.codigo)}"></td>` : ''}<td class="nowrap">${E(p.marca)}</td><td class="nowrap"><strong>${E(p.codigo)}</strong></td><td class="small">${E(p.descripcion)}</td>
           ${variasL && !F.lista ? `<td class="small nowrap">${E(l.nombre)}</td>` : ''}<td class="r num nowrap">${Util.money(p.precio, l.moneda)}</td>
           <td class="small">${p.hojaDatos ? `<a href="${E(p.hojaDatos)}" target="_blank" rel="noopener">${I('file')} Ver</a>${h && h.estado === 'caido' ? ` <span class="chip bad" title="${E(h.error || '')}">link caído${h.descargada ? ' · hay copia' : ''}</span>` : h && h.estado === 'ok' ? ' <span class="chip ok" title="Copia guardada en el servidor">✓</span>' : ''}` : '<span class="muted">—</span>'}</td>

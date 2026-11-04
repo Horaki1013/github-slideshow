@@ -6,7 +6,7 @@ Prototipo navegable de la plataforma que reemplazará los Excel de follow-up (FU
 - **Sin dependencias externas por CDN:** los gráficos son SVG propios. Lo único incluido de terceros es [pdf-lib](https://pdf-lib.js.org) (licencia MIT, dentro del mismo HTML), que une la cotización con sus anexos y hojas de datos en un solo PDF.
 - **Data 100 % ficticia:** se genera al cargar con una semilla fija y fechas relativas al día de hoy, así la demo siempre parece vigente.
 - **Sin persistencia en la demo:** los cambios viven en memoria durante la sesión. El botón **Restablecer datos de demo** (menú de usuario) regenera todo. El **modo piloto** (ver más abajo) sí guarda la información en el navegador.
-- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 21/21 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
+- **Autoverificación:** al cargar, la consola muestra `Autoverificación de reglas de negocio: 22/22 OK`. También se puede ejecutar a mano con `SelfTest.run()`.
 
 ## Usuarios de demo
 
@@ -58,6 +58,7 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
   - Finanzas, administración, logística y gestión pueden tener una oficina o ambas.
   - Cada oficina define su moneda, país, ciudad, impuesto (IGV 18 % o IVA 19 %), zona horaria y plantilla.
 - **Permisos por usuario** (administración): sobre los del rol, para los permisos configurables (`Config.PERMISOS_EDITABLES`).
+- **Eliminar empresas y contactos** (administración y finanzas): una empresa con historial deja de aparecer en el directorio, las cuentas y al cotizar, pero su historial se conserva y se puede restaurar. No se elimina si tiene oportunidades abiertas.
 - **Usuarios:**
   - eliminar un usuario conserva su historial;
   - "Reasignar cartera" pasa sus cuentas, oportunidades abiertas y leads a otro vendedor.
@@ -79,7 +80,8 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
   - la cotización tiene una lista predeterminada y en cada ítem se puede elegir otra;
   - si un producto está en varias listas, se ven todos sus precios.
 - **Kits y globales:** desglose interno de partes, con precios de lista editables y su suma como precio. Las partes no salen en el PDF.
-- **Descuento por ítem** en monto o en %, también en opcionales.
+- **Descuento por ítem** en monto o en %, también en opcionales. Si algún ítem tiene descuento, el **descuento general** de la cotización queda anulado (`Rules.conDescItems()`); un ítem sin tipo elegido se trata como % (lo que muestra el selector).
+- **Link de la hoja de datos desde la cotización**: el vendedor lo agrega en el ítem. No se imprime, pero se adjunta al PDF y queda guardado para las próximas cotizaciones (`db.hojasDatos`, que manda sobre el link de la lista).
 - **Alternativa de otra marca** en el mismo documento: queda ligada al ítem que reemplaza ("Alt. 1") y no suma al total.
 
 **Plantilla y PDF**
