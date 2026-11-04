@@ -117,6 +117,8 @@ module.exports = function crearM365({ CONFIG, log, usuarios, todos, meta, db: db
   /** Revisa cada pocos minutos: a las 8:00 de la oficina de cada persona salen su resumen diario y sus reportes programados */
   async function programados(paginaHtml) {
     if (!configurado() && !C.teamsWebhook) return;
+    // Solo a la hora del resumen (en Lima o en Santiago) se leen los datos y las reglas
+    if (!['America/Lima', 'America/Santiago'].some(z => fechaZona(z).hora === C.horaResumen)) return;
     let M, db;
     try { M = cargarMotor(paginaHtml()); db = datos(); } catch (e) { log('Envíos programados: ' + e.message); return; }
     await teamsDiario(M, db).catch(() => {});
@@ -154,6 +156,7 @@ module.exports = function crearM365({ CONFIG, log, usuarios, todos, meta, db: db
     const vs = M.Rules.vendedoresActivos(db), lineas = vs.map(v => `${v.nombre}: ${M.Rules.alertasUsuario(M.Rules.vista(db, v), v, ahora.fecha).length} pendientes`);
     try { await teams(lineas.join('\n'), `Pendientes del equipo · ${M.Util.fmtDate(ahora.fecha)}`); } catch (e) { registrar({ de: 'Teams', para: 'canal', asunto: 'Pendientes del equipo', estado: 'error', error: e.message }); }
   }
+  const soloAdmin = s => { if (!['admin', 'jefatura'].includes(s.usuario.rol)) { const e = new Error('Solo administración o jefatura.'); e.codigo = 403; throw e; } };
   /* ---------- Rutas de la API ---------- */
   const correoDe = s => { if (!s.usuario.correo) { const e = new Error('Tu usuario no tiene correo registrado: agrégalo en "Mis datos" o pídelo a administración.'); e.codigo = 400; throw e; } return s.usuario.correo; };
   const rutas = {
@@ -179,8 +182,8 @@ module.exports = function crearM365({ CONFIG, log, usuarios, todos, meta, db: db
       return { id: (r && r.id) || d.id };
     },
     'DELETE evento': async (req, res, q, c, s) => { await graph('DELETE', `/users/${encodeURIComponent(correoDe(s))}/events/${encodeURIComponent(q.get('id'))}`); return { ok: true }; },
-    'POST teams': async (req, res, q, cuerpo, s) => { const d = JSON.parse(cuerpo || '{}'); return { ok: await teams(String(d.texto || '').slice(0, 4000), d.titulo) }; },
-    'GET envios': (req, res, q, c, s) => ({ envios: dbFn().prepare('SELECT * FROM envios ORDER BY id DESC LIMIT 200').all() }),
+    'POST teams': async (req, res, q, cuerpo, s) => { soloAdmin(s); const d = JSON.parse(cuerpo || '{}'); return { ok: await teams(String(d.texto || '').slice(0, 4000), d.titulo) }; },
+    'GET envios': (req, res, q, c, s) => soloAdmin(s) || ({ envios: dbFn().prepare('SELECT * FROM envios ORDER BY id DESC LIMIT 200').all() }),
     'POST probar': async (req, res, q, c, s) => { await enviarCorreo({ de: C.remitente || correoDe(s), para: correoDe(s), asunto: 'Prueba de la plataforma de cotizaciones', html: '<p>La conexión con Microsoft 365 funciona.</p>' }); return { ok: true }; },
   };
   return { configurado, enviarCorreo, teams, programados, rutas, cargarMotor, datos, resumenDiario, reporteExcel };

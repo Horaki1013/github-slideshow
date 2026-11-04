@@ -27,6 +27,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const { DatabaseSync } = require('node:sqlite');
 
 const BASE = __dirname;
@@ -43,6 +44,7 @@ const CONFIG_DEF = {
   hojasDeDatos: true,                     // descargar y guardar copia de las hojas de datos
   microsoft365: null,                     // { tenantId, clientId, clientSecret, buzonComun, remitente, teamsWebhook } (ver LEEME-SERVIDOR)
   demo: false,                            // permite inicializar con data simulada (modelo para el programador)
+  hojasRedLocal: false,                   // permitir links de hojas de datos dentro de la red interna (por seguridad, no)
 };
 const CONFIG = (() => {
   let c = {};
@@ -252,7 +254,13 @@ setInterval(() => { const d = new Date(); if (d.getHours() >= 8 && ultimoTC !== 
 
 /* ---------- Hojas de datos y anexos por link: se guarda una copia ---------- */
 const MAX_HOJA = 25 * 1024 * 1024;
+/** ¿El link apunta a la red interna? (no se descargan: evita que un link lea equipos de la empresa) */
+function redInterna(url) {
+  const h = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  return /^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|::1$|f[cd][0-9a-f]{2}:)/i.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || !h.includes('.') && !h.includes(':');
+}
 async function descargarHoja(url) {
+  if (!CONFIG.hojasRedLocal && redInterna(url)) throw new Error('Por seguridad no se descargan links de la red interna');
   const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (plataforma-cotizaciones)' }, redirect: 'follow', signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error('El link respondió ' + r.status);
   const buf = Buffer.from(await r.arrayBuffer());
@@ -294,7 +302,7 @@ function paginaPrincipal() {
   let html = fs.readFileSync(archivo, 'utf8');
   const sinDatos = vacia();
   // Con datos en el servidor, la data inicial embebida en el HTML no se envía a los navegadores
-  if (!sinDatos) html = html.replace(/<script>(\/\*[^*]*\*\/\s*)?window\.__PILOTO_SEED=[\s\S]*?;<\/script>/, '<script>window.__PILOTO_SEED={"id":"servidor"};</script>')
+  if (!sinDatos) html = html.replace(/<script>(\/\*[^*]*\*\/\s*)?window\.__PILOTO_SEED(_GZ)?=[\s\S]*?;<\/script>/, '<script>window.__PILOTO_SEED={"id":"servidor"};</script>')
     .replace(/<script>window\.__LISTA_PRECIOS_PRIVADA=[\s\S]*?;<\/script>/, '');
   const info = { vacio: sinDatos, demo: !!CONFIG.demo, nombre: CONFIG.nombre || 'Servidor de la empresa' };
   return html.replace('<head>', `<head><script>window.__SERVIDOR=${JSON.stringify(info)};</script>`);
@@ -308,16 +316,44 @@ function leerCuerpo(req, limite = 200 * 1024 * 1024) {
     req.on('end', () => res(Buffer.concat(partes))); req.on('error', rej);
   });
 }
-const enviar = (res, codigo, obj) => { const b = Buffer.from(JSON.stringify(obj)); res.writeHead(codigo, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': b.length, 'Cache-Control': 'no-store' }); res.end(b); };
+/** Responde comprimido con gzip si el navegador lo acepta y vale la pena */
+function responder(res, codigo, tipo, cuerpo) {
+  let b = Buffer.isBuffer(cuerpo) ? cuerpo : Buffer.from(cuerpo); const h = { 'Content-Type': tipo, 'Cache-Control': 'no-store' };
+  if (res.gzip && b.length > 2048) { b = zlib.gzipSync(b, { level: 6 }); h['Content-Encoding'] = 'gzip'; h.Vary = 'Accept-Encoding'; }
+  h['Content-Length'] = b.length; res.writeHead(codigo, h); res.end(b);
+}
+const enviar = (res, codigo, obj) => responder(res, codigo, 'application/json; charset=utf-8', JSON.stringify(obj));
 const seguro = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '_').slice(0, 180) || '_';
 function todos() { return db.prepare('SELECT coleccion, id, datos FROM registros WHERE borrado = 0').all().map(r => [r.coleccion, r.id, r.datos]); }
 
+const fallos = new Map();   // intentos fallidos de ingreso por equipo y usuario
+/** Usuarios: solo gerencia, jefatura, administración (o quien tenga el permiso) crean, cambian o eliminan a otros usuarios;
+    nadie se sube el rol ni los permisos a sí mismo. Los cambios no permitidos se descartan (no se guardan) y el resto sí se guarda,
+    para que un ajuste automático de la plataforma sobre otros usuarios nunca bloquee el trabajo de un vendedor. */
+const PROTEGIDOS = ['rol', 'alcance', 'permisos', 'activo', 'eliminado', 'oficina', 'usuario', 'iniciales', 'meta'];
+function revisarUsuarios(cambios, borrados, s) {
+  const u = s.usuario, ignorados = [];
+  if (['admin', 'jefatura'].includes(u.rol) || (u.permisos && u.permisos.gestionar_usuarios)) return { cambios, borrados, ignorados };
+  const mismo = (a, b) => JSON.stringify(a == null ? null : a) === JSON.stringify(b == null ? null : b);
+  const ok = cambios.filter(([c, id, d]) => {
+    if (c !== 'users') return true;
+    const ant = registro('users', id);
+    const motivo = id === '#orden' ? 'cambiar la lista de usuarios' : !ant ? 'crear usuarios' : id !== u.id ? 'modificar a otro usuario' : PROTEGIDOS.find(k => !mismo(ant[k], JSON.parse(d)[k])) ? 'cambiar su propio rol, oficina o permisos' : null;
+    if (motivo) ignorados.push(['users', id, motivo]);
+    return !motivo;
+  });
+  const okB = borrados.filter(([c, id]) => { if (c !== 'users') return true; ignorados.push(['users', id, 'eliminar usuarios']); return false; });
+  return { cambios: ok, borrados: okB, ignorados };
+}
 const RUTAS = {
   'GET estado': (req) => ({ ok: true, vacio: vacia(), version: versionActual(), epoca: meta('epoca'), ahora: Date.now(), ultimoRespaldo: meta('ultimoRespaldo'), nombre: CONFIG.nombre || 'Servidor de la empresa' }),
   'POST login': async (req, res, q, cuerpo) => {
     const { usuario, clave } = JSON.parse(cuerpo || '{}');
+    const k = req.socket.remoteAddress + '|' + String(usuario || '').trim().toLowerCase(), f = fallos.get(k);
+    if (f && f.n >= 5 && Date.now() - f.desde < 5 * 60000) return [429, { error: 'Demasiados intentos fallidos. Espera 5 minutos o pide a administración que restablezca tu contraseña.' }];
     const u = usuarios().find(x => String(x.usuario || '').toLowerCase() === String(usuario || '').trim().toLowerCase());
-    if (!claveOk(u, clave)) return [401, { error: 'Usuario o contraseña incorrectos.' }];
+    if (!claveOk(u, clave)) { fallos.set(k, f && Date.now() - f.desde < 5 * 60000 ? { n: f.n + 1, desde: f.desde } : { n: 1, desde: Date.now() }); return [401, { error: 'Usuario o contraseña incorrectos.' }]; }
+    fallos.delete(k);
     if (u.activo === false) return [403, { error: 'Este usuario está desactivado. Consulta con el administrador.' }];
     log('Ingreso:', u.usuario, '·', req.socket.remoteAddress);
     return { token: crearSesion(u), usuarioId: u.id };
@@ -350,9 +386,12 @@ const RUTAS = {
     const { version, cambios, borrados } = JSON.parse(cuerpo || '{}');
     if (!bloqueo || bloqueo.token !== s.token) return [409, { error: 'Tu turno de escritura venció. Intenta de nuevo.' }];
     if (+version !== versionActual()) return [409, { error: 'Otro usuario guardó cambios al mismo tiempo. Intenta de nuevo.' }];
-    const v = aplicar(cambios || [], borrados || [], s.usuario.nombre, req.socket.remoteAddress);
+    const r = revisarUsuarios(cambios || [], borrados || [], s);
+    if (r.ignorados.length) log('Cambios de usuarios descartados de', s.usuario.usuario, '·', [...new Set(r.ignorados.map(x => x[2]))].join(', '));
+    const v = r.cambios.length || r.borrados.length ? aplicar(r.cambios, r.borrados, s.usuario.nombre, req.socket.remoteAddress) : versionActual();
     bloqueo.hasta = Date.now() + BLOQUEO_MS;
-    return { version: v };
+    // Lo descartado vuelve con su texto vigente en el servidor, para que el navegador no se quede con la versión rechazada
+    return { version: v, ignorados: r.ignorados.map(([c, id]) => { const a = registro(c, id); return [c, id, a ? JSON.stringify(a) : null]; }) };
   },
   'PUT doc': async (req, res, q, cuerpo) => {
     const dir = path.join(DIR_ARCH, 'documentos', seguro(q.get('c')));
@@ -402,11 +441,12 @@ setInterval(() => { M365.programados(htmlPlataforma).catch(e => log('Envíos pro
 
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  res.gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
   try {
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
       const h = paginaPrincipal();
       if (!h) { res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Falta el archivo de la plataforma: ' + CONFIG.html); }
-      const b = Buffer.from(h); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': b.length, 'Cache-Control': 'no-store' }); return res.end(b);
+      return responder(res, 200, 'text/html; charset=utf-8', h);
     }
     const m = /^\/api\/([a-z0-9]+)$/.exec(url.pathname);
     const clave = m && req.method + ' ' + m[1], fn = clave && RUTAS[clave];
@@ -436,7 +476,8 @@ function registrosDe(datos) {   // misma descomposición que el navegador (Almac
   }
   return out;
 }
-const [cmd, arg] = process.argv.slice(2).filter(x => !x.startsWith('--') && !/^\d+$/.test(x));
+/** Órdenes (importar, respaldo, restaurar…): lo que no es una opción --clave ni su valor */
+const [cmd, arg] = (a => { const p = []; for (let i = 0; i < a.length; i++) { if (/^--\w+$/.test(a[i])) { if (a[i + 1] && !a[i + 1].startsWith('--')) i++; } else p.push(a[i]); } return p; })(process.argv.slice(2));
 abrir();
 if (cmd === 'importar') {
   if (!arg) { console.error('Indica el archivo: node servidor.js importar respaldo.json'); process.exit(1); }

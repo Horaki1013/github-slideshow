@@ -82,11 +82,16 @@ Sin Microsoft 365 configurado, todo sigue funcionando así:
 ## Seguridad
 
 - **Acceso:** la API exige sesión, que se obtiene al ingresar con usuario y contraseña. Las contraseñas se guardan con salt y SHA-256.
+- **Intentos de contraseña:** tras 5 intentos fallidos del mismo usuario desde el mismo equipo, el ingreso queda frenado 5 minutos (también con la contraseña correcta). Los demás usuarios no se ven afectados.
+- **Usuarios protegidos:** solo gerencia, jefatura, administración (o quien tenga el permiso de gestionar usuarios) crean, cambian o eliminan usuarios. Nadie cambia su propio rol, oficina, alcance ni permisos. Si una escritura trae un cambio de usuarios no permitido, el servidor descarta solo ese cambio, guarda el resto y lo anota en el registro ("Cambios de usuarios descartados de…"). Cada uno sí cambia su contraseña y sus preferencias (por ejemplo, el speech).
+- **Rutas de administración:** el registro de envíos de correo y la publicación en Teams son solo para administración y jefatura.
+- **Hojas de datos:** el servidor no descarga links que apunten a la red interna (localhost, 10.x, 172.16–31.x, 192.168.x, nombres sin dominio), para que un link no sirva para leer equipos de la empresa. Si un fabricante publica sus hojas en un servidor interno, activar `"hojasRedLocal": true`.
+- **Compresión:** las respuestas grandes (la plataforma y los datos) viajan comprimidas con gzip si el navegador lo acepta, unas 3 a 5 veces más livianas por la red.
 - **Alcance de red:** el servidor está pensado para la red interna, así que no hay que publicarlo en internet. Para acceso remoto, usar la VPN de la empresa.
 - **Respaldos:** `datos/` y `respaldos/` contienen información confidencial. Restringir el acceso a esas carpetas a TI.
 
 ## Pendiente para producción (lo implementa el proveedor)
 
-- Validar en el servidor los permisos de cada escritura. Hoy el navegador aplica las reglas y el servidor guarda lo que recibe de un usuario con sesión.
+- Validar en el servidor los permisos de cada escritura. Hoy el servidor ya protege a los usuarios (roles, permisos, altas y bajas) y las rutas de administración; el resto de las reglas (por ejemplo, quién borra una cotización) las aplica el navegador.
 - Ingreso con Microsoft 365 (inicio de sesión único).
 - HTTPS con un certificado interno.

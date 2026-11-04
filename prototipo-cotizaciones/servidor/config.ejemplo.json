@@ -10,6 +10,7 @@
   "horaNoche": 23,
   "tipoCambio": true,
   "hojasDeDatos": true,
+  "hojasRedLocal": false,
   "microsoft365": {
     "tenantId": "",
     "clientId": "",
