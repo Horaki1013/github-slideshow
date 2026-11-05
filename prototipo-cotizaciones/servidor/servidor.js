@@ -253,29 +253,75 @@ let ultimoTC = null;
 setInterval(() => { const d = new Date(); if (d.getHours() >= 8 && ultimoTC !== hoyISO()) { ultimoTC = hoyISO(); actualizarTipoCambio(); } }, 10 * 60000).unref();
 
 /* ---------- Hojas de datos y anexos por link: se guarda una copia ---------- */
-const MAX_HOJA = 25 * 1024 * 1024;
 /** ¿El link apunta a la red interna? (no se descargan: evita que un link lea equipos de la empresa) */
 function redInterna(url) {
   const h = new URL(url).hostname.replace(/^\[|\]$/g, '');
   return /^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|::1$|f[cd][0-9a-f]{2}:)/i.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || !h.includes('.') && !h.includes(':');
 }
-async function descargarHoja(url) {
-  if (!CONFIG.hojasRedLocal && redInterna(url)) throw new Error('Por seguridad no se descargan links de la red interna');
-  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (plataforma-cotizaciones)' }, redirect: 'follow', signal: AbortSignal.timeout(30000) });
-  if (!r.ok) throw new Error('El link respondió ' + r.status);
-  const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.length > MAX_HOJA) throw new Error('El archivo supera 25 MB');
-  if (buf.subarray(0, 5).toString() !== '%PDF-') throw new Error('El link no entrega un PDF (puede ser una página web)');
-  return buf;
+/** Links "para compartir" (Google Drive, Dropbox, OneDrive/SharePoint) → link de descarga directa del archivo */
+function linkDirecto(url) {
+  const u = new URL(url), h = u.hostname;
+  let m;
+  if (/(^|\.)drive\.google\.com$/.test(h) && (m = /\/file\/d\/([^/]+)/.exec(u.pathname) || (u.searchParams.get('id') && [0, u.searchParams.get('id')]))) return `https://drive.google.com/uc?export=download&id=${m[1]}`;
+  if (/(^|\.)dropbox\.com$/.test(h)) { u.searchParams.delete('dl'); u.searchParams.set('dl', '1'); return u.href; }
+  if (/(^|\.)(sharepoint\.com|onedrive\.live\.com|1drv\.ms)$/.test(h) && !u.searchParams.has('download')) { u.searchParams.set('download', '1'); return u.href; }
+  return url;
 }
-async function hoja(url, forzar) {
+const esPDF = b => { const i = b.subarray(0, 1024).indexOf('%PDF-'); return i >= 0; };
+/** En una página web del fabricante, los links a PDF ordenados por cuánto parecen la hoja de datos del producto */
+function pdfsDeLaPagina(html, base, codigo) {
+  const vistos = new Set(), out = [], c = String(codigo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const re = /(?:href|src|data-src|data-href|data-url|content)\s*=\s*["']([^"'<>]+)["']|["'](https?:\\?\/\\?\/[^"'<>\s]+?\.pdf(?:\?[^"'<>\s]*)?)["']/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    let l = (m[1] || m[2]).replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (!/\.pdf(\b|$)|\/pdf\b|download|descarga|datasheet|data-sheet|ficha/i.test(l) || /^(javascript|mailto|#)/i.test(l)) continue;
+    try { l = new URL(l, base).href; } catch (e) { continue; }
+    if (!/^https?:/i.test(l) || vistos.has(l)) continue;
+    vistos.add(l);
+    const t = l.toLowerCase(), alrededor = html.slice(Math.max(0, m.index - 200), m.index + 200).toLowerCase();
+    let p = /\.pdf(\b|$)/.test(t) ? 3 : 0;
+    if (/data.?sheet|datenblatt|ficha|hoja.?de.?datos|spec|technical|tecnic/.test(t)) p += 4;
+    if (/data.?sheet|ficha t|hoja de datos|especificaciones|specifications/.test(alrededor)) p += 2;
+    if (c && t.replace(/[^a-z0-9]/g, '').includes(c)) p += 5;
+    if (/manual|brochure|catalog|certificate|declaration|warranty|garant|terms|privacy|cookie/.test(t)) p -= 3;
+    out.push({ l, p });
+  }
+  return out.sort((a, b) => b.p - a.p).map(x => x.l);
+}
+async function traer(url) {
+  // Las redirecciones se siguen a mano para revisar cada destino (ninguna puede llevar a la red interna)
+  for (let saltos = 0; saltos < 10; saltos++) {
+    if (!CONFIG.hojasRedLocal && redInterna(url)) throw new Error('Por seguridad no se descargan links de la red interna');
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36', Accept: 'application/pdf,text/html;q=0.9,*/*;q=0.8' }, redirect: 'manual', signal: AbortSignal.timeout(180000) });
+    if (r.status >= 300 && r.status < 400 && r.headers.get('location')) { url = new URL(r.headers.get('location'), url).href; continue; }
+    if (!r.ok) throw new Error('El link respondió ' + r.status);
+    return { buf: Buffer.from(await r.arrayBuffer()), final: url, tipo: r.headers.get('content-type') || '' };
+  }
+  throw new Error('El link redirige demasiadas veces');
+}
+/** Descarga la hoja de datos completa (sin límite de tamaño). Si el link abre una página web, busca en ella el PDF */
+async function descargarHoja(url, codigo) {
+  const a = await traer(linkDirecto(url));
+  if (esPDF(a.buf)) return a.buf;
+  const html = a.buf.toString('latin1');
+  if (!/<html|<!doctype|<head|<body|<a\s/i.test(html.slice(0, 5000)) && !/html/i.test(a.tipo)) throw new Error('El link no entrega un PDF');
+  // Google Drive: archivos grandes piden confirmar la descarga
+  const conf = /href="(\/uc\?export=download[^"]+confirm=[^"]+)"/.exec(html) || /action="(https:\/\/drive\.usercontent\.google\.com\/download[^"]*)"/.exec(html);
+  const candidatos = (conf ? [new URL(conf[1].replace(/&amp;/g, '&'), a.final).href] : []).concat(pdfsDeLaPagina(html, a.final, codigo)).slice(0, 6);
+  for (const l of candidatos) {
+    try { const b = await traer(l); if (esPDF(b.buf)) { log('Hoja de datos encontrada en la página:', url, '→', l); return b.buf; } } catch (e) { /* siguiente */ }
+  }
+  throw new Error(candidatos.length ? 'El link abre una página web y ninguno de sus PDF se pudo descargar' : 'El link abre una página web sin PDF de la hoja de datos');
+}
+async function hoja(url, forzar, codigo) {
   if (!/^https?:\/\//i.test(url)) throw new Error('Link no válido');
   const fila = db.prepare('SELECT * FROM hojas WHERE url = ?').get(url);
   const fresca = fila && fila.archivo && fila.estado === 'ok' && Date.now() - Date.parse(fila.revisada) < 7 * 864e5;
   if (fresca && !forzar) return { fila, buf: fs.readFileSync(path.join(DIR_ARCH, 'hojas', fila.archivo)) };
   const ahora = new Date().toISOString();
   try {
-    const buf = await descargarHoja(url), nombre = sha256(url).slice(0, 24) + '.pdf';
+    const buf = await descargarHoja(url, codigo), nombre = sha256(url).slice(0, 24) + '.pdf';
     fs.mkdirSync(path.join(DIR_ARCH, 'hojas'), { recursive: true });
     fs.writeFileSync(path.join(DIR_ARCH, 'hojas', nombre), buf);
     db.prepare('INSERT INTO hojas (url, archivo, tipo, bytes, descargada, revisada, estado, error) VALUES (?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(url) DO UPDATE SET archivo = excluded.archivo, bytes = excluded.bytes, descargada = excluded.descargada, revisada = excluded.revisada, estado = excluded.estado, error = NULL')
@@ -424,7 +470,7 @@ const RUTAS = {
   'GET hoja': async (req, res, q) => {
     if (!CONFIG.hojasDeDatos) return [503, { error: 'La descarga de hojas de datos está desactivada en el servidor.' }];
     try {
-      const { fila, buf, copia } = await hoja(String(q.get('url') || ''), q.get('forzar') === '1');
+      const { fila, buf, copia } = await hoja(String(q.get('url') || ''), q.get('forzar') === '1', q.get('c') || '');
       res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': buf.length, 'X-Hoja-Estado': copia ? 'copia' : 'ok', 'X-Hoja-Fecha': fila.descargada || '', 'X-Hoja-Error': encodeURIComponent(fila.error || '') });
       res.end(buf);
     } catch (e) { return [502, { error: e.message }]; }
@@ -453,7 +499,7 @@ const servidor = http.createServer(async (req, res) => {
     if (!fn) return enviar(res, 404, { error: 'No encontrado' });
     const s = PUBLICAS.has(clave) ? null : sesion(req);
     if (!PUBLICAS.has(clave) && !s) return enviar(res, 401, { error: 'Tu sesión venció. Vuelve a ingresar.' });
-    const cuerpo = ['POST', 'PUT'].includes(req.method) ? await leerCuerpo(req) : null;
+    const cuerpo = ['POST', 'PUT'].includes(req.method) ? await leerCuerpo(req, req.method === 'PUT' ? 2 * 1024 ** 3 : undefined) : null;   // PUT: documentos y PDF de hojas de datos, de cualquier tamaño
     const r = await fn(req, res, url.searchParams, req.method === 'PUT' ? cuerpo : cuerpo && cuerpo.toString('utf8'), s);
     if (res.headersSent) return;
     if (Array.isArray(r)) return enviar(res, r[0], r[1]);

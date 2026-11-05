@@ -81,7 +81,9 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
   - si un producto está en varias listas, se ven todos sus precios.
 - **Kits y globales:** desglose interno de partes, con precios de lista editables y su suma como precio. Las partes no salen en el PDF.
 - **Descuento por ítem** en monto o en %, también en opcionales. Si algún ítem tiene descuento, el **descuento general** de la cotización queda anulado (`Rules.conDescItems()`); un ítem sin tipo elegido se trata como % (lo que muestra el selector).
-- **Link de la hoja de datos desde la cotización**: el vendedor lo agrega en el ítem. No se imprime, pero se adjunta al PDF y queda guardado para las próximas cotizaciones (`db.hojasDatos`, que manda sobre el link de la lista).
+- **Hoja de datos desde la cotización**: en el ítem, el vendedor elige *Agregar enlace* o *Subir PDF*. No se imprime: la hoja completa va dentro del mismo PDF y queda guardada para las próximas cotizaciones de ese producto.
+  - El enlace va a `db.hojasDatos` (manda sobre el link de la lista). El PDF subido va a `db.hojasPDF` (por código y marca), con el archivo en la carpeta compartida, en el servidor o en el navegador, igual que los anexos, y sin límite de tamaño.
+  - Con enlace y PDF a la vez, se usa el enlace y, si falla, el PDF subido.
 - **Alternativa de otra marca** en el mismo documento: queda ligada al ítem que reemplaza ("Alt. 1") y no suma al total.
 
 **Plantilla y PDF**
@@ -90,6 +92,10 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
   - los datos y condiciones de Chile se ajustan sobre los de Perú (`Rules.empresaOficina()`).
 - **PDF único:** cotización, luego los anexos de la plantilla (por ejemplo términos y condiciones, subidos o por link) y al final las hojas de datos de los productos cotizados.
   - Si un link no responde, el servidor usa su copia y avisa.
+  - El cliente recibe siempre un solo archivo, sin links. Si una hoja de datos no se puede incluir, se avisa al vendedor antes de descargar o enviar, y ahí mismo puede subir su PDF o seguir sin ella.
+  - Las hojas de datos van completas, de cualquier tamaño. Las protegidas (restricciones de copia o impresión, cifrado RC4 o AES de 128 o 256 bits) se descifran antes de unirlas, para que sus páginas no salgan ilegibles (`PDFCifrado`, JavaScript propio, sin `crypto.subtle`). Las que piden contraseña para abrirlas no se pueden incluir.
+  - Con servidor, si el enlace abre la página del producto en el sitio del fabricante, el servidor busca en ella el PDF de la hoja de datos (prioriza "datasheet", "ficha" y el código del producto, y descarta manuales y políticas). También convierte los links "para compartir" de Google Drive, Dropbox y OneDrive en descargas directas.
+  - Sin servidor, el navegador solo puede descargar los links de sitios que lo permiten (la mayoría de los fabricantes no). Para el resto está *Subir PDF*.
   - Sin servidor, los links que no se pudieron adjuntar quedan en una página final.
 
 **Reportes y asistencia**

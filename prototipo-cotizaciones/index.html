@@ -151,7 +151,7 @@ input.invalid,select.invalid,textarea.invalid{border-color:var(--bad);background
 :is(.form-grid,.fg,.grid,.filters) > label.field:has(> .f-ctl){display:grid;grid-row:span 3;grid-template-rows:subgrid;row-gap:4px;align-content:start}
 :is(.form-grid,.fg,.grid,.filters):has(> label.field > .f-ctl) > :not(label.field){grid-row:span 2;align-self:end}
 :is(.form-grid,.fg,.grid,.filters):has(> label.field > .f-ctl) > :is(.fg-sub,h2,h3,p){grid-row:span 1;align-self:auto}
-label.field > .f-lab{align-self:end}
+:is(.form-grid,.fg,.grid,.filters) > label.field > .f-lab{align-self:end}
 label.field > .f-ctl{display:flex;flex-direction:column;gap:4px;min-width:0}
 label.field > .f-pie{display:flex;flex-direction:column;gap:2px}
 label.field > .f-pie:empty{display:none}
@@ -1731,6 +1731,266 @@ const PdfDoc = (() => {
   }
   return { crear, imagen, ancho, partir, winAnsi };
 })();
+/* ---------- PDF protegidos: muchas hojas de datos de fabricantes vienen cifradas (sin contraseña para abrir, pero con
+   restricciones de copia o impresión). Si se unen tal cual, sus páginas salen ilegibles. Aquí se descifran con el método
+   estándar de PDF (RC4 de 40 a 128 bits, AES-128 y AES-256) antes de unirlas a la cotización.
+   Todo es JavaScript propio (sin crypto.subtle), así funciona también abriendo la plataforma desde el servidor por http. ---------- */
+const PDFCifrado = (() => {
+  /* --- MD5 --- */
+  const MD5_K = new Int32Array(64).map((_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) | 0);
+  const MD5_S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+  function md5(b) {
+    const l = b.length, n = ((l + 8) >> 6) + 1 << 6, m = new Uint8Array(n); m.set(b); m[l] = 0x80;
+    const dv = new DataView(m.buffer); dv.setUint32(n - 8, (l * 8) >>> 0, true); dv.setUint32(n - 4, Math.floor(l / 0x20000000), true);
+    let a0 = 0x67452301, b0 = 0xefcdab89 | 0, c0 = 0x98badcfe | 0, d0 = 0x10325476;
+    const W = new Int32Array(16);
+    for (let o = 0; o < n; o += 64) {
+      for (let i = 0; i < 16; i++) W[i] = dv.getInt32(o + i * 4, true);
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16) { F = (B & C) | (~B & D); g = i; } else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) & 15; }
+        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) & 15; } else { F = C ^ (B | ~D); g = (7 * i) & 15; }
+        const s = MD5_S[(i >> 4) * 4 + (i & 3)], t = (A + F + MD5_K[i] + W[g]) | 0;
+        A = D; D = C; C = B; B = (B + ((t << s) | (t >>> (32 - s)))) | 0;
+      }
+      a0 = (a0 + A) | 0; b0 = (b0 + B) | 0; c0 = (c0 + C) | 0; d0 = (d0 + D) | 0;
+    }
+    const out = new Uint8Array(16), ov = new DataView(out.buffer);
+    [a0, b0, c0, d0].forEach((x, i) => ov.setInt32(i * 4, x, true));
+    return out;
+  }
+  /* --- SHA-256 / SHA-384 / SHA-512 (solo para AES-256, revisión 6) --- */
+  const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+  function sha256(b) {
+    const l = b.length, n = ((l + 8) >> 6) + 1 << 6, m = new Uint8Array(n); m.set(b); m[l] = 0x80;
+    const dv = new DataView(m.buffer); dv.setUint32(n - 4, (l * 8) >>> 0); dv.setUint32(n - 8, Math.floor(l / 0x20000000));
+    const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]), W = new Uint32Array(64);
+    const r = (x, k) => (x >>> k) | (x << (32 - k));
+    for (let o = 0; o < n; o += 64) {
+      for (let i = 0; i < 16; i++) W[i] = dv.getUint32(o + i * 4);
+      for (let i = 16; i < 64; i++) W[i] = (W[i - 16] + (r(W[i - 15], 7) ^ r(W[i - 15], 18) ^ (W[i - 15] >>> 3)) + W[i - 7] + (r(W[i - 2], 17) ^ r(W[i - 2], 19) ^ (W[i - 2] >>> 10))) >>> 0;
+      let [a, b2, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + SHA256_K[i] + W[i]) >>> 0, t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b2) ^ (a & c) ^ (b2 & c))) >>> 0;
+        h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b2; b2 = a; a = (t1 + t2) >>> 0;
+      }
+      [a, b2, c, d, e, f, g, h].forEach((x, i) => { H[i] = (H[i] + x) >>> 0; });
+    }
+    const out = new Uint8Array(32), ov = new DataView(out.buffer); H.forEach((x, i) => ov.setUint32(i * 4, x)); return out;
+  }
+  const SHA512_K = ['428a2f98d728ae22', '7137449123ef65cd', 'b5c0fbcfec4d3b2f', 'e9b5dba58189dbbc', '3956c25bf348b538', '59f111f1b605d019', '923f82a4af194f9b', 'ab1c5ed5da6d8118',
+    'd807aa98a3030242', '12835b0145706fbe', '243185be4ee4b28c', '550c7dc3d5ffb4e2', '72be5d74f27b896f', '80deb1fe3b1696b1', '9bdc06a725c71235', 'c19bf174cf692694',
+    'e49b69c19ef14ad2', 'efbe4786384f25e3', '0fc19dc68b8cd5b5', '240ca1cc77ac9c65', '2de92c6f592b0275', '4a7484aa6ea6e483', '5cb0a9dcbd41fbd4', '76f988da831153b5',
+    '983e5152ee66dfab', 'a831c66d2db43210', 'b00327c898fb213f', 'bf597fc7beef0ee4', 'c6e00bf33da88fc2', 'd5a79147930aa725', '06ca6351e003826f', '142929670a0e6e70',
+    '27b70a8546d22ffc', '2e1b21385c26c926', '4d2c6dfc5ac42aed', '53380d139d95b3df', '650a73548baf63de', '766a0abb3c77b2a8', '81c2c92e47edaee6', '92722c851482353b',
+    'a2bfe8a14cf10364', 'a81a664bbc423001', 'c24b8b70d0f89791', 'c76c51a30654be30', 'd192e819d6ef5218', 'd69906245565a910', 'f40e35855771202a', '106aa07032bbd1b8',
+    '19a4c116b8d2d0c8', '1e376c085141ab53', '2748774cdf8eeb99', '34b0bcb5e19b48a8', '391c0cb3c5c95a63', '4ed8aa4ae3418acb', '5b9cca4f7763e373', '682e6ff3d6b2b8a3',
+    '748f82ee5defb2fc', '78a5636f43172f60', '84c87814a1f0ab72', '8cc702081a6439ec', '90befffa23631e28', 'a4506cebde82bde9', 'bef9a3f7b2c67915', 'c67178f2e372532b',
+    'ca273eceea26619c', 'd186b8c721c0c207', 'eada7dd6cde0eb1e', 'f57d4f7fee6ed178', '06f067aa72176fba', '0a637dc5a2c898a6', '113f9804bef90dae', '1b710b35131c471b',
+    '28db77f523047d84', '32caab7b40c72493', '3c9ebe0a15c9bebc', '431d67c49c100d4c', '4cc5d4becb3e42b6', '597f299cfc657e2a', '5fcb6fab3ad6faec', '6c44198c4a475817'];
+  let K512 = null;
+  function sha512(b, de384) {
+    K512 = K512 || SHA512_K.map(h => BigInt('0x' + h));
+    const M = (1n << 64n) - 1n, r = (x, k) => ((x >> BigInt(k)) | (x << BigInt(64 - k))) & M;
+    const l = b.length, n = ((l + 16) >> 7) + 1 << 7, m = new Uint8Array(n); m.set(b); m[l] = 0x80;
+    const dv = new DataView(m.buffer); dv.setUint32(n - 4, (l * 8) >>> 0); dv.setUint32(n - 8, Math.floor(l / 0x20000000));
+    let H = (de384 ? ['cbbb9d5dc1059ed8', '629a292a367cd507', '9159015a3070dd17', '152fecd8f70e5939', '67332667ffc00b31', '8eb44a8768581511', 'db0c2e0d64f98fa7', '47b5481dbefa4fa4']
+      : ['6a09e667f3bcc908', 'bb67ae8584caa73b', '3c6ef372fe94f82b', 'a54ff53a5f1d36f1', '510e527fade682d1', '9b05688c2b3e6c1f', '1f83d9abfb41bd6b', '5be0cd19137e2179']).map(h => BigInt('0x' + h));
+    const W = new Array(80);
+    for (let o = 0; o < n; o += 128) {
+      for (let i = 0; i < 16; i++) W[i] = dv.getBigUint64(o + i * 8);
+      for (let i = 16; i < 80; i++) W[i] = (W[i - 16] + (r(W[i - 15], 1) ^ r(W[i - 15], 8) ^ (W[i - 15] >> 7n)) + W[i - 7] + (r(W[i - 2], 19) ^ r(W[i - 2], 61) ^ (W[i - 2] >> 6n))) & M;
+      let [a, b2, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 80; i++) {
+        const t1 = (h + (r(e, 14) ^ r(e, 18) ^ r(e, 41)) + ((e & f) ^ (~e & M & g)) + K512[i] + W[i]) & M, t2 = ((r(a, 28) ^ r(a, 34) ^ r(a, 39)) + ((a & b2) ^ (a & c) ^ (b2 & c))) & M;
+        h = g; g = f; f = e; e = (d + t1) & M; d = c; c = b2; b2 = a; a = (t1 + t2) & M;
+      }
+      H = H.map((x, i) => (x + [a, b2, c, d, e, f, g, h][i]) & M);
+    }
+    const out = new Uint8Array(64), ov = new DataView(out.buffer); H.forEach((x, i) => ov.setBigUint64(i * 8, x));
+    return de384 ? out.slice(0, 48) : out;
+  }
+  /* --- RC4 --- */
+  function rc4(key, data) {
+    const s = new Uint8Array(256).map((_, i) => i), out = new Uint8Array(data.length);
+    for (let i = 0, j = 0; i < 256; i++) { j = (j + s[i] + key[i % key.length]) & 255; const t = s[i]; s[i] = s[j]; s[j] = t; }
+    for (let k = 0, i = 0, j = 0; k < data.length; k++) { i = (i + 1) & 255; j = (j + s[i]) & 255; const t = s[i]; s[i] = s[j]; s[j] = t; out[k] = data[k] ^ s[(s[i] + s[j]) & 255]; }
+    return out;
+  }
+  /* --- AES (CBC), con tablas --- */
+  const SB = new Uint8Array(256), ISB = new Uint8Array(256), TE = [0, 1, 2, 3].map(() => new Uint32Array(256)), TD = [0, 1, 2, 3].map(() => new Uint32Array(256));
+  (() => {
+    const x2 = a => ((a << 1) ^ (a & 0x80 ? 0x1b : 0)) & 255, mul = (a, b) => { let r = 0; while (b) { if (b & 1) r ^= a; a = x2(a); b >>= 1; } return r; };
+    let p = 1, q = 1;
+    do { p = p ^ x2(p); q ^= q << 1; q ^= q << 2; q ^= q << 4; q &= 255; if (q & 0x80) q ^= 0x09;
+      const x = q ^ ((q << 1) | (q >> 7)) & 255 ^ ((q << 2) | (q >> 6)) & 255 ^ ((q << 3) | (q >> 5)) & 255 ^ ((q << 4) | (q >> 4)) & 255;
+      SB[p] = (x ^ 0x63) & 255; } while (p !== 1);
+    SB[0] = 0x63;
+    for (let i = 0; i < 256; i++) ISB[SB[i]] = i;
+    for (let i = 0; i < 256; i++) {
+      const s = SB[i], e = (mul(s, 2) << 24 | s << 16 | s << 8 | mul(s, 3)) >>> 0, v = ISB[i], d = (mul(v, 14) << 24 | mul(v, 9) << 16 | mul(v, 13) << 8 | mul(v, 11)) >>> 0;
+      for (let k = 0; k < 4; k++) { TE[k][i] = ((e >>> (8 * k)) | (e << (32 - 8 * k))) >>> 0; TD[k][i] = ((d >>> (8 * k)) | (d << (32 - 8 * k))) >>> 0; }
+    }
+  })();
+  function expandir(key) {
+    const nk = key.length / 4, nr = nk + 6, w = new Uint32Array(4 * (nr + 1));
+    for (let i = 0; i < nk; i++) w[i] = (key[4 * i] << 24 | key[4 * i + 1] << 16 | key[4 * i + 2] << 8 | key[4 * i + 3]) >>> 0;
+    for (let i = nk, rc = 1; i < w.length; i++) {
+      let t = w[i - 1];
+      if (i % nk === 0) { t = (SB[t >>> 16 & 255] << 24 | SB[t >>> 8 & 255] << 16 | SB[t & 255] << 8 | SB[t >>> 24]) ^ (rc << 24); rc = ((rc << 1) ^ (rc & 0x80 ? 0x1b : 0)) & 255; }
+      else if (nk > 6 && i % nk === 4) t = SB[t >>> 24] << 24 | SB[t >>> 16 & 255] << 16 | SB[t >>> 8 & 255] << 8 | SB[t & 255];
+      w[i] = (w[i - nk] ^ t) >>> 0;
+    }
+    // Llaves de descifrado (forma equivalente: InvMixColumns aplicado a las rondas intermedias)
+    const dw = new Uint32Array(w.length);
+    for (let r = 0; r <= nr; r++) for (let c = 0; c < 4; c++) {
+      const v = w[4 * (nr - r) + c];
+      dw[4 * r + c] = r === 0 || r === nr ? v : (TD[0][SB[v >>> 24]] ^ TD[1][SB[v >>> 16 & 255]] ^ TD[2][SB[v >>> 8 & 255]] ^ TD[3][SB[v & 255]]) >>> 0;
+    }
+    return { w, dw, nr };
+  }
+  function bloque(k, s, inv) {
+    const w = inv ? k.dw : k.w, T = inv ? TD : TE, S = inv ? ISB : SB, nr = k.nr;
+    let [a, b, c, d] = s.map((x, i) => x ^ w[i]);
+    for (let r = 1; r < nr; r++) {
+      const o = 4 * r;
+      const n = inv
+        ? [T[0][a >>> 24] ^ T[1][d >>> 16 & 255] ^ T[2][c >>> 8 & 255] ^ T[3][b & 255], T[0][b >>> 24] ^ T[1][a >>> 16 & 255] ^ T[2][d >>> 8 & 255] ^ T[3][c & 255],
+          T[0][c >>> 24] ^ T[1][b >>> 16 & 255] ^ T[2][a >>> 8 & 255] ^ T[3][d & 255], T[0][d >>> 24] ^ T[1][c >>> 16 & 255] ^ T[2][b >>> 8 & 255] ^ T[3][a & 255]]
+        : [T[0][a >>> 24] ^ T[1][b >>> 16 & 255] ^ T[2][c >>> 8 & 255] ^ T[3][d & 255], T[0][b >>> 24] ^ T[1][c >>> 16 & 255] ^ T[2][d >>> 8 & 255] ^ T[3][a & 255],
+          T[0][c >>> 24] ^ T[1][d >>> 16 & 255] ^ T[2][a >>> 8 & 255] ^ T[3][b & 255], T[0][d >>> 24] ^ T[1][a >>> 16 & 255] ^ T[2][b >>> 8 & 255] ^ T[3][c & 255]];
+      a = n[0] ^ w[o]; b = n[1] ^ w[o + 1]; c = n[2] ^ w[o + 2]; d = n[3] ^ w[o + 3];
+    }
+    const o = 4 * nr, f = inv ? [[a, d, c, b], [b, a, d, c], [c, b, a, d], [d, c, b, a]] : [[a, b, c, d], [b, c, d, a], [c, d, a, b], [d, a, b, c]];
+    return f.map((x, i) => ((S[x[0] >>> 24] << 24 | S[x[1] >>> 16 & 255] << 16 | S[x[2] >>> 8 & 255] << 8 | S[x[3] & 255]) ^ w[o + i]) >>> 0);
+  }
+  const palabras = (b, o) => [0, 1, 2, 3].map(i => (b[o + 4 * i] << 24 | b[o + 4 * i + 1] << 16 | b[o + 4 * i + 2] << 8 | b[o + 4 * i + 3]) >>> 0);
+  const ponerPalabras = (out, o, ws) => ws.forEach((x, i) => { out[o + 4 * i] = x >>> 24; out[o + 4 * i + 1] = x >>> 16 & 255; out[o + 4 * i + 2] = x >>> 8 & 255; out[o + 4 * i + 3] = x & 255; });
+  /** AES-CBC: descifra (sin quitar el relleno) */
+  function aesDescifrar(key, iv, data) {
+    const k = expandir(key), n = data.length & ~15, out = new Uint8Array(n);
+    let prev = palabras(iv, 0);
+    for (let o = 0; o < n; o += 16) { const c = palabras(data, o), p = bloque(k, c, true); ponerPalabras(out, o, p.map((x, i) => (x ^ prev[i]) >>> 0)); prev = c; }
+    return out;
+  }
+  function aesCifrar(key, iv, data) {
+    const k = expandir(key), out = new Uint8Array(data.length);
+    let prev = palabras(iv, 0);
+    for (let o = 0; o < data.length; o += 16) { const p = palabras(data, o); prev = bloque(k, p.map((x, i) => (x ^ prev[i]) >>> 0), false); ponerPalabras(out, o, prev); }
+    return out;
+  }
+  const quitarRelleno = b => { const p = b[b.length - 1]; return p >= 1 && p <= 16 && b.length >= p ? b.slice(0, b.length - p) : b; };
+  const unir = (...xs) => { const out = new Uint8Array(xs.reduce((s, x) => s + x.length, 0)); let o = 0; xs.forEach(x => { out.set(x, o); o += x.length; }); return out; };
+  const RELLENO = new Uint8Array([0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff, 0xfa, 0x01, 0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c, 0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a]);
+
+  /* --- Llave del documento (contraseña de apertura vacía, que es el caso de las hojas de datos) --- */
+  function llave(P, enc, id0) {
+    const num = k => { const v = enc.lookup(P.PDFName.of(k)); return v && v.asNumber ? v.asNumber() : undefined; };
+    const bytes = k => { const v = enc.lookup(P.PDFName.of(k)); return v ? v.asBytes() : new Uint8Array(0); };
+    const V = num('V') || 0, R = num('R') || 2, filtro = enc.lookup(P.PDFName.of('Filter'));
+    if (filtro && filtro.asString() !== '/Standard') throw new Error('usa un cifrado no estándar');
+    let metodo = V >= 4 ? 'AESV2' : 'RC4', len = V === 1 ? 5 : (num('Length') || 40) / 8;
+    if (V >= 4) {   // filtros de cifrado: el de los streams manda
+      const cf = enc.lookup(P.PDFName.of('CF')), nombre = enc.lookup(P.PDFName.of('StmF')), def = cf && nombre && cf.lookup(nombre);
+      const cfm = def && def.lookup(P.PDFName.of('CFM'));
+      metodo = !nombre || nombre.asString() === '/Identity' ? 'ninguno' : cfm ? cfm.asString().slice(1) : 'AESV2';
+      if (metodo === 'V2') { metodo = 'RC4'; const l = def.lookup(P.PDFName.of('Length')); len = l ? (l.asNumber() > 40 ? l.asNumber() / 8 : l.asNumber()) : 16; }
+      else if (metodo === 'AESV2') len = 16;
+    }
+    const em = enc.lookup(P.PDFName.of('EncryptMetadata')), cifraMetadata = !(em && em.asBoolean && em.asBoolean() === false);
+    if (R >= 5) {
+      const U = bytes('U'), UE = bytes('UE');
+      const h = R === 5 ? sha256(U.slice(40, 48)) : hash2B(new Uint8Array(0), U.slice(40, 48), new Uint8Array(0));
+      if (!igual(R === 5 ? sha256(U.slice(32, 40)) : hash2B(new Uint8Array(0), U.slice(32, 40), new Uint8Array(0)), U.slice(0, 32))) throw new Error('está protegido con contraseña de apertura');
+      return { key: aesDescifrar(h, new Uint8Array(16), UE.slice(0, 32)), metodo: 'AESV3', cifraMetadata };
+    }
+    const O = bytes('O').slice(0, 32), Pv = num('P') | 0, pb = new Uint8Array([Pv & 255, Pv >>> 8 & 255, Pv >>> 16 & 255, Pv >>> 24 & 255]);
+    let k = md5(unir(RELLENO, O, pb, id0, R >= 4 && !cifraMetadata ? new Uint8Array([255, 255, 255, 255]) : new Uint8Array(0))).slice(0, len);
+    if (R >= 3) for (let i = 0; i < 50; i++) k = md5(k).slice(0, len);
+    // Comprobación con U: si no calza, el PDF pide contraseña para abrirlo
+    const U = bytes('U');
+    if (U.length >= 16) {
+      let ok;
+      if (R === 2) ok = igual(rc4(k, RELLENO), U.slice(0, 32));
+      else { let x = rc4(k, md5(unir(RELLENO, id0))); for (let i = 1; i <= 19; i++) x = rc4(k.map(b => b ^ i), x); ok = igual(x, U.slice(0, 16)); }
+      if (!ok) throw new Error('está protegido con contraseña de apertura');
+    }
+    return { key: k, metodo, cifraMetadata };
+  }
+  const igual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  function hash2B(pw, salt, udata) {
+    let K = sha256(unir(pw, salt, udata));
+    for (let i = 0; ; i++) {
+      const K1 = unir(...Array(64).fill(unir(pw, K, udata))), E = aesCifrar(K.slice(0, 16), K.slice(16, 32), K1);
+      let s = 0; for (let j = 0; j < 16; j++) s += E[j];
+      K = s % 3 === 0 ? sha256(E) : s % 3 === 1 ? sha512(E, true) : sha512(E);
+      if (i >= 63 && E[E.length - 1] <= i - 32) return K.slice(0, 32);
+    }
+  }
+  /** Descifra los datos de un objeto (número y generación) */
+  function descifrador(L) {
+    return (num, gen, data) => {
+      if (L.metodo === 'ninguno') return data;
+      let k = L.key;
+      if (L.metodo !== 'AESV3') {
+        const extra = new Uint8Array([num & 255, num >> 8 & 255, num >> 16 & 255, gen & 255, gen >> 8 & 255]);
+        k = md5(unir(L.key, extra, L.metodo === 'AESV2' ? new Uint8Array([0x73, 0x41, 0x6c, 0x54]) : new Uint8Array(0))).slice(0, Math.min(L.key.length + 5, 16));
+      }
+      if (L.metodo === 'RC4') return rc4(k, data);
+      if (data.length < 32) return data.length === 16 ? new Uint8Array(0) : data.slice(16);   // vacío o mal formado
+      return quitarRelleno(aesDescifrar(k, data.slice(0, 16), data.slice(16)));
+    };
+  }
+
+  /** Abre un PDF con pdf-lib y, si viene cifrado, lo descifra completo (streams, streams de objetos y textos) */
+  async function cargar(P, bytes) {
+    const doc = await P.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    if (!doc.isEncrypted) return doc;
+    const t = doc.context.trailerInfo, encRef = t.Encrypt, enc = doc.context.lookup(encRef);
+    const ids = t.ID && doc.context.lookup(t.ID), id0 = ids && ids.get(0) ? ids.get(0).asBytes() : new Uint8Array(0);
+    let L; try { L = llave(P, enc, id0); } catch (e) { throw new Error('el PDF ' + e.message); }
+    const des = descifrador(L);
+    // Segunda lectura: los streams de objetos (ObjStm) se descifran antes de leerlos, y se anotan los objetos de nivel superior
+    const directos = new Set(), proto = P.PDFParser.prototype, hdr = proto.parseIndirectObjectHeader, fs0 = P.PDFObjectStreamParser.forStream;
+    let actual = null;
+    proto.parseIndirectObjectHeader = function () { const r = hdr.call(this); actual = r; directos.add(r.tag); return r; };
+    P.PDFObjectStreamParser.forStream = (raw, tick) => {
+      if (actual && !raw.__descifrado) { raw.contents = des(actual.objectNumber, actual.generationNumber, raw.contents); raw.__descifrado = true; }
+      return fs0(raw, tick);
+    };
+    let d2;
+    try { d2 = await P.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }); }
+    finally { proto.parseIndirectObjectHeader = hdr; P.PDFObjectStreamParser.forStream = fs0; }
+    const encTag = encRef && encRef.tag, N = n => P.PDFName.of(n);
+    const textos = (o, ref) => {
+      if (o instanceof P.PDFString || o instanceof P.PDFHexString) return P.PDFHexString.of(Array.from(des(ref.objectNumber, ref.generationNumber, o.asBytes()), b => (b < 16 ? '0' : '') + b.toString(16)).join(''));
+      if (o instanceof P.PDFDict) { for (const [k, v] of o.entries()) { const n = textos(v, ref); if (n !== v) o.set(k, n); } }
+      else if (o instanceof P.PDFArray) { for (let i = 0; i < o.size(); i++) { const v = o.get(i), n = textos(v, ref); if (n !== v) o.set(i, n); } }
+      else if (o instanceof P.PDFRawStream) textos(o.dict, ref);
+      return o;
+    };
+    for (const [ref, o] of d2.context.enumerateIndirectObjects()) {
+      if (ref.tag === encTag) continue;
+      const directo = directos.has(ref.tag);
+      if (o instanceof P.PDFRawStream) {
+        const tipo = o.dict.lookup(N('Type')), esMeta = tipo && tipo.asString && tipo.asString() === '/Metadata';
+        if (!o.__descifrado && !(esMeta && !L.cifraMetadata)) o.contents = des(ref.objectNumber, ref.generationNumber, o.contents);
+        if (o.dict.has(N('Length'))) o.dict.set(N('Length'), P.PDFNumber.of(o.contents.length));
+      }
+      if (directo) textos(o, ref);   // los textos dentro de un stream de objetos ya venían descifrados con él
+    }
+    delete d2.context.trailerInfo.Encrypt;
+    return d2;
+  }
+  return { cargar, md5, sha256, sha512, rc4, aesDescifrar, aesCifrar };
+})();
+if (typeof module !== 'undefined' && module.exports && typeof window === 'undefined') module.exports = PDFCifrado;
 
 /* =====================================================================
    CAPA 2 · DEMODATA — data 100 % ficticia, semilla fija, fechas relativas a hoy.
@@ -3527,8 +3787,8 @@ const AlmacenServidor = (() => {
     restaurar: nombre => api('restaurar', { cuerpo: { nombre } }),
     descargarRespaldo: async nombre => (await api('respaldo?n=' + encodeURIComponent(nombre), { blob: true })).blob(),
     tiposCambio: (actualizar) => actualizar ? api('tc', { cuerpo: {} }) : api('tc'),
-    async hoja(url, forzar) {
-      const r = await api('hoja?url=' + encodeURIComponent(url) + (forzar ? '&forzar=1' : ''), { blob: true });
+    async hoja(url, forzar, codigo) {
+      const r = await api('hoja?url=' + encodeURIComponent(url) + (forzar ? '&forzar=1' : '') + (codigo ? '&c=' + encodeURIComponent(codigo) : ''), { blob: true });
       return { blob: await r.blob(), estado: r.headers.get('X-Hoja-Estado'), fecha: r.headers.get('X-Hoja-Fecha'), error: decodeURIComponent(r.headers.get('X-Hoja-Error') || '') };
     },
     hojas: () => api('hojas'),
@@ -3858,6 +4118,11 @@ const Repo = (() => {
     db.catalogoInfo = { actualizado: f, por: null, origen: 'privado', archivo: window.__LISTA_PRECIOS_ARCHIVO || '' };
     db.catalogoLog.unshift({ fecha: f, usuarioId: null, accion: `Lista de precios real cargada desde archivo privado (${L.length} productos)` });
   }
+  async function borrarHojaPDF(h) {
+    if (h.ubicacion === 'carpeta' && estado.compartida) await AlmacenCompartido.borrarDoc('hojas-datos', h.archivo).catch(() => {});
+    else if (h.ubicacion === 'navegador') await Almacen.borrar('doc:' + h.id).catch(() => {});
+    else docsMemoria.delete(h.id);
+  }
   /** Links de hojas de datos que el vendedor puso en la cotización: quedan para las próximas cotizaciones de ese producto */
   function guardarHojasDeItems(items, usuarioId) {
     (items || []).forEach(it => {
@@ -4169,6 +4434,37 @@ const Repo = (() => {
       if (ax.ubicacion === 'carpeta') { if (!estado.compartida) fail('El anexo está en la carpeta compartida o el servidor: conéctalo para usarlo.'); return AlmacenCompartido.leerDoc('plantilla-' + oficina, ax.archivo); }
       const b = ax.ubicacion === 'navegador' ? await Almacen.leer('doc:' + id).catch(() => null) : docsMemoria.get(id);
       if (!b) fail('El archivo del anexo quedó en el navegador de quien lo subió.');
+      return b;
+    },
+    /** PDF de la hoja de datos subido a mano (por código y marca): se usa si el producto no tiene link o si el link falla. Sin límite de tamaño */
+    async guardarHojaPDF(codigo, marca, archivo, usuarioId) {
+      const c = String(codigo || '').trim().toUpperCase(), k = c + '|' + (marca || '');
+      if (!c) fail('El ítem no tiene código.');
+      if (!archivo || !/^%PDF-/.test(await archivo.slice(0, 5).text())) fail('El archivo debe ser un PDF.', { archivo: 'Debe ser PDF' });
+      db.hojasPDF = db.hojasPDF || {};
+      const ant = db.hojasPDF[k], id = 'HD-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), h = { id, archivo: id + '.pdf', nombre: String(archivo.name || 'hoja.pdf').slice(0, 120), tamano: archivo.size, subido: Util.ahora(), usuarioId };
+      if (estado.compartida) { await AlmacenCompartido.guardarDoc('hojas-datos', h.archivo, archivo); h.ubicacion = 'carpeta'; }
+      else if (modo === 'piloto') { await Almacen.escribir('doc:' + id, archivo); h.ubicacion = 'navegador'; }
+      else { docsMemoria.set(id, archivo); h.ubicacion = 'memoria'; }
+      if (ant) await borrarHojaPDF(ant);
+      db.hojasPDF[k] = h;
+      auditar(usuarioId, `PDF de la hoja de datos de ${marca || ''} ${c} subido (${h.nombre})`);
+      touch();
+      return h;
+    },
+    async quitarHojaPDF(codigo, marca, usuarioId) {
+      const k = String(codigo || '').trim().toUpperCase() + '|' + (marca || ''), h = (db.hojasPDF || {})[k];
+      if (!h) return;
+      await borrarHojaPDF(h); delete db.hojasPDF[k];
+      auditar(usuarioId, `PDF de la hoja de datos de ${marca || ''} ${codigo} quitado`);
+      touch();
+    },
+    async leerHojaPDF(codigo, marca) {
+      const h = (db.hojasPDF || {})[String(codigo || '').trim().toUpperCase() + '|' + (marca || '')];
+      if (!h) fail('No hay PDF subido.');
+      if (h.ubicacion === 'carpeta') { if (!estado.compartida) fail('el PDF está en la carpeta compartida o el servidor: conéctalo'); return AlmacenCompartido.leerDoc('hojas-datos', h.archivo); }
+      const b = h.ubicacion === 'navegador' ? await Almacen.leer('doc:' + h.id).catch(() => null) : docsMemoria.get(h.id);
+      if (!b) fail('el PDF quedó en el navegador de quien lo subió');
       return b;
     },
     /** Aviso: el link de una hoja de datos o anexo no respondió al generar una cotización (lo ve quien administra las listas) */
@@ -6360,6 +6656,34 @@ const UI = (() => {
     }
   }
   /* ---------- Documento único: cotización + anexos de la plantilla (términos y condiciones) + hojas de datos de los productos ---------- */
+  /** PDF de la hoja de datos subido para el ítem (código y marca) */
+  const hojaPDFDe = it => { const c = String(it.codigo || '').trim().toUpperCase(); return c ? (S.db.hojasPDF || {})[c + '|' + (it.marca || '')] || null : null; };
+  /** Ventana "Hoja de datos" de un producto: agregar el enlace O subir el PDF. onLink(url) guarda el enlace; el PDF se guarda al momento */
+  function modalHoja({ titulo, codigo, marca, url, onLink }) {
+    const pdf = hojaPDFDe({ codigo, marca }), modo = url || !pdf ? 'link' : 'pdf';
+    const back = modal({ title: titulo, body: `<p class="small muted" style="margin-top:0">No sale escrita en la cotización: la hoja de datos completa va dentro del mismo PDF que recibe el cliente, y queda guardada para las próximas cotizaciones de este producto.</p>
+      <div class="radio-chips" role="radiogroup" style="margin-bottom:10px">
+        <label><input type="radio" name="modoHoja" value="link"${modo === 'link' ? ' checked' : ''}><span>Agregar enlace</span></label>
+        <label><input type="radio" name="modoHoja" value="pdf"${modo === 'pdf' ? ' checked' : ''}><span>Subir PDF</span></label></div>
+      <div data-hoja="link"${modo === 'link' ? '' : ' hidden'}><label class="field">Enlace de la hoja de datos<input type="url" name="url" value="${E(url || '')}" placeholder="https://…/datasheet.pdf"><span class="field-hint">El link del PDF o de la página del producto en el sitio del fabricante.</span></label></div>
+      <div data-hoja="pdf"${modo === 'pdf' ? '' : ' hidden'}>${pdf ? `<p class="small" style="margin:0 0 6px">Subido: <strong>${E(pdf.nombre)}</strong> (${(pdf.tamano / 1048576).toFixed(1)} MB) <button type="button" class="btn sm bad" data-quitar-hoja>Quitar</button></p>` : ''}
+        <label class="field">${pdf ? 'Reemplazar por otro PDF' : 'PDF de la hoja de datos'}<input type="file" name="archivo" accept="application/pdf,.pdf"></label></div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
+        if (r.querySelector('[name=modoHoja]:checked').value === 'pdf') {
+          const f = r.querySelector('[name=archivo]').files[0];
+          if (!f && !pdf) { const e = new Error('Elige el PDF de la hoja de datos.'); e.campos = { archivo: 'Obligatorio' }; throw e; }
+          if (f) { await Repo.guardarHojaPDF(codigo, marca, f, S.user.id); S.db = await snap(); toast('PDF de la hoja de datos guardado: va dentro de la cotización.'); }
+          await onLink(null); return;
+        }
+        const v = val(r, 'url').trim();
+        if (v && !/^https?:\/\/\S+$/i.test(v)) { const e = new Error('El enlace debe empezar con http:// o https://'); e.campos = { url: 'Enlace no válido' }; throw e; }
+        await onLink(v);
+      } }] });
+    back.addEventListener('change', ev => { if (ev.target.name === 'modoHoja') back.querySelectorAll('[data-hoja]').forEach(d => { d.hidden = d.dataset.hoja !== ev.target.value; }); });
+    const q = back.querySelector('[data-quitar-hoja]');
+    if (q) q.addEventListener('click', async () => { await Repo.quitarHojaPDF(codigo, marca, S.user.id); S.db = await snap(); closeModal(); toast('PDF quitado.'); await onLink(undefined); });
+    return back;
+  }
   /** Hoja de datos de un ítem: la del producto en la lista de precios (mismo código y marca) */
   const hojaDeItem = it => { if (/^https?:\/\//i.test(it.hojaDatos || '')) return it.hojaDatos; const c = String(it.codigo || '').trim().toUpperCase(); const p = c && (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return (c && (S.db.hojasDatos || {})[c + '|' + (it.marca || '')]) || (p ? p.hojaDatos : null); };
   /** Qué se adjunta al PDF (nombres, en orden): anexos activos de la plantilla de la oficina y hojas de datos de los productos cotizados */
@@ -6368,49 +6692,87 @@ const UI = (() => {
     (emp.anexos || []).filter(a => a.activo !== false).forEach(a => out.push({ tipo: 'anexo', nombre: a.nombre, anexo: a, url: a.url }));
     if (emp.hojasDatos !== false) {
       const vistas = new Set();
-      (q.items || []).forEach(it => { const u = hojaDeItem(it); if (u && !vistas.has(u)) { vistas.add(u); out.push({ tipo: 'hoja', nombre: `Hoja de datos ${it.codigo}`, url: u }); } });
+      // Primero el link; si falla (o no hay link), el PDF subido
+      (q.items || []).forEach(it => { const u = hojaDeItem(it), pdf = hojaPDFDe(it), k = u || (pdf && pdf.id); if (k && !vistas.has(k)) { vistas.add(k); out.push({ tipo: 'hoja', nombre: `Hoja de datos ${it.codigo}`, url: u, pdf, codigo: it.codigo, marca: it.marca || '' }); } });
     }
     return out;
   }
-  /** Descarga un PDF por link: con servidor, por el servidor (guarda copia y la usa si el link cae); sin servidor, directo si el sitio lo permite */
-  async function pdfPorLink(url, avisos) {
+  /** Links "para compartir" de Google Drive, Dropbox y OneDrive → descarga directa */
+  function linkDirecto(url) {
+    try {
+      const u = new URL(url), h = u.hostname; let m;
+      if (/(^|\.)drive\.google\.com$/.test(h) && (m = /\/file\/d\/([^/]+)/.exec(u.pathname))) return `https://drive.google.com/uc?export=download&id=${m[1]}`;
+      if (/(^|\.)dropbox\.com$/.test(h)) { u.searchParams.set('dl', '1'); return u.href; }
+      if (/(^|\.)(sharepoint\.com|onedrive\.live\.com)$/.test(h) && !u.searchParams.has('download')) { u.searchParams.set('download', '1'); return u.href; }
+    } catch (e) { /* link raro: tal cual */ }
+    return url;
+  }
+  /** Descarga un PDF por link: con servidor, por el servidor (guarda copia y la usa si el link cae; si el link es una página web, busca el PDF en ella);
+      sin servidor, directo si el sitio lo permite (la mayoría de los fabricantes no lo permite: para eso está el PDF subido) */
+  async function pdfPorLink(url, avisos, codigo) {
     if (Repo.servidor()) {
       try {
-        const r = await AlmacenServidor.hoja(url);
+        const r = await AlmacenServidor.hoja(url, false, codigo);
         if (r.estado === 'copia') { avisos.push(`El link ${url} no respondió (${r.error || 'sin respuesta'}): se usó la copia guardada${r.fecha ? ' del ' + Util.fmtDate(r.fecha.slice(0, 10)) : ''}. Hay que actualizar el link.`); Repo.reportarLinkCaido(url, r.error, S.user.id).catch(() => {}); }
         else if (S.db.linksCaidos && S.db.linksCaidos[url]) Repo.limpiarLinkCaido(url).catch(() => {});
         return new Uint8Array(await r.blob.arrayBuffer());
       } catch (e) { Repo.reportarLinkCaido(url, e.message, S.user.id).catch(() => {}); throw e; }
     }
-    const r = await fetch(url, { mode: 'cors' }).catch(() => null);
-    if (!r || !r.ok) throw new Error('sin servidor, el navegador no puede descargar este link');
+    const r = await fetch(linkDirecto(url), { mode: 'cors' }).catch(() => null);
+    if (!r || !r.ok) throw new Error('sin el servidor de la empresa, el navegador no puede descargar este link');
     const b = new Uint8Array(await r.arrayBuffer());
-    if (String.fromCharCode(...b.slice(0, 5)) !== '%PDF-') throw new Error('el link no entrega un PDF');
+    if (String.fromCharCode(...b.slice(0, 5)) !== '%PDF-') throw new Error('el link abre una página web, no el PDF');
     return b;
   }
-  /** Arma el PDF final: cotización y, a continuación, los anexos y las hojas de datos. Devuelve { blob, avisos, adjuntos } */
+  /** Arma el PDF final: cotización y, a continuación, los anexos y las hojas de datos completas (también las protegidas, que se descifran).
+      Al cliente le llega un solo archivo, sin links. Devuelve { blob, avisos, adjuntos, faltan } (faltan: hojas que no se pudieron incluir) */
   async function documentoCotizacion(ctx) {
-    const base = await pdfCotizacion(ctx), lista = anexosPrevistos(ctx), avisos = [], adjuntos = [], sinAdjuntar = [];
+    const base = await pdfCotizacion(ctx), lista = anexosPrevistos(ctx), avisos = [], adjuntos = [], faltan = [];
     const PDFLib = lista.length ? await Util.cargarPDFLib() : null;
-    if (!lista.length || !PDFLib) return { blob: base, avisos, adjuntos };
+    if (!lista.length || !PDFLib) return { blob: base, avisos, adjuntos, faltan };
     const out = await PDFLib.PDFDocument.create();
     out.setTitle(`Cotización ${ctx.q.numero}`); out.setProducer('Plataforma de cotizaciones');
-    const pegar = async bytes => { const src = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true }); (await out.copyPages(src, src.getPageIndices())).forEach(p => out.addPage(p)); };
+    const pegar = async bytes => { const src = await PDFCifrado.cargar(PDFLib, bytes); (await out.copyPages(src, src.getPageIndices())).forEach(p => out.addPage(p)); };
+    const subido = async a => new Uint8Array(await (await Repo.leerHojaPDF(a.codigo, a.marca)).arrayBuffer());
     await pegar(new Uint8Array(await base.arrayBuffer()));
     for (const a of lista) {
       try {
-        const bytes = a.tipo === 'anexo' && a.anexo.tipo === 'archivo' ? new Uint8Array(await (await Repo.leerAnexo(ofDe(ctx), a.anexo.id)).arrayBuffer()) : await pdfPorLink(a.url, avisos);
-        await pegar(bytes); adjuntos.push(a.nombre);
-      } catch (e) { sinAdjuntar.push(a); avisos.push(`No se pudo adjuntar "${a.nombre}": ${e.message}.`); }
-    }
-    // Lo que no se pudo adjuntar queda como enlaces en una hoja final, para que el cliente lo encuentre igual
-    if (sinAdjuntar.some(a => a.url)) {
-      const f = await out.embedFont(PDFLib.StandardFonts.Helvetica), fb = await out.embedFont(PDFLib.StandardFonts.HelveticaBold), pg = out.addPage([595.28, 841.89]);
-      let yy = 780; pg.drawText('Documentos adicionales (descárguelos desde estos enlaces)', { x: 40, y: yy, size: 11, font: fb }); yy -= 24;
-      sinAdjuntar.filter(a => a.url).forEach(a => { pg.drawText(a.nombre, { x: 40, y: yy, size: 9, font: fb }); yy -= 12; pg.drawText(a.url.length > 110 ? a.url.slice(0, 107) + '...' : a.url, { x: 40, y: yy, size: 8, font: f, color: PDFLib.rgb(0, 0.27, 0.78) }); yy -= 18; });
+        if (a.tipo === 'anexo') await pegar(a.anexo.tipo === 'archivo' ? new Uint8Array(await (await Repo.leerAnexo(ofDe(ctx), a.anexo.id)).arrayBuffer()) : await pdfPorLink(a.url, avisos));
+        else if (!a.url) await pegar(await subido(a));
+        else {
+          // El link manda; si falla, entra el PDF subido
+          try { await pegar(await pdfPorLink(a.url, avisos, a.codigo)); }
+          catch (e) { if (!a.pdf) throw e; await pegar(await subido(a)); avisos.push(`La hoja de datos de ${a.codigo} se tomó del PDF subido (el link falló: ${e.message}).`); }
+        }
+        adjuntos.push(a.nombre);
+      } catch (e) { if (a.tipo === 'hoja') faltan.push(Object.assign({ motivo: e.message }, a)); avisos.push(`No se pudo incluir "${a.nombre}": ${e.message}.`); }
     }
     const bytes = await out.save();
-    return { blob: new Blob([bytes], { type: 'application/pdf' }), avisos, adjuntos };
+    return { blob: new Blob([bytes], { type: 'application/pdf' }), avisos, adjuntos, faltan };
+  }
+  /** Antes de entregar: si alguna hoja de datos no entró, el vendedor sube su PDF ahí mismo (queda guardado) o sigue sin ella. null = cancelado */
+  async function documentoListo(ctx) {
+    for (;;) {
+      const doc = await documentoCotizacion(ctx);
+      if (!doc.faltan.length) return doc;
+      const r = await new Promise(res => {
+        const back = modal({ title: 'Hojas de datos que no se pudieron incluir', wide: true, body: `<p style="margin-top:0">Para que el cliente reciba un solo archivo, sube el PDF de cada una. Queda guardado para las próximas cotizaciones de ese producto.</p>
+          ${doc.faltan.map((a, i) => `<div class="card" style="padding:10px 12px;margin-bottom:8px"><strong>${E((a.marca ? a.marca + ' ' : '') + a.codigo)}</strong> <span class="small muted">· ${E(a.motivo)}</span>
+            ${a.url ? `<div class="small" style="margin:4px 0"><a href="${E(a.url)}" target="_blank" rel="noopener">Abrir el link</a> para descargar el PDF</div>` : ''}
+            <label class="field" style="margin-top:6px">PDF de la hoja de datos<input type="file" name="f${i}" accept="application/pdf,.pdf"></label></div>`).join('')}`,
+          actions: [{ label: 'Cancelar', onClick: () => { res(null); } }, { label: 'Continuar sin ellas', onClick: () => { res('seguir'); } },
+            { label: `${I('upload')} Incluir y continuar`, cls: 'primary', onClick: async root => {
+              const fs = doc.faltan.map((a, i) => [a, root.querySelector(`[name=f${i}]`).files[0]]).filter(x => x[1]);
+              if (!fs.length) { const e = new Error('Elige al menos un PDF, o pulsa "Continuar sin ellas".'); throw e; }
+              for (const [a, f] of fs) await Repo.guardarHojaPDF(a.codigo, a.marca, f, S.user.id);
+              S.db = await snap(); res('otra');
+            } }] });
+        back.addEventListener('click', ev => { if (ev.target === back || ev.target.closest('[data-modal-close]')) res(null); });
+      });
+      if (r === null) return null;
+      if (r === 'seguir') return doc;
+      toast('Armando el PDF con las hojas de datos…');
+    }
   }
   /** Cotización recién registrada en la plataforma: su PDF se guarda solo en la carpeta del vendedor */
   async function guardarCotizacionRegistrada(quoteId) {
@@ -6419,7 +6781,7 @@ const UI = (() => {
     if (!o) return;
     const cliente = cli(o.clienteId);
     const r = await documentoCotizacion({ q, cliente, contacto: q.contacto, proyecto: proj(o.proyectoId), vendedor: usr(o.vendedorId) });
-    if (r.avisos.length) toast(r.avisos.join(' '), { ms: 9000 });
+    if (r.avisos.length) toast(r.avisos.join(' ') + (r.faltan.length ? ' Sube su PDF con el botón "Hoja de datos" del ítem.' : ''), { ms: 9000 });
     if (!(await guardarEnCarpeta(r.blob, q, cliente))) toast(AVISO_CARPETA, { ms: 7000 });
   }
   function mostrarPDF(ctx, borrador) {
@@ -6438,7 +6800,9 @@ const UI = (() => {
     const vend = !S.pdfBorrador && S.user.rol === 'vendedor';
     try {
       toast('Armando el PDF con sus anexos…');
-      const { blob, avisos, adjuntos } = await documentoCotizacion(S.pdf);
+      const doc = await documentoListo(S.pdf);
+      if (!doc) return;
+      const { blob, avisos, adjuntos } = doc;
       if (avisos.length) setTimeout(() => toast(avisos.join(' '), { ms: 10000 }), 600);
       else if (adjuntos.length) setTimeout(() => toast(`Se adjuntaron: ${adjuntos.join(' · ')}.`, { ms: 6000 }), 600);
       if (vend && (await guardarEnCarpeta(blob, S.pdf.q, S.pdf.cliente))) return;
@@ -6481,7 +6845,8 @@ const UI = (() => {
         const d = { para: val(r, 'para'), cc: val(r, 'cc'), asunto: val(r, 'asunto'), cuerpo: r.querySelector('[name=cuerpo]').value };
         if (!/@/.test(d.para)) { const e = new Error('Indica el correo del destinatario.'); e.campos = { para: 'Obligatorio' }; throw e; }
         toast('Armando el PDF con sus anexos…');
-        const doc = await documentoCotizacion(ctx);
+        const doc = await documentoListo(ctx);
+        if (!doc) return;
         if (st.configurado) {
           await AlmacenServidor.enviarCorreo({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjuntos: [{ nombre: nombrePdf, tipo: 'application/pdf', base64: await b64(doc.blob) }] });
           if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook' }, u.id).catch(() => {});
@@ -7901,18 +8266,14 @@ const UI = (() => {
   const hojaGuardada = it => { const c = String(it.codigo || '').trim().toUpperCase(); if (!c) return null; const p = (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return (S.db.hojasDatos || {})[c + '|' + (it.marca || '')] || (p ? p.hojaDatos : null); };
   function hojaItemHTML(it, i) {
     if (!String(it.codigo || '').trim()) return '';
-    const u = it.hojaDatos || hojaGuardada(it);
-    return `<button type="button" class="hoja-item${u ? ' con' : ''}" data-action="nq-hoja" data-i="${i}" title="${u ? 'Hoja de datos: ' + E(u) + ' (se adjunta al PDF)' : 'Agregar el link de la hoja de datos (se adjunta al PDF y queda guardado)'}">${I('file').replace('<svg', '<svg width="12" height="12"')} ${u ? 'Hoja de datos ✓' : 'Hoja de datos'}</button>`;
+    const u = it.hojaDatos || hojaGuardada(it), pdf = hojaPDFDe(it), con = u || pdf;
+    return `<button type="button" class="hoja-item${con ? ' con' : ''}" data-action="nq-hoja" data-i="${i}" title="${u ? 'Hoja de datos: ' + E(u) : pdf ? 'Hoja de datos: ' + E(pdf.nombre) : 'Agregar la hoja de datos (enlace o PDF)'} · va dentro del PDF de la cotización">${I('file').replace('<svg', '<svg width="12" height="12"')} ${con ? 'Hoja de datos ✓' : 'Hoja de datos'}</button>`;
   }
   ACTIONS['nq-hoja'] = el => {
-    const it = S.nueva.d.items[+el.dataset.i], u = it.hojaDatos || hojaGuardada(it) || '';
-    modal({ title: `Hoja de datos · ${it.codigo}`, body: `<p class="small muted" style="margin-top:0">El link no sale escrito en la cotización: el PDF del fabricante se adjunta al documento. Queda guardado para las próximas cotizaciones de este producto.</p>
-      <label class="field">Link del PDF<input type="url" name="url" value="${E(u)}" placeholder="https://…/datasheet.pdf"></label>`,
-      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Usar este link`, cls: 'primary', onClick: r => {
-        const v = val(r, 'url').trim();
-        if (v && !/^https?:\/\/\S+$/i.test(v)) { const e = new Error('El link debe empezar con http:// o https://'); e.campos = { url: 'Link no válido' }; throw e; }
-        it.hojaDatos = v || ''; render(true);
-      } }] });
+    const it = S.nueva.d.items[+el.dataset.i];
+    // El enlace queda en el ítem y, al registrar, en el producto; el PDF se guarda al momento
+    modalHoja({ titulo: `Hoja de datos · ${it.codigo}`, codigo: it.codigo, marca: it.marca || '', url: it.hojaDatos || hojaGuardada(it) || '',
+      onLink: v => { if (typeof v === 'string') it.hojaDatos = v; render(true); } });
   };
   /** Si el producto está en varias listas: elegir de cuál sale el precio */
   function listaItemHTML(it, i) {
@@ -8880,9 +9241,9 @@ const UI = (() => {
         ${res.map(p => { const l = Rules.listaDe(db, Rules.listaIdDe(p)); p = Object.assign({}, p, { hojaDatos: (db.hojasDatos || {})[p.codigo.toUpperCase() + '|' + p.marca] || p.hojaDatos }); const h = p.hojaDatos && hojas[p.hojaDatos];
           return `<tr>${ed ? `<td><input type="checkbox" data-change="cat-sel" data-id="${p.id}"${sel.has(p.id) ? ' checked' : ''} aria-label="Seleccionar ${E(p.codigo)}"></td>` : ''}<td class="nowrap">${E(p.marca)}</td><td class="nowrap"><strong>${E(p.codigo)}</strong></td><td class="small">${E(p.descripcion)}</td>
           ${variasL && !F.lista ? `<td class="small nowrap">${E(l.nombre)}</td>` : ''}<td class="r num nowrap">${Util.money(p.precio, l.moneda)}</td>
-          <td class="small">${p.hojaDatos ? `<a href="${E(p.hojaDatos)}" target="_blank" rel="noopener">${I('file')} Ver</a>${h && h.estado === 'caido' ? ` <span class="chip bad" title="${E(h.error || '')}">link caído${h.descargada ? ' · hay copia' : ''}</span>` : h && h.estado === 'ok' ? ' <span class="chip ok" title="Copia guardada en el servidor">✓</span>' : ''}` : '<span class="muted">—</span>'}</td>
+          <td class="small">${p.hojaDatos ? `<a href="${E(p.hojaDatos)}" target="_blank" rel="noopener">${I('file')} Ver</a>${h && h.estado === 'caido' ? ` <span class="chip bad" title="${E(h.error || '')}">link caído${h.descargada ? ' · hay copia' : ''}</span>` : h && h.estado === 'ok' ? ' <span class="chip ok" title="Copia guardada en el servidor">✓</span>' : ''}${(db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? ` <span class="chip info" title="${E(db.hojasPDF[p.codigo.toUpperCase() + '|' + p.marca].nombre)}">PDF</span>` : ''}` : (db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? `<span class="chip info">${I('file')} PDF subido</span>` : '<span class="muted">—</span>'}</td>
           <td class="small nowrap">${Util.fmtDate(p.actualizado)}${p.actualizadoPor ? `<div class="cell-sub">${E(quien(p.actualizadoPor))}</div>` : ''}</td>
-          ${ed || edH ? `<td class="nowrap">${ed ? `<button class="btn sm" data-action="cat-producto" data-id="${p.id}">Editar</button> <button class="btn sm bad" data-action="cat-quitar" data-id="${p.id}">Quitar</button>` : `<button class="btn sm" data-action="cat-hoja" data-id="${p.id}">${p.hojaDatos ? 'Cambiar link' : 'Agregar hoja de datos'}</button>`}</td>` : ''}</tr>`; }).join('') || `<tr><td colspan="9" class="center muted" style="padding:20px">Sin productos con estos filtros.</td></tr>`}
+          ${ed || edH ? `<td class="nowrap">${ed ? `<button class="btn sm" data-action="cat-producto" data-id="${p.id}">Editar</button> <button class="btn sm bad" data-action="cat-quitar" data-id="${p.id}">Quitar</button>` : `<button class="btn sm" data-action="cat-hoja" data-id="${p.id}">${p.hojaDatos || (db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? 'Cambiar hoja de datos' : 'Agregar hoja de datos'}</button>`}</td>` : ''}</tr>`; }).join('') || `<tr><td colspan="9" class="center muted" style="padding:20px">Sin productos con estos filtros.</td></tr>`}
       </tbody></table></div>
       ${res.total > res.length ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="cat-mas">Ver más (${(res.total - res.length).toLocaleString('en-US')} restantes)</button></div>` : ''}
       ${ed ? `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2><span class="sub">Quién actualizó las listas y cuándo</span></div>
@@ -8939,9 +9300,8 @@ const UI = (() => {
   };
   ACTIONS['cat-hoja'] = el => {
     const p = S.db.catalogo.find(x => x.id === el.dataset.id);
-    modal({ title: `Hoja de datos · ${p.marca} ${p.codigo}`, body: `<p class="small muted" style="margin-top:0">Pega el link del PDF del fabricante. Al cotizar este producto, la hoja de datos se adjunta sola al PDF de la cotización (con servidor, se guarda una copia por si el link cae).</p>
-      <label class="field">Link (PDF)<input type="url" name="url" value="${E(p.hojaDatos || '')}" placeholder="https://…/datasheet.pdf"></label>`,
-      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => { await Repo.guardarHojaDatos(p.id, val(r, 'url'), S.user.id); S.hojasPedidas = false; toast('Hoja de datos guardada para todas las listas con este producto.'); refresh(); } }] });
+    modalHoja({ titulo: `Hoja de datos · ${p.marca} ${p.codigo}`, codigo: p.codigo, marca: p.marca, url: (S.db.hojasDatos || {})[p.codigo.toUpperCase() + '|' + p.marca] || p.hojaDatos || '',
+      onLink: async v => { if (typeof v === 'string') { await Repo.guardarHojaDatos(p.id, v, S.user.id); S.hojasPedidas = false; toast('Hoja de datos guardada para todas las listas con este producto.'); } refresh(); } });
   };
   function abrirImportacion() {
     const { r, archivo } = S.catImport, ls = Rules.listas(S.db), dest = S.catF.lista || ls[0].id;

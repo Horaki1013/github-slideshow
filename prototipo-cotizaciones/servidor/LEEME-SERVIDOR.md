@@ -8,6 +8,9 @@ El servidor deja que todo el equipo trabaje a la vez sobre los mismos datos, con
 - **Respaldos automáticos.** Se generan cada 2 horas en horario laboral (10, 12, 14, 16 y 18 h) y cada noche (23 h). Se conservan 30 días y opcionalmente se copian a otro disco o carpeta. Administración, gerencia o jefatura pueden crearlos, descargarlos y restaurarlos desde la plataforma (menú de usuario → *Respaldos del servidor*).
 - **Tipo de cambio del día.** Cada mañana el servidor baja el de SUNAT (Perú) y el del Banco Central de Chile (dólar y euro). Esto requiere salida a internet. Si no hay conexión, se usa el último disponible, y el vendedor puede editarlo en cada cotización.
 - **Hojas de datos y anexos por link.** El servidor guarda una copia de cada PDF. Si un link cae, usa la copia y la plataforma avisa para actualizar el link. Además revisa todos los links una vez por semana.
+  - Si el link abre la página web del producto, el servidor busca en ella el PDF de la hoja de datos. También convierte los links "para compartir" de Google Drive, Dropbox y OneDrive en descargas directas.
+  - Sin límite de tamaño, con hasta 3 minutos por descarga.
+  - Los PDF de hojas de datos que suben los vendedores quedan en `datos/archivos/documentos/hojas-datos/`.
 - **Microsoft 365 (opcional):**
   - envía las cotizaciones desde el Outlook de cada vendedor, con copia al buzón común;
   - muestra y edita la agenda de Outlook de cada usuario;
