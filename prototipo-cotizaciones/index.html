@@ -4548,7 +4548,7 @@ const Repo = (() => {
       // El mismo archivo (mismo contenido) no se guarda dos veces en la misma venta: ahorra espacio en la carpeta compartida
       const huella = typeof crypto !== 'undefined' && crypto.subtle ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await archivo.blob.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('') : null;
       const igual = huella && (db.documentos || []).find(d => d.oppId === oppId && d.huella === huella);
-      if (igual) fail(`Ese archivo ya está anexado a esta venta como "${igual.nombre}".`);
+      if (igual) throw Object.assign(new Error(`Ese archivo ya está anexado a esta venta como "${igual.nombre}".`), { campos: {}, docExistente: igual.id });
       const cat = Config.DOCUMENTOS.find(x => x.id === (meta && meta.categoria)) || Config.DOCUMENTOS[Config.DOCUMENTOS.length - 1];
       const id = 'D-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const nombre = String(archivo.nombre || 'documento').replace(/[\\/:*?"<>|]+/g, '-').slice(-120), archivoNombre = `${id}__${nombre}`;
@@ -7725,21 +7725,27 @@ const UI = (() => {
     l.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 448)) + 'px';
     l.style.top = Math.min(r.bottom + 4, window.innerHeight - 200) + 'px';
   }
-  function mostrarAc(el) {
+  /** Lista de coincidencias bajo un campo. opc.aplicar(p) decide qué hacer con el producto elegido (por defecto, el ítem de la cotización) */
+  function mostrarAc(el, opc = {}) {
     const q = el.value.trim();
     if (q.length < 2) { cerrarAc(); return; }
-    const res = buscarProductos(q, null, 12, S.nueva && S.nueva.d && S.nueva.d.listaId);
+    const res = buscarProductos(q, null, 12, opc.aplicar ? opc.listaPref : S.nueva && S.nueva.d && S.nueva.d.listaId);
     let l = document.getElementById('ac-list');
     if (!l) { l = document.createElement('div'); l.id = 'ac-list'; l.className = 'ac-list'; l.setAttribute('role', 'listbox'); document.body.appendChild(l); }
-    acEstado = { i: +el.dataset.ac, res, act: 0, el };
+    acEstado = { i: +el.dataset.ac, res, act: 0, el, aplicar: opc.aplicar };
     ubicarAc();
     l.innerHTML = res.length ? res.map((p, k) => `<button type="button" role="option" data-ac-pick="${k}" class="${k === 0 ? 'act' : ''}"><strong>${E(p.codigo)}</strong> · ${E(p.marca)} <span style="float:right" class="num">${Util.money(p.precio, Rules.listaDe(S.db, Rules.listaIdDe(p)).moneda)}</span><div class="ac-meta">${Rules.listas(S.db).length > 1 ? `<span class="chip" style="font-size:10px">${E(Rules.listaDe(S.db, Rules.listaIdDe(p)).nombre)}</span> ` : ''}${E(p.descripcion)}</div></button>`).join('') +
       (res.total > res.length ? `<div class="ac-empty">${res.total - res.length} coincidencias más: sigue escribiendo para afinar.</div>` : '')
       : '<div class="ac-empty">Sin coincidencias en la lista de precios. Puedes escribir el ítem a mano.</div>';
   }
+  function elegirAc(p) {
+    const { i, aplicar } = acEstado; cerrarAc();
+    if (aplicar) return aplicar(p);
+    aplicarProducto(i, p); render(true);
+  }
   document.addEventListener('mousedown', e => {
     const b = e.target.closest && e.target.closest('[data-ac-pick]');
-    if (b && acEstado) { e.preventDefault(); const { i, res } = acEstado; aplicarProducto(i, res[+b.dataset.acPick]); cerrarAc(); render(true); return; }
+    if (b && acEstado) { e.preventDefault(); elegirAc(acEstado.res[+b.dataset.acPick]); return; }
     if (!(e.target.closest && e.target.closest('#ac-list'))) cerrarAc();
   });
   document.addEventListener('keydown', e => {
@@ -7747,7 +7753,7 @@ const UI = (() => {
     const l = document.getElementById('ac-list'); if (!l) return;
     const n = acEstado.res.length;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!n) return; acEstado.act = (acEstado.act + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; l.querySelectorAll('[data-ac-pick]').forEach((b, k) => b.classList.toggle('act', k === acEstado.act)); }
-    else if (e.key === 'Enter') { if (n) { e.preventDefault(); const { i, res, act } = acEstado; aplicarProducto(i, res[act]); cerrarAc(); render(true); } }
+    else if (e.key === 'Enter') { if (n) { e.preventDefault(); elegirAc(acEstado.res[acEstado.act]); } }
     else if (e.key === 'Escape') cerrarAc();
   });
   window.addEventListener('scroll', e => { if (!(e.target.id === 'ac-list')) ubicarAc(); }, true);
@@ -9243,7 +9249,7 @@ const UI = (() => {
           ${variasL && !F.lista ? `<td class="small nowrap">${E(l.nombre)}</td>` : ''}<td class="r num nowrap">${Util.money(p.precio, l.moneda)}</td>
           <td class="small">${p.hojaDatos ? `<a href="${E(p.hojaDatos)}" target="_blank" rel="noopener">${I('file')} Ver</a>${h && h.estado === 'caido' ? ` <span class="chip bad" title="${E(h.error || '')}">link caído${h.descargada ? ' · hay copia' : ''}</span>` : h && h.estado === 'ok' ? ' <span class="chip ok" title="Copia guardada en el servidor">✓</span>' : ''}${(db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? ` <span class="chip info" title="${E(db.hojasPDF[p.codigo.toUpperCase() + '|' + p.marca].nombre)}">PDF</span>` : ''}` : (db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? `<span class="chip info">${I('file')} PDF subido</span>` : '<span class="muted">—</span>'}</td>
           <td class="small nowrap">${Util.fmtDate(p.actualizado)}${p.actualizadoPor ? `<div class="cell-sub">${E(quien(p.actualizadoPor))}</div>` : ''}</td>
-          ${ed || edH ? `<td class="nowrap">${ed ? `<button class="btn sm" data-action="cat-producto" data-id="${p.id}">Editar</button> <button class="btn sm bad" data-action="cat-quitar" data-id="${p.id}">Quitar</button>` : `<button class="btn sm" data-action="cat-hoja" data-id="${p.id}">${p.hojaDatos || (db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? 'Cambiar hoja de datos' : 'Agregar hoja de datos'}</button>`}</td>` : ''}</tr>`; }).join('') || `<tr><td colspan="9" class="center muted" style="padding:20px">Sin productos con estos filtros.</td></tr>`}
+          ${ed || edH ? `<td class="nowrap">${ed ? `<button class="btn sm" data-action="cat-producto" data-id="${p.id}">Editar</button> <button class="btn sm bad" data-action="cat-quitar" data-id="${p.id}">Quitar</button> ` : ''}${`<button class="btn sm" data-action="cat-hoja" data-id="${p.id}">${p.hojaDatos || (db.hojasPDF || {})[p.codigo.toUpperCase() + '|' + p.marca] ? 'Cambiar hoja de datos' : 'Agregar hoja de datos'}</button>`}</td>` : ''}</tr>`; }).join('') || `<tr><td colspan="9" class="center muted" style="padding:20px">Sin productos con estos filtros.</td></tr>`}
       </tbody></table></div>
       ${res.total > res.length ? `<div style="text-align:center;margin-top:12px"><button class="btn" data-action="cat-mas">Ver más (${(res.total - res.length).toLocaleString('en-US')} restantes)</button></div>` : ''}
       ${ed ? `<section class="card" style="margin-top:14px"><div class="card-head"><h2>Historial de cambios</h2><span class="sub">Quién actualizó las listas y cuándo</span></div>
