@@ -6353,7 +6353,8 @@ const UI = (() => {
     const n2 = v => Util.nfMon(v, cur), imp = Rules.impuestoDe(q);
     const princ = Rules.principales(q), alt = Rules.alternativas(q), opc = Rules.opcionales(q);
     const nroDe = uid => { const k = princ.findIndex(x => x.uid && x.uid === uid); return k >= 0 ? k + 1 : null; };
-    const descTxt = it => { const dsc = Rules.descItem(it, cur); return dsc ? `<div class="h-desc">Descuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}</div>` : ''; };
+    const descTxt = it => { const dsc = Rules.descItem(it, cur), n = it.alternativa && nroDe(it.alternativaDe);
+      return (dsc ? `<div class="h-desc">Descuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}</div>` : '') + (n ? `<div class="h-desc">Alternativa al ítem ${n}</div>` : ''); };
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}${descTxt(it)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
     const cabItems = `<thead><tr><th>Item</th><th class="r">Cant.</th>${col.unidad ? '<th>Uni.</th>' : ''}${col.codigo ? '<th>Código</th>' : ''}${col.marca ? '<th>Marca</th>' : ''}<th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead>`;
     const anx = anexosPrevistos({ q, vendedor });
@@ -6384,8 +6385,8 @@ const UI = (() => {
         <tr><td>${E(imp.nombre)} ${Util.nf2.format(imp.tasa * 100).replace(/\.00$/, '')}%</td><td class="r">${n2(t.igv)}</td></tr>
         <tr class="g"><td>Total de la Cotización</td><td class="r">${cur} ${n2(t.total)}</td></tr>
       </tbody></table>
-      ${alt.length ? `<div class="h-banda">Alternativas de otra marca (no incluidas en el total: reemplazan al ítem indicado)</div>
-      <table class="h-items">${cabItems}<tbody>${alt.map((it, i) => filaItem(it, nroDe(it.alternativaDe) ? 'Alt. ' + nroDe(it.alternativaDe) : 'Alt. ' + (i + 1))).join('')}</tbody></table>` : ''}
+      ${alt.length ? `<div class="h-banda">Alternativas (no incluidas en el total: cada una reemplaza al ítem indicado)</div>
+      <table class="h-items">${cabItems}<tbody>${alt.map((it, i) => filaItem(it, 'Alt. ' + (i + 1))).join('')}</tbody></table>` : ''}
       ${opc.length ? `<div class="h-banda">Opcionales (no incluidos en el total de la cotización)</div>
       <table class="h-items">${cabItems}<tbody>
         ${opc.map((it, i) => filaItem(it, 'Opc. ' + (i + 1))).join('')}</tbody></table>
@@ -6505,7 +6506,7 @@ const UI = (() => {
     const filas = (items, etiqueta) => {
       cabecera();
       items.forEach((it, i) => {
-        const dsc = Rules.descItem(it, cur), txtD = it.descripcion + (dsc ? `\nDescuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}` : '');
+        const dsc = Rules.descItem(it, cur), nAlt = it.alternativa && nroDe(it.alternativaDe), txtD = it.descripcion + (dsc ? `\nDescuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}` : '') + (nAlt ? `\nAlternativa al ítem ${nAlt}` : '');
         const cod = C.cod ? doc.partir(it.codigo, C.cod.w - 6, 'F2', 7.5) : [], mar = C.mar ? doc.partir(it.marca, C.mar.w - 6, 'F2', 7.5) : [], des = doc.partir((C.cod ? '' : it.codigo + (C.mar ? '' : ' · ' + it.marca) + '\n') + txtD, C.des.w - 10, 'F1', 7);
         const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1), h = nl * lh + 10;
         if (asegurar(h)) cabecera();
@@ -6541,13 +6542,13 @@ const UI = (() => {
     });
     doc.texto(emp.notaPrecio || '* Precio de Lista actual', 330, y, { f: 'F2', t: 6.5, color: NEGRO }); y += 8;
     if (t.descuento) { doc.texto('** Descuento especial válido solo para esta oferta', 330, y, { f: 'F2', t: 6.5, color: NEGRO }); y += 8; }
-    // Alternativas de otra marca: en el mismo documento, no suman (reemplazan al ítem indicado)
+    // Alternativas (de la misma u otra marca): en el mismo documento, no suman (cada una reemplaza al ítem indicado)
     if (alternativas.length) {
       y += 8; asegurar(70);
       doc.rect(L, y, R - L, 15, { fill: BANDA });
-      doc.texto('Alternativas de otra marca (no incluidas en el total: reemplazan al ítem indicado)', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
+      doc.texto('Alternativas (no incluidas en el total: cada una reemplaza al ítem indicado)', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
       y += 18;
-      filas(alternativas, i => 'Alt. ' + (nroDe(alternativas[i].alternativaDe) || i + 1));
+      filas(alternativas, i => 'Alt. ' + (i + 1));   // correlativo; bajo la descripción dice a qué ítem reemplaza
       y += 4;
     }
     // Opcionales: aparte, no suman al total
@@ -8063,12 +8064,12 @@ const UI = (() => {
             <select data-nqi="${i}" data-k="descTipo" aria-label="Tipo de descuento del ítem" style="width:52px;padding:3px">${options([['pct', '%'], ['monto', d.moneda]], it.descTipo || 'pct')}</select></span></td>
           <td class="r num nq-total" id="nq-tot-${i}">${Util.nfMon(Rules.lineaNeta(it, d.moneda), d.moneda)}</td>
           <td class="nowrap r">${/^(kit|glb)$/i.test(it.unidad) ? `<button type="button" class="btn sm ghost" data-action="nq-kit" data-i="${i}" title="Detallar las partes del kit (interno: no sale en el PDF)">Partes${it.partes && it.partes.length ? ' (' + it.partes.length + ')' : ''}</button>` : ''}
-            ${it.opcional ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-alt" data-i="${i}" title="${it.alternativa ? 'Pasar a ítem principal' : 'Alternativa de otra marca para un ítem (mismo documento, no suma al total)'}" aria-label="Alternativa">⇄</button>`}
+            ${it.opcional ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-alt" data-i="${i}" title="${it.alternativa ? 'Pasar a ítem principal' : 'Alternativa para un ítem, de la misma u otra marca (mismo documento, no suma al total)'}" aria-label="Alternativa">⇄</button>`}
             ${it.alternativa ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-opc" data-i="${i}" title="${it.opcional ? 'Pasar a ítem principal (suma al total)' : 'Pasar a opcionales (no suma al total)'}" aria-label="${it.opcional ? 'Pasar a principal' : 'Pasar a opcional'}">${it.opcional ? '↑' : '↓'}</button>`}<button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`;
         return `<input type="hidden" name="items">
         ${variasListas ? `<div class="btn-row" style="margin-bottom:8px;align-items:center"><label class="small" style="display:flex;gap:6px;align-items:center">Lista de precios predeterminada<select data-nq="listaId" data-nq-render="1" style="min-width:200px">${options(Rules.listasDeOficina(S.db, null).map(l => [l.id, `${l.nombre} · ${l.moneda}${l.oficina ? ' · ' + Config.OFICINAS[l.oficina] : ''}`]), d.listaId || 'L-1')}</select></label><span class="small muted">Al buscar un código se muestran primero sus precios; si el producto está en otras listas, puedes cambiarla en cada ítem.</span></div>` : ''}
         <div class="table-wrap"><table class="tbl items-edit">${cab}<tbody>${principales.map(fila).join('') || '<tr><td colspan="9" class="muted center">Agrega al menos un ítem principal.</td></tr>'}</tbody></table></div>
-        ${alternativas.length ? `<div class="opc-head alt-head">Alternativas de otra marca <span>en el mismo documento, junto al ítem que reemplazan; no suman al total</span></div>
+        ${alternativas.length ? `<div class="opc-head alt-head">Alternativas <span>en el mismo documento, junto al ítem que reemplazan; no suman al total</span></div>
         <div class="table-wrap"><table class="tbl items-edit opc">${cab}<tbody>${alternativas.map(fila).join('')}</tbody></table></div>` : ''}
         ${opcionales.length ? `<div class="opc-head">Opcionales <span>se cotizan aparte y no suman al total</span></div>
         <div class="table-wrap"><table class="tbl items-edit opc">${cab}<tbody>${opcionales.map(fila).join('')}</tbody></table></div>` : ''}

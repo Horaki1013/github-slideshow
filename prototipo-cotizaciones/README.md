@@ -84,7 +84,7 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 - **Hoja de datos desde la cotización**: en el ítem, el vendedor elige *Agregar enlace* o *Subir PDF*. No se imprime: la hoja completa va dentro del mismo PDF y queda guardada para las próximas cotizaciones de ese producto.
   - El enlace va a `db.hojasDatos` (manda sobre el link de la lista). El PDF subido va a `db.hojasPDF` (por código y marca), con el archivo en la carpeta compartida, en el servidor o en el navegador, igual que los anexos, y sin límite de tamaño.
   - Con enlace y PDF a la vez, se usa el enlace y, si falla, el PDF subido.
-- **Alternativa de otra marca** en el mismo documento: queda ligada al ítem que reemplaza ("Alt. 1") y no suma al total.
+- **Alternativa** (de la misma u otra marca) en el mismo documento: queda ligada al ítem que reemplaza y no suma al total. En el PDF van en la sección "Alternativas", numeradas en orden (Alt. 1, Alt. 2, Alt. 3…), y bajo la descripción de cada una dice "Alternativa al ítem N".
 
 **Plantilla y PDF**
 - **Plantilla por país:**
