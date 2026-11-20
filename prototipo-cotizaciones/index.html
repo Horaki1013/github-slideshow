@@ -477,6 +477,8 @@ tr.quick-open>td{border-bottom:0}
 .opc-head.alt-head { color: var(--warn); }
 .lista-item { margin-top: 3px; font-size: 11px; padding: 2px 4px; min-height: 0; width: 100%; }
 .h-desc { color: #a15c00; font-size: 10px; margin-top: 2px; }
+.hoja .h-nota { font-size: 10px; margin: 4px 0 0; color: #333; }
+.hoja .h-items td:first-child { white-space: nowrap; }
 .h-cierre { margin: 10px 0 0; font-size: 12px; }
 .h-anexos { margin-top: 10px; font-size: 11px; color: var(--brand-700); }
 .field input[type="color"] { height: 38px; min-height: 38px; padding: 3px 4px; width: 100%; box-sizing: border-box; }
@@ -6353,9 +6355,11 @@ const UI = (() => {
     const n2 = v => Util.nfMon(v, cur), imp = Rules.impuestoDe(q);
     const princ = Rules.principales(q), alt = Rules.alternativas(q), opc = Rules.opcionales(q);
     const nroDe = uid => { const k = princ.findIndex(x => x.uid && x.uid === uid); return k >= 0 ? k + 1 : null; };
-    const descTxt = it => { const dsc = Rules.descItem(it, cur), n = it.alternativa && nroDe(it.alternativaDe);
-      return (dsc ? `<div class="h-desc">Descuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}</div>` : '') + (n ? `<div class="h-desc">Alternativa al ítem ${n}</div>` : ''); };
-    const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}${descTxt(it)}</td><td class="r">${n2(+it.valorUnit)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
+    /** Descuento del ítem, detallado bajo el valor unitario (el total de la fila ya lo incluye) */
+    const dscUnit = it => { const dsc = Rules.descItem(it, cur); if (!dsc) return [];
+      return Rules.descEsPct(it) ? [`Dscto. ${+it.desc} %`, `− ${n2(Util.redondear((+it.valorUnit || 0) * (+it.desc) / 100, cur))} c/u`] : ['Dscto. en total', `− ${n2(dsc)}`]; };
+    const descTxt = it => { const d = dscUnit(it); return d.length ? `<div class="h-desc">${d.map(E).join('<br>')}</div>` : ''; };
+    const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}${descTxt(it)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
     const cabItems = `<thead><tr><th>Item</th><th class="r">Cant.</th>${col.unidad ? '<th>Uni.</th>' : ''}${col.codigo ? '<th>Código</th>' : ''}${col.marca ? '<th>Marca</th>' : ''}<th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead>`;
     const anx = anexosPrevistos({ q, vendedor });
     const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '');
@@ -6385,12 +6389,13 @@ const UI = (() => {
         <tr><td>${E(imp.nombre)} ${Util.nf2.format(imp.tasa * 100).replace(/\.00$/, '')}%</td><td class="r">${n2(t.igv)}</td></tr>
         <tr class="g"><td>Total de la Cotización</td><td class="r">${cur} ${n2(t.total)}</td></tr>
       </tbody></table>
-      ${alt.length ? `<div class="h-banda">Alternativas (no incluidas en el total: cada una reemplaza al ítem indicado)</div>
-      <table class="h-items">${cabItems}<tbody>${alt.map((it, i) => filaItem(it, 'Alt. ' + (i + 1))).join('')}</tbody></table>` : ''}
-      ${opc.length ? `<div class="h-banda">Opcionales (no incluidos en el total de la cotización)</div>
+      ${alt.length ? `<div class="h-banda">Alternativas</div>
+      <table class="h-items">${cabItems}<tbody>${alt.map((it, i) => filaItem(it, 'Alt. ' + (i + 1) + (nroDe(it.alternativaDe) ? `<div class="h-desc">(reemplaza al ítem ${nroDe(it.alternativaDe)})</div>` : ''))).join('')}</tbody></table>
+      <p class="h-nota">* En caso opte por una de estas alternativas en lugar de un ítem de la cotización, detállelo en la Orden de Compra. Las alternativas no incluyen el cálculo del IGV.</p>` : ''}
+      ${opc.length ? `<div class="h-banda">Opcionales</div>
       <table class="h-items">${cabItems}<tbody>
-        ${opc.map((it, i) => filaItem(it, 'Opc. ' + (i + 1))).join('')}</tbody></table>
-      <table class="h-tot"><tbody><tr><td>Subtotal opcionales (sin ${E(imp.nombre)})</td><td class="r">${cur} ${n2(Util.sum(opc, it => Rules.lineaNeta(it, cur)))}</td></tr></tbody></table>` : ''}
+        ${opc.map((it, i) => filaItem(it, 'Opcional ' + (i + 1))).join('')}</tbody></table>
+      <p class="h-nota">* En caso opte por alguno de estos artículos opcionales, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.</p>` : ''}
       <div class="h-notas">${E(emp.notaPrecio || '* Precio de lista actual')}${t.descuento ? '<br>** Descuento especial válido solo para esta oferta' : ''}<br>Los precios están expresados en ${E((Config.MONEDAS[cur] || Config.MONEDAS.USD).nombre)} (${cur}).</div>
       <h3 style="margin:14px 0 4px;color:var(--brand)">Condiciones comerciales</h3>
       <table class="h-cond"><tbody>
@@ -6442,7 +6447,7 @@ const UI = (() => {
     const emp = empresaPDF((vendedor && vendedor.oficina) || 'PE'), col = Object.assign({ unidad: true, codigo: true, marca: true }, emp.columnas || {});
     if (emp.logo && !logoPDF) { try { logoPDF = await PdfDoc.imagen(emp.logo); } catch (e) { logoPDF = null; } }
     if (piePDF.src !== (emp.pieMarcas || null)) { piePDF.src = emp.pieMarcas || null; try { piePDF.im = piePDF.src ? await PdfDoc.imagen(piePDF.src) : null; } catch (e) { piePDF.im = null; } }
-    const AZ = rgbHex(emp.color) || [1, 80, 136], BANDA = [241, 245, 249], CELESTE = [197, 217, 241], GRIS = [90, 90, 90], NEGRO = [20, 20, 20], BLANCO = [255, 255, 255];
+    const AZ = rgbHex(emp.color) || [1, 80, 136], BANDA = [241, 245, 249], CELESTE = [197, 217, 241], GRIS = [90, 90, 90], NEGRO = [20, 20, 20], BLANCO = [255, 255, 255], NARANJA = [161, 92, 0];
     const doc = PdfDoc.crear({ titulo: `Cotización ${q.numero}` });
     // Pie con las marcas: centrado sobre la dirección, con sus píxeles originales (sin recomprimir), a lo más 2.5 cm de alto y nunca por debajo de 150 dpi
     const im = piePDF.im, pw = im ? Math.min(515, 72 * im.w / im.h, im.w * 72 / 150) : 0, ph = im ? pw * im.h / im.w : 0;
@@ -6493,7 +6498,7 @@ const UI = (() => {
     y += 6;
     // Tabla de ítems (columnas como la plantilla)
     // Columnas de la plantilla (unidad, código y marca se pueden ocultar: la descripción toma el espacio)
-    const defs = [['item', 24, ['Item']], ['cant', 26, ['Cant.']], col.unidad && ['uni', 26, ['Uni.']], col.codigo && ['cod', 80, ['Código']], col.marca && ['mar', 58, ['Marca']], ['des', 0, ['Descripción']], ['vu', 58, ['Valor Unit.*', cur]], ['tot', 59, ['Total Neto', cur]]].filter(Boolean);
+    const defs = [['item', 44, ['Item']], ['cant', 26, ['Cant.']], col.unidad && ['uni', 26, ['Uni.']], col.codigo && ['cod', 80, ['Código']], col.marca && ['mar', 58, ['Marca']], ['des', 0, ['Descripción']], ['vu', 62, ['Valor Unit.*', cur]], ['tot', 59, ['Total Neto', cur]]].filter(Boolean);
     const C = {}; { const libre = (R - L) - Util.sum(defs, d => d[1]); let x = L; defs.forEach(([k, w, h]) => { C[k] = { x, w: w || libre, h }; x += w || libre; }); }
     const cabecera = () => {
       doc.rect(L, y, R - L, 20, { fill: AZ });
@@ -6506,18 +6511,20 @@ const UI = (() => {
     const filas = (items, etiqueta) => {
       cabecera();
       items.forEach((it, i) => {
-        const dsc = Rules.descItem(it, cur), nAlt = it.alternativa && nroDe(it.alternativaDe), txtD = it.descripcion + (dsc ? `\nDescuento${Rules.descEsPct(it) ? ' ' + (+it.desc) + ' %' : ''}: − ${n2(dsc)}` : '') + (nAlt ? `\nAlternativa al ítem ${nAlt}` : '');
+        const dsc = Rules.descItem(it, cur), txtD = it.descripcion;
+        // El descuento se detalla bajo el valor unitario; la etiqueta del ítem puede ir en varias líneas (Alt. 1 / reemplaza al ítem 1)
+        const vuL = dsc ? (Rules.descEsPct(it) ? [`Dscto. ${+it.desc} %`, `− ${n2(Util.redondear((+it.valorUnit || 0) * (+it.desc) / 100, cur))} c/u`] : ['Dscto. en total', `− ${n2(dsc)}`]) : [], et = String(etiqueta(i)).split('\n');
         const cod = C.cod ? doc.partir(it.codigo, C.cod.w - 6, 'F2', 7.5) : [], mar = C.mar ? doc.partir(it.marca, C.mar.w - 6, 'F2', 7.5) : [], des = doc.partir((C.cod ? '' : it.codigo + (C.mar ? '' : ' · ' + it.marca) + '\n') + txtD, C.des.w - 10, 'F1', 7);
-        const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1), h = nl * lh + 10;
+        const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1 + vuL.length, et.length, 1), h = nl * lh + 10;
         if (asegurar(h)) cabecera();
         const mid = y + h / 2;
         doc.rect(C.des.x + 2, y + 2, C.des.w - 4, h - 4, { fill: CELESTE });
-        doc.texto(etiqueta(i), C.item.x, mid + 2.5, { t: 7.5, align: 'center', w: C.item.w, color: NEGRO });
+        et.forEach((s, k) => doc.texto(s, C.item.x, mid - (et.length * lh) / 2 + lh * (k + 0.8), { t: k ? 6.5 : 7.5, align: 'center', w: C.item.w, color: k ? NARANJA : NEGRO }));
         doc.texto(Util.nf2.format(+it.cant || 0).replace(/\.00$/, ''), C.cant.x, mid + 2.5, { t: 7.5, align: 'center', w: C.cant.w, color: NEGRO });
         if (C.uni) doc.texto(it.unidad || 'Und', C.uni.x, mid + 2.5, { t: 7.5, align: 'center', w: C.uni.w, color: NEGRO });
         const centrar = (ls, c, f, tt, k0) => ls.forEach((s, k) => doc.texto(s, c.x, mid - (ls.length * lh) / 2 + lh * (k + 0.8), { f, t: tt, align: 'center', w: c.w, color: NEGRO }));
         if (C.cod) centrar(cod, C.cod, 'F2', 7.5); if (C.mar) centrar(mar, C.mar, 'F2', 7.5); centrar(des, C.des, 'F1', 7);
-        doc.texto(n2(+it.valorUnit), C.vu.x + C.vu.w - 4, mid + 2.5, { t: 7.5, align: 'right', color: NEGRO });
+        [n2(+it.valorUnit), ...vuL].forEach((s, k, a) => doc.texto(s, C.vu.x + C.vu.w - 4, mid - (a.length * lh) / 2 + lh * (k + 0.8), { t: k ? 6.5 : 7.5, align: 'right', color: k ? NARANJA : NEGRO }));
         doc.texto(n2(Rules.lineaNeta(it, cur)), C.tot.x + C.tot.w - 4, mid + 2.5, { t: 7.5, align: 'right', color: NEGRO });
         y += h;
         doc.linea(L, y, R, y, { color: [220, 226, 234], lw: 0.4 });
@@ -6542,27 +6549,25 @@ const UI = (() => {
     });
     doc.texto(emp.notaPrecio || '* Precio de Lista actual', 330, y, { f: 'F2', t: 6.5, color: NEGRO }); y += 8;
     if (t.descuento) { doc.texto('** Descuento especial válido solo para esta oferta', 330, y, { f: 'F2', t: 6.5, color: NEGRO }); y += 8; }
+    /** Nota al pie de una tabla (alternativas u opcionales) */
+    const nota = txt => { const ls = doc.partir(txt, R - L - 4, 'F1', 7); asegurar(ls.length * 9 + 6); y += 9; ls.forEach(l => { doc.texto(l, L + 2, y, { t: 7, color: NEGRO }); y += 9; }); };
     // Alternativas (de la misma u otra marca): en el mismo documento, no suman (cada una reemplaza al ítem indicado)
     if (alternativas.length) {
       y += 8; asegurar(70);
       doc.rect(L, y, R - L, 15, { fill: BANDA });
-      doc.texto('Alternativas (no incluidas en el total: cada una reemplaza al ítem indicado)', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
+      doc.texto('Alternativas', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
       y += 18;
-      filas(alternativas, i => 'Alt. ' + (i + 1));   // correlativo; bajo la descripción dice a qué ítem reemplaza
-      y += 4;
+      filas(alternativas, i => 'Alt. ' + (i + 1) + (nroDe(alternativas[i].alternativaDe) ? `\n(reemplaza\nal ítem ${nroDe(alternativas[i].alternativaDe)})` : ''));
+      nota('* En caso opte por una de estas alternativas en lugar de un ítem de la cotización, detállelo en la Orden de Compra. Las alternativas no incluyen el cálculo del IGV.');
     }
     // Opcionales: aparte, no suman al total
     if (opcionales.length) {
       y += 8; asegurar(70);
       doc.rect(L, y, R - L, 15, { fill: BANDA });
-      doc.texto('Opcionales (no incluidos en el total de la cotización)', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
+      doc.texto('Opcionales', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
       y += 18;
-      filas(opcionales, i => 'Opc. ' + (i + 1));
-      const sub = Util.sum(opcionales, it => Rules.lineaNeta(it, cur));
-      asegurar(14); y += 11;
-      doc.texto(`Subtotal opcionales (sin ${imp.nombre})`, 330, y, { f: 'F2', t: 8, color: AZ });
-      doc.texto(`${cur} ${n2(sub)}`, R - 4, y, { f: 'F2', t: 8, color: NEGRO, align: 'right' });
-      y += 6;
+      filas(opcionales, i => 'Opcional ' + (i + 1));
+      nota('* En caso opte por alguno de estos artículos opcionales, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.');
     }
     y += 14; asegurar(14);
     doc.texto(`Los precios están expresados en ${(Config.MONEDAS[cur] || Config.MONEDAS.USD).nombre} (${cur})`, L, y, { f: 'F2', t: 8.5, color: AZ });

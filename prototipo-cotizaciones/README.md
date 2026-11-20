@@ -84,7 +84,8 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 - **Hoja de datos desde la cotización**: en el ítem, el vendedor elige *Agregar enlace* o *Subir PDF*. No se imprime: la hoja completa va dentro del mismo PDF y queda guardada para las próximas cotizaciones de ese producto.
   - El enlace va a `db.hojasDatos` (manda sobre el link de la lista). El PDF subido va a `db.hojasPDF` (por código y marca), con el archivo en la carpeta compartida, en el servidor o en el navegador, igual que los anexos, y sin límite de tamaño.
   - Con enlace y PDF a la vez, se usa el enlace y, si falla, el PDF subido.
-- **Alternativa** (de la misma u otra marca) en el mismo documento: queda ligada al ítem que reemplaza y no suma al total. En el PDF van en la sección "Alternativas", numeradas en orden (Alt. 1, Alt. 2, Alt. 3…), y bajo la descripción de cada una dice "Alternativa al ítem N".
+- **Alternativa** (de la misma u otra marca) en el mismo documento: queda ligada al ítem que reemplaza y no suma al total. En el PDF van en la sección "Alternativas", numeradas en orden (Alt. 1, Alt. 2…) y, en la columna del ítem, "(reemplaza al ítem N)". Al pie: "En caso opte por una de estas alternativas en lugar de un ítem de la cotización, detállelo en la Orden de Compra. Las alternativas no incluyen el cálculo del IGV."
+- **Descuento por ítem en el PDF**: se detalla bajo el valor unitario ("Dscto. 15 %" y el monto por unidad, o "Dscto. en total" si es un monto), y el total de la fila ya lo incluye. Igual en principales, alternativas y opcionales.
 
 **Plantilla y PDF**
 - **Plantilla por país:**
@@ -195,7 +196,7 @@ La UI nunca modifica la data directamente: lee con `Repo.snapshot()` y escribe c
      - Enlaces al correo del vendedor y al procedimiento de atención.
      - Varias páginas con encabezado repetido y "1 de 2".
      - Archivo `COT_<número>.pdf`.
-   - **Opcionales** (fuentes, accesorios): botón "Agregar opcional" o flecha ↓ en un ítem para pasarlo a la tabla de opcionales (↑ lo devuelve). En el PDF van en una tabla aparte con su subtotal y **no suman** al total ni al monto de la oportunidad (`Rules.principales`).
+   - **Opcionales** (fuentes, accesorios): botón "Agregar opcional" o flecha ↓ en un ítem para pasarlo a la tabla de opcionales (↑ lo devuelve). En el PDF van en una tabla aparte ("Opcional 1, 2…", sin subtotal y con la nota "En caso opte por alguno de estos artículos opcionales, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.") y **no suman** al total ni al monto de la oportunidad (`Rules.principales`).
    - **Dónde lo piden:** dirección, ciudad y país en cada cotización (`q.clienteDireccion`, `q.clienteCiudad`, `q.clientePais`), así un mismo cliente puede tener cotizaciones para lugares distintos, incluso en otro país.
      - En una cotización ya registrada, el botón **"Datos del cliente"** corrige dirección, ciudad, país y contacto sin hacer una revisión. Lo pueden usar el AM de la oportunidad y gerencia, y el cambio queda en el historial.
    - **Mis datos:** cada usuario actualiza su teléfono, correo y cargo desde su menú. Rol, meta e iniciales los cambian gerencia y administración en "Usuarios".
