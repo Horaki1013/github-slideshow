@@ -3064,6 +3064,9 @@ const Rules = (() => {
     }));
     return out.sort((a, b) => (a.nota.recordatorio + (a.nota.hora || '')).localeCompare(b.nota.recordatorio + (b.nota.hora || '')));
   }
+  /** Notas del cliente: cualquier usuario las agrega a cualquier cliente, aunque la cuenta o la oportunidad sean de otro vendedor.
+      Editarlas o eliminarlas: quien la escribió, gerencia/jefatura o administración */
+  const puedeNotaCliente = (db, u, c) => !!u && !!c;
   /** Avisos de la campana: recordatorios de notas y alertas propias del rol */
   function alertasUsuario(db, user, hoy = Util.today()) { return user ? recordatorios(db, user, hoy).concat(alertasRol(db, user, hoy)) : []; }
   function alertasRol(db, user, hoy) {
@@ -3601,7 +3604,7 @@ const Rules = (() => {
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, recordatorios, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    alertasOpp, alertasUsuario, recordatorios, puedeNotaCliente, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
     origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads,
     esOrigenLead, leadsClasificados, rankingPersonal, normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
@@ -4812,7 +4815,7 @@ const Repo = (() => {
     /** POST/PUT /clientes/:id/notas — nota de la cuenta (p. ej. "Llamar después de las 3 pm"), con recordatorio opcional para quien la escribe */
     async guardarNotaCliente(clienteId, d, usuarioId) {
       const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), u = usuarioDe(usuarioId);
-      if (!Rules.puede(u, 'ver_cuenta', c) && !['finanzas', 'admin'].includes(u.rol)) fail('No puedes agregar notas a esta cuenta.');
+      if (!Rules.puedeNotaCliente(db, u, c)) fail('No puedes agregar notas a esta cuenta.');
       const texto = String(d.texto || '').trim().slice(0, 500);
       if (!texto) fail('Escribe la nota.', { texto: 'Obligatorio' });
       const recordatorio = d.recordatorio || null, hora = recordatorio ? String(d.hora || '').slice(0, 5) : '';
@@ -9253,13 +9256,19 @@ const UI = (() => {
   /** Notas de la cuenta: indicaciones para contactar al cliente, con recordatorio opcional para quien la escribe */
   function notasCard(c, titulo = 'Notas') {
     const u = S.user, ns = c.notas || [], puedeEd = n => n.usuarioId === u.id || ['jefatura', 'admin'].includes(u.rol);
-    return `<section class="card"><div class="card-head"><h2>${titulo}</h2><span class="sub">${ns.length || ''}</span><button class="btn sm primary" data-action="nota-nueva" data-cliente="${c.id}" style="margin-left:auto">${I('plus')} Agregar nota</button></div>
+    return `<section class="card"><div class="card-head"><h2>${titulo}</h2><span class="sub">${ns.length || ''}</span>${Rules.puedeNotaCliente(S.db, u, c) ? `<button class="btn sm primary" data-action="nota-nueva" data-cliente="${c.id}" style="margin-left:auto">${I('plus')} Agregar nota</button>` : ''}</div>
       ${ns.length ? `<div class="stack">${ns.map(n => `<div class="nota-item"><div style="white-space:pre-wrap;overflow-wrap:anywhere">${E(n.texto)}</div>
         <div class="small muted">${E((usr(n.usuarioId) || {}).nombre || '')} · ${Util.fmtFechaHora(n.creada)}${n.recordatorio ? ` · ${n.hecho ? `<span class="chip ok">Recordatorio atendido</span>` : `<span class="chip ${n.recordatorio <= hoy() ? 'warn' : 'info'}">Recordar ${Util.fmtDate(n.recordatorio)}${n.hora ? ' ' + n.hora : ''}</span>`}` : ''}</div>
         <div class="btn-row" style="margin-top:4px">${n.usuarioId === u.id && n.recordatorio && !n.hecho ? `<button class="btn sm" data-action="nota-hecha" data-cliente="${c.id}" data-id="${n.id}">${I('check')} Hecho</button><button class="btn sm" data-action="nota-posponer" data-cliente="${c.id}" data-id="${n.id}">Posponer</button>` : ''}
           ${puedeEd(n) ? `<button class="btn sm ghost" data-action="nota-editar" data-cliente="${c.id}" data-id="${n.id}">Editar</button><button class="btn sm ghost bad" data-action="nota-borrar" data-cliente="${c.id}" data-id="${n.id}">Eliminar</button>` : ''}</div></div>`).join('')}</div>`
         : '<p class="muted small" style="margin:0">Ej.: "Llamar a partir de las 3 pm", "No trabajan miércoles ni viernes". Puedes ponerle un recordatorio.</p>'}</section>`;
   }
+  /** Notas de cualquier cliente en una ventana (desde el directorio, aunque la cuenta sea de otro vendedor) */
+  ACTIONS['notas-cliente'] = el => {
+    const c = cli(el.dataset.cliente);
+    const back = modal({ title: `Notas · ${c.razonSocial}`, wide: true, body: notasCard(c, 'Notas del cliente'), actions: [{ label: 'Cerrar', cls: 'primary' }] });
+    back.addEventListener('click', ev => { const b = ev.target.closest('[data-action]'); if (!b || !ACTIONS[b.dataset.action]) return; ev.preventDefault(); closeModal(); ACTIONS[b.dataset.action](b, ev); });
+  };
   const notaDe = el => { const c = cli(el.dataset.cliente); return [c, (c.notas || []).find(n => n.id === el.dataset.id)]; };
   function abrirNota(c, n) {
     modal({ title: n ? 'Editar nota' : `Nota · ${c.razonSocial}`, body: `<label class="field"><span>Nota <span class="req">*</span></span><textarea name="texto" rows="3" maxlength="500" placeholder="Ej.: Llamar a partir de las 3 pm · No trabajan miércoles ni viernes">${E(n ? n.texto : '')}</textarea></label>
@@ -9327,7 +9336,7 @@ const UI = (() => {
         <div class="dir-head"><div style="min-width:0">
           <h2>${Rules.puede(u, 'ver_cuenta', c) ? `<a href="#/cuenta/${c.id}">${E(c.razonSocial)}</a>` : E(c.razonSocial)} ${asig ? '' : c.vendedorId ? vendTag(usr(c.vendedorId)) : '<span class="chip">Sin asignar</span>'}</h2>
           <div class="small muted">${c.ruc ? (Rules.esPeru(c.pais) ? 'RUC ' : 'ID fiscal ') + E(c.ruc) : '<span style="color:var(--warn)">Sin RUC</span>'} · ${E(c.tipo || 'Integrador')}${c.rubro ? ' · Rubro: ' + E(c.rubro) : ''}</div></div>
-          <div class="btn-row">${asig ? `<select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" title="Vendedor asignado" style="width:auto;min-width:150px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${vendOpts.replace(`value="${c.vendedorId}"`, `value="${c.vendedorId}" selected`)}</select>` : ''}${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC && !c.archivado ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}${elim && !c.prueba ? (c.archivado ? `<span class="chip">Eliminada ${Util.fmtDate(c.archivado.fecha)}</span><button class="btn sm" data-action="empresa-restaurar" data-cliente="${c.id}">Restaurar</button>` : `<button class="btn sm bad" data-action="empresa-eliminar" data-cliente="${c.id}">Eliminar empresa</button>`) : ''}</div></div>
+          <div class="btn-row"><button class="btn sm" data-action="notas-cliente" data-cliente="${c.id}" title="Notas del cliente (con recordatorio)">${I('file')} Notas${(c.notas || []).length ? ' (' + c.notas.length + ')' : ''}</button>${asig ? `<select data-change="asignar-cuenta" data-id="${c.id}" aria-label="Vendedor asignado" title="Vendedor asignado" style="width:auto;min-width:150px">${c.vendedorId ? '' : '<option value="" selected disabled>Sin asignar…</option>'}${vendOpts.replace(`value="${c.vendedorId}"`, `value="${c.vendedorId}" selected`)}</select>` : ''}${puedeK ? `<button class="btn sm" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Contacto</button>` : ''}${edC && !c.archivado ? `<button class="btn sm ghost" data-action="empresa-editar" data-cliente="${c.id}">Editar empresa</button>` : ''}${elim && !c.prueba ? (c.archivado ? `<span class="chip">Eliminada ${Util.fmtDate(c.archivado.fecha)}</span><button class="btn sm" data-action="empresa-restaurar" data-cliente="${c.id}">Restaurar</button>` : `<button class="btn sm bad" data-action="empresa-eliminar" data-cliente="${c.id}">Eliminar empresa</button>`) : ''}</div></div>
         ${mios ? (() => { const r = Rules.cuenta(db, c.id, hoy()); return `<div class="dir-seg">${estadoChip(r.estado)}<span class="small muted">Última cotización: ${r.ultimaCot ? `${Util.fmtDate(r.ultimaCot)} (hace ${r.diasSinCotizar} días)` : 'ninguna'} · Último contacto: ${r.ultimoContacto ? Util.fmtDate(r.ultimoContacto.fecha) : '—'} · ${r.abiertas} abiertas</span>
           <span class="btn-row"><a class="btn sm" href="#/cuenta/${c.id}">Ver cuenta</a><button class="btn sm" data-action="gestion-cuenta" data-id="${c.id}">${I('check')} Registrar gestión</button><button class="btn sm primary" data-action="cotizar-cuenta" data-id="${c.id}">${I('plus')} Cotizar</button></span></div>`; })() : ''}
         <div class="dir-sedes">${sedes.length ? sedes.map(x => `<span>${I('home').replace('<svg', '<svg width="13" height="13" style="vertical-align:-2px"')} <strong>${E(x.nombre || 'Sede')}:</strong> ${E([x.direccion, x.distrito, x.ciudad, x.pais].filter(Boolean).join(', '))}</span>`).join('') : '<span class="muted">Sin dirección registrada</span>'}</div>
