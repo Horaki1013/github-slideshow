@@ -481,6 +481,8 @@ tr.quick-open>td{border-bottom:0}
 .op-grupo .op-main { cursor: default; } .grupo-opps { margin: 4px 0 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; } .grupo-opps li { overflow-wrap: anywhere; }
 .seg-opps { display: grid; gap: 6px; } .seg-opp { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; } .seg-opp input { margin-top: 3px; }
 .nota-item { border-bottom: 1px dashed var(--border); padding-bottom: 8px; }
+.kit-bom { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+.kit-bom-fila { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; } .kit-bom-fila select, .kit-bom-fila input { flex: 1 1 260px; min-width: 0; }
 .nq-orden { display: inline-flex; gap: 0; } .nq-orden .btn { padding: 2px 5px; min-width: 0; } .nq-orden .btn[disabled] { opacity: .3; }
 .hoja .h-nota { font-size: 10px; margin: 4px 0 0; color: #333; }
 .hoja .h-items td:first-child { white-space: nowrap; }
@@ -4835,6 +4837,33 @@ const Repo = (() => {
       auditar(usuarioId, `Nota ${n ? 'editada' : 'agregada'} en ${c.razonSocial}${recordatorio ? ` (recordatorio ${Util.fmtDate(recordatorio)}${hora ? ' ' + hora : ''})` : ''}`);
       touch(); return n || c.notas[0];
     },
+    /** POST/PUT /boms — biblioteca de BOM de Kit/Glb: el equipo guarda un desglose con nombre y lo carga en otras cotizaciones.
+        Mismo nombre = se actualiza (su autor, gerencia/jefatura o administración) */
+    async guardarBom(d, usuarioId) {
+      const u = usuarioDe(usuarioId); if (!u) fail('Usuario no válido.');
+      const nombre = String(d.nombre || '').trim().slice(0, 120);
+      if (!nombre) fail('Ponle un nombre al BOM (p. ej. "Tablero de control 24 V").', { bomNombre: 'Obligatorio' });
+      if (!Config.MONEDAS[d.moneda]) fail('Moneda no válida.');
+      const partes = (d.partes || []).filter(x => String(x.codigo || x.descripcion || '').trim())
+        .map(x => ({ cant: +x.cant || 0, codigo: String(x.codigo || '').trim(), marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: Util.round2(+x.valorUnit || 0) }));
+      if (!partes.length) fail('El BOM no tiene partes.');
+      db.boms = db.boms || [];
+      const b = d.id ? db.boms.find(x => x.id === d.id) || fail('BOM no encontrado.') : db.boms.find(x => Util.norm(x.nombre) === Util.norm(nombre));
+      if (b) {
+        if (b.creadoPor !== usuarioId && !['jefatura', 'admin'].includes(u.rol)) fail(`Ya hay un BOM "${b.nombre}" de ${(usuarioDe(b.creadoPor) || {}).nombre || 'otro usuario'}: guárdalo con otro nombre.`, { bomNombre: 'Ya existe' });
+        Object.assign(b, { nombre, unidad: d.unidad || b.unidad, moneda: d.moneda, partes, actualizado: Util.ahora(), actualizadoPor: usuarioId });
+        auditar(usuarioId, `BOM actualizado: ${nombre} (${partes.length} partes)`); touch(); return b;
+      }
+      const n = { id: 'BOM-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), nombre, unidad: /^glb$/i.test(d.unidad) ? 'Glb' : 'Kit', moneda: d.moneda, partes, creado: Util.ahora(), creadoPor: usuarioId };
+      db.boms.unshift(n);
+      auditar(usuarioId, `BOM guardado en la biblioteca: ${nombre} (${partes.length} partes)`); touch(); return n;
+    },
+    async eliminarBom(id, usuarioId) {
+      const u = usuarioDe(usuarioId), b = (db.boms || []).find(x => x.id === id) || fail('BOM no encontrado.');
+      if (b.creadoPor !== usuarioId && !['jefatura', 'admin'].includes(u.rol)) fail('Solo quien lo guardó (o gerencia/jefatura y administración) lo elimina.');
+      db.boms = db.boms.filter(x => x !== b);
+      auditar(usuarioId, `BOM eliminado de la biblioteca: ${b.nombre}`); touch();
+    },
     /** Recordatorio atendido (la nota queda) o pospuesto a otra fecha */
     async recordatorioNota(clienteId, notaId, d, usuarioId) {
       const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), n = (c.notas || []).find(x => x.id === notaId) || fail('Nota no encontrada.');
@@ -7714,7 +7743,7 @@ const UI = (() => {
         </dl>
         <div class="table-wrap"><table class="tbl"><thead><tr><th class="r">Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th class="r">V. unit.</th><th class="r">Total</th></tr></thead><tbody>
           ${q.items.map(it => `<tr${it.opcional || it.alternativa ? ' class="muted"' : ''}><td class="r">${it.cant}</td><td>${E(it.unidad)}</td><td class="nowrap"><strong>${E(it.codigo)}</strong>${it.opcional ? ' <span class="chip">opcional</span>' : it.alternativa ? ' <span class="chip warn">alternativa</span>' : ''}</td><td>${E(it.marca)}</td>
-            <td class="small">${E(it.descripcion)}${it.partes && it.partes.length ? `<div class="cell-sub" title="${E(it.partes.map(x => `${x.cant} × ${x.codigo} ${x.descripcion} · ${Util.nfMon(x.valorUnit, cur)}`).join('\n'))}">Kit con ${it.partes.length} partes (detalle interno)</div>` : ''}${Rules.descItem(it, cur) ? `<div class="cell-sub">Descuento ${Rules.descEsPct(it) ? it.desc + ' %' : ''} − ${Util.nfMon(Rules.descItem(it, cur), cur)}</div>` : ''}</td>
+            <td class="small">${E(it.descripcion)}${it.partes && it.partes.length ? `<div class="cell-sub" title="${E(it.partes.map(x => `${x.cant} × ${x.codigo} ${x.descripcion} · ${Util.nfMon(x.valorUnit, cur)}`).join('\n'))}">${E(it.unidad)} con ${it.partes.length} partes (detalle interno) · <a href="#" data-action="bom-excel" data-q="${q.id}" data-i="${q.items.indexOf(it)}">BOM en Excel</a></div>` : ''}${Rules.descItem(it, cur) ? `<div class="cell-sub">Descuento ${Rules.descEsPct(it) ? it.desc + ' %' : ''} − ${Util.nfMon(Rules.descItem(it, cur), cur)}</div>` : ''}</td>
             <td class="r num">${Util.nfMon(it.valorUnit, cur)}${it.listaUSD && Math.abs(it.valorUnit - Rules.convertir(it.listaUSD, 'USD', cur, Object.assign({}, q.tcs || {}, cur !== 'USD' ? { [cur]: Rules.tcUSD(q) } : {}))) > 0.01 ? `<div class="cell-sub" title="Precio de lista: ${Util.money(it.listaUSD)}">editado vs lista</div>` : ''}</td><td class="r num">${Util.nfMon(Rules.lineaNeta(it, cur), cur)}</td></tr>`).join('')}
         </tbody></table></div>
         <div class="totals">
@@ -8452,6 +8481,35 @@ const UI = (() => {
     const act = vs.find(p => Rules.listaIdDe(p) === (it.listaId || 'L-1')) || vs[0];
     return `<select data-nq-lista="${i}" class="lista-item" aria-label="Lista de precios del ítem" title="Este producto está en ${vs.length} listas">${vs.map(p => { const l = Rules.listaDe(S.db, Rules.listaIdDe(p)); return `<option value="${p.id}"${p === act ? ' selected' : ''}>${E(l.nombre)} · ${Util.money(p.precio, l.moneda)}</option>`; }).join('')}</select>`;
   }
+  /* ---------- BOM de Kit/Glb en Excel: "BOM-GLB-<N° de cotización>-<cliente>.xlsx" (BOM-KIT-… si la unidad es Kit) ---------- */
+  /** Etiqueta del ítem como en el PDF: Item 2, Alt 1, Opc 1 */
+  function etiquetaItem(items, it) {
+    const g = it.opcional ? items.filter(x => x.opcional) : it.alternativa ? items.filter(x => x.alternativa && !x.opcional) : items.filter(x => !x.opcional && !x.alternativa);
+    return (it.opcional ? 'Opc' : it.alternativa ? 'Alt' : 'Item') + (g.indexOf(it) + 1);
+  }
+  /** Nombre de archivo seguro en cualquier navegador y en Windows: sin tildes ni ñ (algunos navegadores descartan el nombre) ni caracteres prohibidos */
+  const limpiarArchivo = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim();
+  /** Descarga el BOM de un ítem Kit/Glb con precios (documento interno) */
+  function descargarBOM({ numero, cliente, fecha, moneda, items, it, partes }) {
+    const tipo = /^glb$/i.test(it.unidad) ? 'GLB' : 'KIT', et = etiquetaItem(items, it), varios = items.filter(x => /^(kit|glb)$/i.test(x.unidad) && (x.partes || []).length || x === it).length > 1;
+    const ps = (partes || it.partes || []).filter(x => String(x.codigo || x.descripcion || '').trim()), r = v => Util.redondear(+v || 0, moneda);
+    const suma = r(Util.sum(ps, x => (+x.cant || 0) * (+x.valorUnit || 0)));
+    const filas = [['N°', 'Cant.', 'N° de parte', 'Marca', 'Descripción', `V. unit. (${moneda})`, `Total (${moneda})`],
+      ...ps.map((x, k) => [k + 1, +x.cant || 0, x.codigo || '', x.marca || '', x.descripcion || '', r(x.valorUnit), r((+x.cant || 0) * (+x.valorUnit || 0))]),
+      [], ['', '', '', '', `Suma por ${it.unidad}`, '', suma], ['', '', '', '', `Cantidad de ${it.unidad} en la cotización`, '', +it.cant || 0], ['', '', '', '', 'Total de las partes', '', r(suma * (+it.cant || 0))],
+      ...(Math.abs(r(it.valorUnit) - suma) > 0.005 ? [['', '', '', '', `Precio del ${it.unidad} en la cotización (editado)`, '', r(it.valorUnit)]] : []),
+      [], ['Cotización', numero || '(sin número)'], ['Cliente', cliente || '(sin cliente)'], ['Ítem', `${et.replace(/(\d+)$/, ' $1')} · ${it.codigo || ''} · ${it.descripcion || ''}`], ['Moneda', moneda], ['Fecha de emisión', fecha ? Util.fmtDate(fecha) : ''],
+      ['Nota', 'Documento interno: en el PDF de la cotización el cliente ve solo el ítem.']];
+    const nombre = limpiarArchivo(`BOM-${tipo}-${numero || 'SIN-NUMERO'}-${cliente || 'SIN-CLIENTE'}${varios ? '-' + et : ''}`).slice(0, 150).replace(/[.\s-]+$/, '') + '.xlsx';   // sin punto final (S.A.C..xlsx)
+    Util.descargar(Excel.libro([{ nombre: `BOM ${tipo} ${et}`, fija: true, anchos: [6, 8, 22, 14, 50, 16, 16], filas }]), nombre);
+    return nombre;
+  }
+  /** Desde una cotización registrada (ficha de la oportunidad o visor) */
+  ACTIONS['bom-excel'] = el => {
+    const q = S.db.quotes.find(x => x.id === el.dataset.q), it = q && q.items[+el.dataset.i]; if (!it) return;
+    const o = oppById(q.oppId), c = o && cli(o.clienteId);
+    toast('Descargado: ' + descargarBOM({ numero: q.numero, cliente: c ? c.razonSocial : '', fecha: q.fechaEmision, moneda: q.moneda, items: q.items, it }));
+  };
   /* ---------- Kit o global: desglose interno de partes (no sale en el PDF; el cliente ve solo el ítem principal) ---------- */
   function abrirKit(i, auto) {
     const d = S.nueva.d, it = d.items[i], cur = d.moneda;
@@ -8464,7 +8522,10 @@ const UI = (() => {
     const cuerpo = () => `<p class="small muted" style="margin-top:0">${auto ? 'Opcional: ' : ''}Detalla qué partes incluye <strong>${E(it.codigo || 'este ítem')}</strong> (${E(it.unidad)}). Es interno: en el PDF el cliente ve solo el ítem principal. Al escribir un N° de parte de la lista se completan descripción y precio (${cur}), editables.</p>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>Cant.</th><th>N° de parte</th><th>Descripción</th><th>V. unit. (${cur})</th><th class="r">Total</th><th></th></tr></thead><tbody id="kit-filas">${partes.map(filaP).join('')}</tbody></table></div>
       <datalist id="kit-cods"></datalist>
-      <div class="btn-row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-kadd="1">${I('plus')} Agregar parte</button><strong id="kit-suma">Suma por ${E(it.unidad)}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}</strong></div>`;
+      <div class="btn-row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-kadd="1">${I('plus')} Agregar parte</button><strong id="kit-suma">Suma por ${E(it.unidad)}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}</strong></div>
+      <div class="kit-bom"><div class="small" style="font-weight:700;color:var(--text-2)">Biblioteca de BOM <span class="muted" style="font-weight:400">(la ve todo el equipo)</span></div>
+        <div class="kit-bom-fila"><select id="kit-bom-sel" aria-label="BOM guardado"></select><button type="button" class="btn sm" data-kbom="cargar">Cargar en este ${E(it.unidad)}</button><button type="button" class="btn sm ghost bad" data-kbom="borrar" hidden>Eliminar de la biblioteca</button></div>
+        <div class="kit-bom-fila"><input type="text" id="kit-bom-nombre" maxlength="120" placeholder="Nombre del BOM (p. ej. Tablero de control 24 V)" value="${E(it.bom ? it.bom.nombre : it.descripcion || '')}" aria-label="Nombre del BOM"><button type="button" class="btn sm" data-kbom="guardar">${I('check')} Guardar en la biblioteca</button><button type="button" class="btn sm" data-kbom="excel">${I('download')} Descargar Excel</button></div></div>`;
     const root = modal({ title: `Partes del ${it.unidad === 'Glb' ? 'global' : 'kit'}${it.codigo ? ' · ' + it.codigo : ''}`, wide: true, body: cuerpo(),
       actions: [{ label: 'Cancelar' }, ...(it.partes && it.partes.length ? [{ label: 'Quitar desglose', onClick: () => { delete it.partes; render(true); } }] : []),
         { label: `${I('check')} Usar la suma como precio`, cls: 'primary', onClick: () => {
@@ -8474,6 +8535,35 @@ const UI = (() => {
         } }] });
     const suma = () => { const s = root.querySelector('#kit-suma'); if (s) s.textContent = `Suma por ${it.unidad}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}`; };
     const redibujar = () => { root.querySelector('#kit-filas').innerHTML = partes.map(filaP).join(''); suma(); };
+    // Biblioteca de BOM: cargar, guardar (mismo nombre = actualizar), eliminar y Excel
+    const propio = b => b && (b.creadoPor === S.user.id || ['jefatura', 'admin'].includes(S.user.rol));
+    const llenarBoms = sel => { const bs = S.db.boms || [], el = root.querySelector('#kit-bom-sel');
+      el.innerHTML = `<option value="">${bs.length ? 'Elige un BOM guardado…' : 'Aún no hay BOM guardados'}</option>` + bs.map(b => `<option value="${b.id}"${b.id === sel ? ' selected' : ''}>${E(b.nombre)} · ${b.partes.length} partes · ${E(b.unidad)} · ${E((usr(b.creadoPor) || {}).iniciales || '')}</option>`).join('');
+      root.querySelector('[data-kbom="borrar"]').hidden = !propio(bs.find(b => b.id === el.value)); };
+    llenarBoms(it.bom && it.bom.id);
+    root.addEventListener('change', e => { if (e.target.id === 'kit-bom-sel') root.querySelector('[data-kbom="borrar"]').hidden = !propio((S.db.boms || []).find(b => b.id === e.target.value)); });
+    root.addEventListener('click', async e => {
+      const a = e.target.closest('[data-kbom]'); if (!a) return;
+      const sel = root.querySelector('#kit-bom-sel').value, b = (S.db.boms || []).find(x => x.id === sel), nom = root.querySelector('#kit-bom-nombre');
+      try {
+        if (a.dataset.kbom === 'cargar') {
+          if (!b) return toast('Elige un BOM de la lista.');
+          partes.splice(0, partes.length, ...b.partes.map(x => Object.assign({}, x, { valorUnit: Util.redondear(Rules.convertir(x.valorUnit, b.moneda, cur, d.tcs), cur) })));
+          it.bom = { id: b.id, nombre: b.nombre }; nom.value = b.nombre; redibujar();
+          toast(`BOM "${b.nombre}" cargado${b.moneda !== cur ? ` (precios convertidos de ${b.moneda} a ${cur})` : ''}. Puedes modificarlo.`);
+        } else if (a.dataset.kbom === 'guardar') {
+          const g = await Repo.guardarBom({ nombre: nom.value, unidad: it.unidad, moneda: cur, partes }, S.user.id);
+          S.db = await snap(); it.bom = { id: g.id, nombre: g.nombre }; llenarBoms(g.id);
+          toast(`BOM "${g.nombre}" guardado en la biblioteca.`);
+        } else if (a.dataset.kbom === 'borrar') {
+          if (!b) return;
+          await Repo.eliminarBom(b.id, S.user.id); S.db = await snap(); llenarBoms(''); toast(`BOM "${b.nombre}" eliminado de la biblioteca.`);
+        } else if (a.dataset.kbom === 'excel') {
+          const c = d.clienteId ? cli(d.clienteId) : null;
+          toast('Descargado: ' + descargarBOM({ numero: d.numero, cliente: c ? c.razonSocial : (d.clienteNuevo || {}).razonSocial, fecha: d.fechaEmision, moneda: cur, items: d.items, it, partes }));
+        }
+      } catch (err) { toast(err.message); }
+    });
     root.addEventListener('input', e => {
       const t = e.target, k = t.dataset.kp; if (k == null) return;
       partes[+k][t.dataset.kk] = t.value;
