@@ -2784,6 +2784,15 @@ const Rules = (() => {
     return Util.round2(montoUSD(db, opp) * prob(opp.etapa));
   }
   /** Ítems que suman al total (los opcionales se cotizan aparte) */
+  /** Kit o Glb con desglose: en la cotización sale con el código, la descripción y la marca de su PRIMERA parte (p. ej. un ARK) */
+  function nombreDesdePartes(it) {
+    if (!it || !/^(kit|glb)$/i.test(it.unidad || '') || !Array.isArray(it.partes)) return it;
+    const p0 = it.partes.find(x => String(x.codigo || x.descripcion || '').trim()); if (!p0) return it;
+    if (String(p0.codigo || '').trim()) it.codigo = String(p0.codigo).trim();
+    if (String(p0.descripcion || '').trim()) it.descripcion = String(p0.descripcion).trim();
+    if (String(p0.marca || '').trim()) it.marca = String(p0.marca).trim();
+    return it;
+  }
   function principales(q) { return (q && q.items || []).filter(it => !it.opcional && !it.alternativa); }
   const alternativas = q => (q && q.items || []).filter(it => it.alternativa && !it.opcional);
   const opcionales = q => (q && q.items || []).filter(it => it.opcional);
@@ -3602,7 +3611,7 @@ const Rules = (() => {
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
-  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, descEsPct, conDescItems, lineaNeta, impuestoDe, tcUSD, convertir, alternativas, opcionales,
+  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, descEsPct, conDescItems, lineaNeta, nombreDesdePartes, impuestoDe, tcUSD, convertir, alternativas, opcionales,
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
@@ -5503,6 +5512,7 @@ const Repo = (() => {
         // Desglose interno de un kit o global: no sale en el PDF
         Array.isArray(it.partes) && it.partes.some(x => String(x.codigo || x.descripcion || '').trim()) ? { partes: it.partes.filter(x => String(x.codigo || x.descripcion || '').trim()).map(x => ({ cant: +x.cant || 0, codigo: String(x.codigo || '').trim(),
           marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: rd(+x.valorUnit || 0), ...(x.listaId ? { listaId: x.listaId } : {}) })) } : {}));
+      items.forEach(Rules.nombreDesdePartes);   // Kit/Glb: código y descripción de su primera parte
       const ofi = Config.OFICINA_DEF[Rules.oficinaDe(db, p.vendedorId)] || Config.OFICINA_DEF.PE, imp = (db.empresa && db.empresa.oficinas && db.empresa.oficinas[Rules.oficinaDe(db, p.vendedorId)]) || {};
       const tcs = {}; Object.keys(Config.MONEDAS).forEach(m => { if (m !== 'USD' && p.tcs && +p.tcs[m] > 0) tcs[m] = +p.tcs[m]; });
       const q = { id: 'Q-' + (++db.seq.quote), oppId: null, numero: p.numero.trim(), revision: 'R0', tipo: 'original', fechaEmision: p.fechaEmision, moneda: p.moneda,
@@ -5755,6 +5765,11 @@ const SelfTest = (() => {
     ['Fecha estimada de OC sugerida: un mes después, en día hábil (fin de semana, fin de mes y feriados)', () =>
       Util.fechaOCSugerida('2028-02-25') === '2028-03-27' && Util.fechaOCSugerida('2026-09-25') === '2026-10-26' && Util.fechaOCSugerida('2026-01-31') === '2026-03-02' &&
       Util.fechaOCSugerida('2026-11-08') === '2026-12-10' && Util.fechaOCSugerida('2026-11-24') === '2026-12-24'],
+    ['Kit/Glb con desglose: sale con el código y la descripción de su primera parte', () => {
+      const it = Rules.nombreDesdePartes({ unidad: 'Glb', codigo: 'TAB', descripcion: 'Tablero', marca: 'Moxa', partes: [{ codigo: 'ARK-1123', descripcion: 'Computador embebido ARK', marca: 'Advantech' }, { codigo: 'X' }] });
+      const und = Rules.nombreDesdePartes({ unidad: 'Und', codigo: 'A', partes: [{ codigo: 'B' }] });
+      return it.codigo === 'ARK-1123' && it.descripcion === 'Computador embebido ARK' && it.marca === 'Advantech' && und.codigo === 'A';
+    }],
   ];
   function run() {
     let ok = 0;
@@ -8518,8 +8533,8 @@ const UI = (() => {
     const filaP = (x, k) => `<tr><td><input type="number" min="0" data-kp="${k}" data-kk="cant" value="${E(x.cant)}" style="width:64px"></td>
       <td><input type="text" data-kp="${k}" data-kk="codigo" value="${E(x.codigo)}" placeholder="N° de parte" list="kit-cods"></td><td><input type="text" data-kp="${k}" data-kk="descripcion" value="${E(x.descripcion)}"></td>
       <td><input type="number" min="0" step="any" data-kp="${k}" data-kk="valorUnit" value="${E(x.valorUnit)}" style="width:110px"></td><td class="r num" data-kt="${k}">${Util.nfMon((+x.cant || 0) * (+x.valorUnit || 0), cur)}</td>
-      <td><button type="button" class="btn sm ghost" data-kdel="${k}" aria-label="Quitar parte">${I('x')}</button></td></tr>`;
-    const cuerpo = () => `<p class="small muted" style="margin-top:0">${auto ? 'Opcional: ' : ''}Detalla qué partes incluye <strong>${E(it.codigo || 'este ítem')}</strong> (${E(it.unidad)}). Es interno: en el PDF el cliente ve solo el ítem principal. Al escribir un N° de parte de la lista se completan descripción y precio (${cur}), editables.</p>
+      <td class="nowrap"><span class="nq-orden"><button type="button" class="btn sm ghost" data-kmov="${k}" data-d="-1" aria-label="Subir parte" title="Subir"${k ? '' : ' disabled'}>▲</button><button type="button" class="btn sm ghost" data-kmov="${k}" data-d="1" aria-label="Bajar parte" title="Bajar"${k < partes.length - 1 ? '' : ' disabled'}>▼</button></span><button type="button" class="btn sm ghost" data-kdel="${k}" aria-label="Quitar parte">${I('x')}</button></td></tr>`;
+    const cuerpo = () => `<p class="small muted" style="margin-top:0">${auto ? 'Opcional: ' : ''}Detalla qué partes incluye <strong>${E(it.codigo || 'este ítem')}</strong> (${E(it.unidad)}). Es interno: en el PDF el cliente ve solo el ítem, <strong>con el código y la descripción de la primera parte</strong> (ordénalas con ▲▼). Al escribir un N° de parte de la lista se completan descripción y precio (${cur}), editables.</p>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>Cant.</th><th>N° de parte</th><th>Descripción</th><th>V. unit. (${cur})</th><th class="r">Total</th><th></th></tr></thead><tbody id="kit-filas">${partes.map(filaP).join('')}</tbody></table></div>
       <datalist id="kit-cods"></datalist>
       <div class="btn-row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-kadd="1">${I('plus')} Agregar parte</button><strong id="kit-suma">Suma por ${E(it.unidad)}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}</strong></div>
@@ -8530,7 +8545,7 @@ const UI = (() => {
       actions: [{ label: 'Cancelar' }, ...(it.partes && it.partes.length ? [{ label: 'Quitar desglose', onClick: () => { delete it.partes; render(true); } }] : []),
         { label: `${I('check')} Usar la suma como precio`, cls: 'primary', onClick: () => {
           const ps = partes.filter(x => String(x.codigo || x.descripcion || '').trim());
-          if (ps.length) { it.partes = ps; it.valorUnit = Util.redondear(Util.sum(ps, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur); } else delete it.partes;
+          if (ps.length) { it.partes = ps; it.valorUnit = Util.redondear(Util.sum(ps, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur); Rules.nombreDesdePartes(it); } else delete it.partes;
           render(true);
         } }] });
     const suma = () => { const s = root.querySelector('#kit-suma'); if (s) s.textContent = `Suma por ${it.unidad}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}`; };
@@ -8576,8 +8591,9 @@ const UI = (() => {
       suma();
     });
     root.addEventListener('click', e => {
-      const a = e.target.closest('[data-kadd],[data-kdel]'); if (!a) return;
-      if (a.dataset.kadd) partes.push({ cant: 1, codigo: '', marca: '', descripcion: '', valorUnit: '' }); else partes.splice(+a.dataset.kdel, 1);
+      const a = e.target.closest('[data-kadd],[data-kdel],[data-kmov]'); if (!a) return;
+      if (a.dataset.kmov != null) { const k = +a.dataset.kmov, j = k + +a.dataset.d; if (j >= 0 && j < partes.length) [partes[k], partes[j]] = [partes[j], partes[k]]; }
+      else if (a.dataset.kadd) partes.push({ cant: 1, codigo: '', marca: '', descripcion: '', valorUnit: '' }); else partes.splice(+a.dataset.kdel, 1);
       redibujar();
     });
   }

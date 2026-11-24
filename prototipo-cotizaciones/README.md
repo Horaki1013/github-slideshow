@@ -114,6 +114,7 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 ### BOM de Kit y Glb (biblioteca y Excel)
 
 - **Biblioteca de BOM** (`db.boms`): en la ventana de partes de un ítem Kit o Glb, "Guardar en la biblioteca" guarda el desglose con un nombre (partes, unidad y moneda); con el mismo nombre se actualiza (su autor, gerencia/jefatura o administración). Todo el equipo lo ve y lo carga en otras cotizaciones con "Cargar en este Kit/Glb": los precios pasan a la moneda de la cotización con su tipo de cambio, y se pueden modificar. `Repo.guardarBom` / `eliminarBom`, con registro en la auditoría.
+- **Nombre del Kit/Glb en la cotización:** el ítem sale con el código, la descripción y la marca de la **primera parte** de su BOM (p. ej. un ARK), al confirmar las partes y otra vez al registrar (`Rules.nombreDesdePartes`). Las partes se ordenan con ▲▼ en la misma ventana.
 - **Excel del BOM** (con precios; documento interno): desde la misma ventana o, en una cotización registrada, desde "BOM en Excel" bajo el ítem. Nombre `BOM-GLB-<N° de cotización>-<cliente>.xlsx` (`BOM-KIT-…` si la unidad es Kit); si la cotización tiene varios Kit/Glb, se agrega el ítem (`-Item2`, `-Alt1`, `-Opc1`). El nombre va sin tildes ni ñ, para que cualquier navegador lo respete. Contenido: cada parte (cantidad, N° de parte, marca, descripción, valor unitario y total), la suma por unidad, la cantidad y el total, y la cotización, el cliente, el ítem, la moneda y la fecha.
 
 ### Ajustes de la cotización y la bitácora (24/11/2026)
