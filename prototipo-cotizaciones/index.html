@@ -7642,6 +7642,7 @@ const UI = (() => {
             ${Rules.quotesOf(db, o).slice().reverse().map(x => quoteHTML(x, ed)).join('')}</section>
         </div>
         <div class="stack">
+          ${notasCard(cli(o.clienteId), 'Notas del cliente')}
           <section class="card"><div class="card-head"><h2>Bitácora de seguimientos</h2><span class="sub">${contactosReales(o).filter(f => !f.auto).length} contactos</span></div>
             <ul class="timeline">${Rules.followupsOf(db, o).slice().reverse().map(f => `<li><div class="t-date">${Util.fmtDate(f.fecha)}</div>
               <div><span class="chip ${f.canal === 'Sistema' ? '' : 'info'}">${E(f.canal)}</span> <span class="small muted">${f.usuarioId === 'sistema' ? 'Automático' : E((usr(f.usuarioId) || {}).iniciales || '')}</span>${f.resultado === 'sin_respuesta' ? ' <span class="chip warn">No respondió</span>' : ''}
@@ -9250,9 +9251,9 @@ const UI = (() => {
     if (g && window.matchMedia('(max-width: 860px)').matches) g.style.gridTemplateColumns = 'minmax(0,1fr)';
   };
   /** Notas de la cuenta: indicaciones para contactar al cliente, con recordatorio opcional para quien la escribe */
-  function notasCard(c) {
+  function notasCard(c, titulo = 'Notas') {
     const u = S.user, ns = c.notas || [], puedeEd = n => n.usuarioId === u.id || ['jefatura', 'admin'].includes(u.rol);
-    return `<section class="card"><div class="card-head"><h2>Notas</h2><span class="sub">${ns.length || ''}</span><button class="btn sm primary" data-action="nota-nueva" data-cliente="${c.id}" style="margin-left:auto">${I('plus')} Agregar nota</button></div>
+    return `<section class="card"><div class="card-head"><h2>${titulo}</h2><span class="sub">${ns.length || ''}</span><button class="btn sm primary" data-action="nota-nueva" data-cliente="${c.id}" style="margin-left:auto">${I('plus')} Agregar nota</button></div>
       ${ns.length ? `<div class="stack">${ns.map(n => `<div class="nota-item"><div style="white-space:pre-wrap;overflow-wrap:anywhere">${E(n.texto)}</div>
         <div class="small muted">${E((usr(n.usuarioId) || {}).nombre || '')} · ${Util.fmtFechaHora(n.creada)}${n.recordatorio ? ` · ${n.hecho ? `<span class="chip ok">Recordatorio atendido</span>` : `<span class="chip ${n.recordatorio <= hoy() ? 'warn' : 'info'}">Recordar ${Util.fmtDate(n.recordatorio)}${n.hora ? ' ' + n.hora : ''}</span>`}` : ''}</div>
         <div class="btn-row" style="margin-top:4px">${n.usuarioId === u.id && n.recordatorio && !n.hecho ? `<button class="btn sm" data-action="nota-hecha" data-cliente="${c.id}" data-id="${n.id}">${I('check')} Hecho</button><button class="btn sm" data-action="nota-posponer" data-cliente="${c.id}" data-id="${n.id}">Posponer</button>` : ''}
