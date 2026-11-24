@@ -111,6 +111,18 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 - Agenda de Outlook visible y administrable desde la plataforma ("Mi agenda"); "Agendar en Outlook" desde cada oportunidad. Sin servidor, un archivo `.ics`.
 - Resumen diario de pendientes y reportes programados por correo (calculados en el servidor con las mismas `Rules`) y avisos al canal de Teams.
 
+### Ajustes de la cotización y la bitácora (24/11/2026)
+
+**Cotización**
+- **Orden de los ítems:** ▲ y ▼ en cada ítem lo suben o bajan dentro de su tabla (principales, alternativas u opcionales); el PDF sigue ese orden (`nq-mover`). No confundir con ↓/↑, que pasan un ítem a opcional o de vuelta a principal.
+- **Descuentos en blanco:** el descuento por ítem y el general aparecen vacíos (sin el "0" de ejemplo) para no confundir 15 con 150. Un descuento por ítem en porcentaje debe ser menor a 100 % (`Rules.validarCotizacion`).
+- **Fecha estimada de OC sugerida:** un mes después de hoy y, si cae en fin de semana o feriado, el siguiente día hábil (`Util.fechaOCSugerida`; p. ej. viernes 25/02/2028 → lunes 27/03/2028). Viene preseleccionada en la cotización nueva, las revisiones, "Completar" y el cambio de etapa, y el vendedor la cambia si quiere. Antes no tenía valor por defecto.
+
+**Bitácora de seguimiento**
+- **Una ventana por cliente en "Mi día":** si un cliente tiene varias oportunidades en la misma sección (contactar hoy, atrasados, por vencer…), salen juntas en una tarjeta. "Contacté" abre una sola ventana con cada oportunidad (marcadas) y el mismo contacto se registra en todas (`Repo.registrarContactoVarios`, todo o nada). "+3 días" y "+1 semana" también se aplican a todas.
+- **Varios medios de contacto:** en "Registrar contacto" y "Registrar gestión" se marcan todos los usados (p. ej. correo, WhatsApp y llamada). El seguimiento guarda `canales` (lista) y `canal` (texto "WhatsApp · Llamada · Correo", que es lo que muestran el historial y los reportes).
+- **Notas de la cuenta con recordatorio:** en la ficha de la cuenta, "Agregar nota" (p. ej. "Llamar a partir de las 3 pm", "No trabajan miércoles ni viernes"), con fecha y hora de recordatorio opcionales (`cliente.notas`). El recordatorio le llega a quien escribió la nota en "Mi día" (sección "Recordatorios") y en la campana (`Rules.recordatorios`), con "Hecho" y "Posponer". Las notas se ven también al registrar un contacto. Editan o eliminan quien la escribió, gerencia/jefatura y administración.
+
 ## Modo piloto (uso interno de prueba)
 
 El mismo `index.html` funciona en dos modos:
@@ -573,7 +585,7 @@ El vendedor elige la etapa y el sistema asigna la probabilidad; no hay valores i
 - **Correo de resumen diario** (vendedor), **resumen semanal** (jefatura) y **eventos de Outlook:** solo vista previa en **Notificaciones**. No se envía nada.
 - **Tipo de cambio diario:** ficticio.
 - **Login:** simulado.
-- **Acciones rápidas "+3 días" y "+1 semana":** registran un contacto hoy, con el canal del último contacto (o WhatsApp), y fijan el próximo en 3 días hábiles o en 7 días (llevado al siguiente día hábil). Permiten **Deshacer**.
+- **Acciones rápidas "+3 días" y "+1 semana":** registran un contacto hoy, con los medios del último contacto (o WhatsApp), y fijan el próximo en 3 días hábiles o en 7 días (llevado al siguiente día hábil). Permiten **Deshacer**.
 
 ## Qué falta para producción (fuera del alcance de este prototipo)
 

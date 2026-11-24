@@ -477,6 +477,11 @@ tr.quick-open>td{border-bottom:0}
 .opc-head.alt-head { color: var(--warn); }
 .lista-item { margin-top: 3px; font-size: 11px; padding: 2px 4px; min-height: 0; width: 100%; }
 .h-desc { color: #a15c00; font-size: 10px; margin-top: 2px; }
+.notas-mini { background: #fff8e6; border: 1px solid #f3dfb0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; display: grid; gap: 3px; margin: 4px 0; }
+.op-grupo .op-main { cursor: default; } .grupo-opps { margin: 4px 0 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; } .grupo-opps li { overflow-wrap: anywhere; }
+.seg-opps { display: grid; gap: 6px; } .seg-opp { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; } .seg-opp input { margin-top: 3px; }
+.nota-item { border-bottom: 1px dashed var(--border); padding-bottom: 8px; }
+.nq-orden { display: inline-flex; gap: 0; } .nq-orden .btn { padding: 2px 5px; min-width: 0; } .nq-orden .btn[disabled] { opacity: .3; }
 .hoja .h-nota { font-size: 10px; margin: 4px 0 0; color: #333; }
 .hoja .h-items td:first-child { white-space: nowrap; }
 .h-cierre { margin: 10px 0 0; font-size: 12px; }
@@ -782,6 +787,10 @@ const Util = (() => {
     return d;
   }
   const nextBizDay = s => { let d = s; while (!isBizDay(d)) d = addDays(d, 1); return d; };
+  /** Mismo día del mes siguiente; si ese mes no lo tiene, su último día (31/01 → 28/02) */
+  const unMesDespues = s => { const d = parse(s), ult = new Date(d.getFullYear(), d.getMonth() + 2, 0).getDate(); return iso(new Date(d.getFullYear(), d.getMonth() + 1, Math.min(d.getDate(), ult))); };
+  /** Fecha estimada de OC sugerida: un mes después y, si cae en fin de semana o feriado, el siguiente día hábil (editable por el vendedor) */
+  const fechaOCSugerida = s => nextBizDay(unMesDespues(s || today()));
   // días hábiles transcurridos después de a y hasta b (inclusive). 0 si b <= a
   function bizDaysBetween(a, b) {
     if (b <= a) return 0;
@@ -883,7 +892,7 @@ const Util = (() => {
   }
   /** CSV con separador ";" y BOM, para que Excel lo abra con tildes */
   const csv = filas => '\uFEFF' + filas.map(r => r.map(v => { const s = String(v == null ? '' : v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(';')).join('\r\n');
-  return { rng, iso, today, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween,
+  return { rng, iso, today, addDays, diffDays, isBizDay, addBizDays, nextBizDay, bizDaysBetween, unMesDespues, fechaOCSugerida,
     endOfMonth, startOfMonth, monthKey, addMonths, fmtDate, fmtMonth, monthName, dayName, money, money0, nfMon, redondear, gunzipTexto, cargarPDFLib, pct,
     round2, esc, sum, groupBy, normNum, pad, nf2, sha256, norm, descargar, csv, ahora, fmtFechaHora, horasHabiles };
 })();
@@ -3045,7 +3054,19 @@ const Rules = (() => {
     return out;
   }
   /** Alertas que ve cada usuario en la campana */
-  function alertasUsuario(db, user, hoy = Util.today()) {
+  /** Notas del cliente con recordatorio vencido u hoy, de quien las escribió (no hechas) */
+  function recordatorios(db, user, hoy = Util.today()) {
+    if (!user) return [];
+    const out = [];
+    db.clients.forEach(c => (c.notas || []).forEach(n => {
+      if (n.hecho || !n.recordatorio || n.recordatorio > hoy || n.usuarioId !== user.id) return;
+      out.push({ cliente: c, nota: n, alerta: { tipo: 'recordatorio', nivel: n.recordatorio < hoy ? 'warn' : 'info', texto: `Recordatorio${n.hora ? ' ' + n.hora : ''}: ${n.texto.length > 70 ? n.texto.slice(0, 67) + '…' : n.texto}` } });
+    }));
+    return out.sort((a, b) => (a.nota.recordatorio + (a.nota.hora || '')).localeCompare(b.nota.recordatorio + (b.nota.hora || '')));
+  }
+  /** Avisos de la campana: recordatorios de notas y alertas propias del rol */
+  function alertasUsuario(db, user, hoy = Util.today()) { return user ? recordatorios(db, user, hoy).concat(alertasRol(db, user, hoy)) : []; }
+  function alertasRol(db, user, hoy) {
     if (!user) return [];
     if (['gestion', 'logistica'].includes(user.rol)) {   // stock: avisos sin revisar y pedidos a fábrica atrasados
       const out = (db.invAvisos || []).filter(a => !a.vistoPor.includes(user.id)).map(a => ({ aviso: a, alerta: { tipo: 'stock', nivel: 'warn', texto: 'Aviso de stock' } }));
@@ -3137,6 +3158,8 @@ const Rules = (() => {
     if (!p.plazo) e.plazo = 'Obligatorio.';
     if (!(+p.validezDias > 0)) e.validezDias = 'Obligatorio.';
     if (p.descuentoTipo === 'pct' && !(+p.descuentoPct >= 0 && +p.descuentoPct < 100)) e.descuento = 'El descuento debe estar entre 0 % y 99 %.';
+    const dItem = (p.items || []).find(it => +it.desc < 0 || (it.descTipo !== 'monto' && +it.desc >= 100));
+    if (dItem) e.items = `Revisa el descuento de ${dItem.codigo || 'un ítem'}: en porcentaje debe ser menor a 100 % (${+dItem.desc} %).`;
     if (p.descuentoTipo !== 'pct' && +p.descuento < 0) e.descuento = 'El descuento no puede ser negativo.';
     if (p.modo !== 'revision' && p.modo !== 'alternativa') {
       if (!p.proyectoId && !p.proyectoNuevo) e.proyecto = 'Indica el proyecto o "Compra directa".';
@@ -3145,7 +3168,7 @@ const Rules = (() => {
     if (String(p.condicionEspecial || '').length > 1500) e.condicionEspecial = 'La condición especial no puede pasar de 1,500 caracteres.';
     if (!p.proxContacto) e.proxContacto = 'Define el próximo contacto.';
     else if (p.proxContacto < hoy) e.proxContacto = 'No puede estar en el pasado.';
-    if (!p.fechaOC) e.fechaOC = 'Elige la fecha estimada de OC (no tiene valor por defecto).';
+    if (!p.fechaOC) e.fechaOC = 'Indica la fecha estimada de OC.';
     else if (p.fechaOC < hoy) e.fechaOC = 'No puede estar en el pasado.';
     if (!Config.HORIZONTES.some(h => h.id === p.facturacion)) e.facturacion = 'Elige cuándo estimas facturar (no tiene valor por defecto).';
     return e;
@@ -3578,7 +3601,7 @@ const Rules = (() => {
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    alertasOpp, alertasUsuario, recordatorios, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
     origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads,
     esOrigenLead, leadsClasificados, rankingPersonal, normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
@@ -3905,6 +3928,23 @@ const Repo = (() => {
     return n;
   }
   /** Historial de cambios de administración (usuarios, permisos, borrados): quién, cuándo y qué */
+  /** Medios de contacto de un seguimiento (WhatsApp, Llamada, Correo…): uno o varios */
+  const medios = (canales, canal) => { const cs = [...new Set((Array.isArray(canales) && canales.length ? canales : [canal || 'WhatsApp']).map(x => String(x || '').trim()).filter(Boolean))]; if (!cs.length) fail('Elige al menos un medio de contacto.', { canal: 'Obligatorio' }); return cs; };
+  /** Registra un contacto (seguimiento) en una oportunidad abierta: uno o varios medios, nota y próximo contacto */
+  function contactoEn(oppId, { canal, canales, nota, proxContacto, usuarioId, resultado }) {
+    const o = opp(oppId);
+    if (!Rules.esAbierta(o)) fail('Solo se registran contactos en oportunidades abiertas.');
+    if (!proxContacto) fail('Define el próximo contacto.', { proxContacto: 'Obligatorio' });
+    if (proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.', { proxContacto: 'Fecha pasada' });
+    const prev = o.proxContacto;
+    const cs = medios(canales, canal);
+    const fu = { id: 'S-' + (db.seq.fu++), oppId, fecha: hoy(), canal: cs.join(' · '), canales: cs, nota: nota || '', proxContacto, usuarioId, auto: false, resultado: resultado || 'respondio' };
+    db.followups.push(fu);
+    o.proxContacto = proxContacto;
+    o.pendiente = false;
+    guardar(o);
+    return { followupId: fu.id, prevProx: prev };
+  }
   const auditar = (usuarioId, texto) => { (db.auditoria = db.auditoria || []).unshift({ fecha: Util.ahora(), usuarioId, texto }); if (db.auditoria.length > 5000) db.auditoria.length = 5000; };
   /* Inventario: colecciones, movimientos y reservas. Cada cambio queda registrado (movimiento con su usuario o invLog) */
   function invDb() {
@@ -4762,19 +4802,52 @@ const Repo = (() => {
       return temporal;
     },
     /** POST /oportunidades/:id/seguimientos */
-    async registrarContacto(oppId, { canal, nota, proxContacto, usuarioId, resultado }) {
-      const o = opp(oppId);
-      if (!Rules.esAbierta(o)) fail('Solo se registran contactos en oportunidades abiertas.');
-      if (!proxContacto) fail('Define el próximo contacto.', { proxContacto: 'Obligatorio' });
-      if (proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.', { proxContacto: 'Fecha pasada' });
-      const prev = o.proxContacto;
-      const fu = { id: 'S-' + (db.seq.fu++), oppId, fecha: hoy(), canal: canal || 'WhatsApp', nota: nota || '', proxContacto, usuarioId, auto: false, resultado: resultado || 'respondio' };
-      db.followups.push(fu);
-      o.proxContacto = proxContacto;
-      o.pendiente = false;
-      guardar(o);
-      return { followupId: fu.id, prevProx: prev };
+    async registrarContacto(oppId, d) { return contactoEn(oppId, d); },
+    /** POST /seguimientos — el mismo contacto con un cliente para varias de sus oportunidades (una sola ventana en "Mi día") */
+    async registrarContactoVarios(oppIds, d) {
+      if (!oppIds || !oppIds.length) fail('Marca al menos una oportunidad.');
+      oppIds.forEach(id => { const o = opp(id); if (!Rules.esAbierta(o)) fail(`${o.id} ya no está abierta: desmárcala.`); });   // todo o nada
+      return oppIds.map(id => contactoEn(id, d));
     },
+    /** POST/PUT /clientes/:id/notas — nota de la cuenta (p. ej. "Llamar después de las 3 pm"), con recordatorio opcional para quien la escribe */
+    async guardarNotaCliente(clienteId, d, usuarioId) {
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), u = usuarioDe(usuarioId);
+      if (!Rules.puede(u, 'ver_cuenta', c) && !['finanzas', 'admin'].includes(u.rol)) fail('No puedes agregar notas a esta cuenta.');
+      const texto = String(d.texto || '').trim().slice(0, 500);
+      if (!texto) fail('Escribe la nota.', { texto: 'Obligatorio' });
+      const recordatorio = d.recordatorio || null, hora = recordatorio ? String(d.hora || '').slice(0, 5) : '';
+      if (recordatorio && !/^\d{4}-\d{2}-\d{2}$/.test(recordatorio)) fail('Fecha del recordatorio no válida.', { recordatorio: 'Fecha no válida' });
+      if (hora && !/^\d{2}:\d{2}$/.test(hora)) fail('Hora no válida.', { hora: 'Hora no válida' });
+      c.notas = c.notas || [];
+      const n = d.id ? c.notas.find(x => x.id === d.id) || fail('Nota no encontrada.') : null;
+      if (n) {
+        if (n.usuarioId !== usuarioId && !['jefatura', 'admin'].includes(u.rol)) fail('Solo quien escribió la nota (o gerencia/jefatura) la cambia.');
+        if (recordatorio && recordatorio < hoy() && recordatorio !== n.recordatorio) fail('El recordatorio no puede estar en el pasado.', { recordatorio: 'Fecha pasada' });
+        if (recordatorio !== n.recordatorio || hora !== n.hora) n.hecho = false;
+        Object.assign(n, { texto, recordatorio, hora, editada: Util.ahora() });
+      } else {
+        if (recordatorio && recordatorio < hoy()) fail('El recordatorio no puede estar en el pasado.', { recordatorio: 'Fecha pasada' });
+        c.notas.unshift({ id: 'N-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), texto, recordatorio, hora, hecho: false, usuarioId, creada: Util.ahora() });
+      }
+      auditar(usuarioId, `Nota ${n ? 'editada' : 'agregada'} en ${c.razonSocial}${recordatorio ? ` (recordatorio ${Util.fmtDate(recordatorio)}${hora ? ' ' + hora : ''})` : ''}`);
+      touch(); return n || c.notas[0];
+    },
+    /** Recordatorio atendido (la nota queda) o pospuesto a otra fecha */
+    async recordatorioNota(clienteId, notaId, d, usuarioId) {
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), n = (c.notas || []).find(x => x.id === notaId) || fail('Nota no encontrada.');
+      if (n.usuarioId !== usuarioId) fail('El recordatorio es de quien escribió la nota.');
+      if (d.posponer) { if (!(d.posponer >= hoy())) fail('Elige hoy o una fecha futura.', { fecha: 'Fecha pasada' }); n.recordatorio = d.posponer; if ('hora' in d) n.hora = d.hora || ''; n.hecho = false; }
+      else Object.assign(n, { hecho: true, hechoEn: Util.ahora() });
+      touch(); return n;
+    },
+    async eliminarNotaCliente(clienteId, notaId, usuarioId) {
+      const c = db.clients.find(x => x.id === clienteId) || fail('Cuenta no encontrada.'), u = usuarioDe(usuarioId), n = (c.notas || []).find(x => x.id === notaId) || fail('Nota no encontrada.');
+      if (n.usuarioId !== usuarioId && !['jefatura', 'admin'].includes(u.rol)) fail('Solo quien escribió la nota (o gerencia/jefatura) la elimina.');
+      c.notas = c.notas.filter(x => x !== n);
+      auditar(usuarioId, `Nota eliminada en ${c.razonSocial}: ${n.texto.slice(0, 60)}`);
+      touch();
+    },
+
     /** DELETE /seguimientos/:id (deshacer inmediato) */
     async deshacerContacto(followupId, prevProx) {
       const i = db.followups.findIndex(f => f.id === followupId);
@@ -4937,7 +5010,8 @@ const Repo = (() => {
     async registrarGestionCuenta(clienteId, g, usuarioId) {
       if (!db.clients.some(x => x.id === clienteId)) fail('Cuenta no encontrada.');
       if (!g.resultado) fail('Indica si el cliente respondió.', { resultado: 'Obligatorio' });
-      db.gestiones.push({ id: 'G-' + (db.seq.gestion++), clienteId, fecha: hoy(), canal: g.canal || 'WhatsApp', resultado: g.resultado, nota: (g.nota || '').trim(), usuarioId });
+      const cs = medios(g.canales, g.canal);
+      db.gestiones.push({ id: 'G-' + (db.seq.gestion++), clienteId, fecha: hoy(), canal: cs.join(' · '), canales: cs, resultado: g.resultado, nota: (g.nota || '').trim(), usuarioId });
       touch();
     },
     /** POST/PATCH /catalogo — agrega o edita un producto (solo jefatura, finanzas o administración) */
@@ -5646,6 +5720,9 @@ const SelfTest = (() => {
         Object.keys(Rules.validarCambioEtapa(o, 'perdida', { motivoPerdida: 'precio' }, '2026-10-06')).length === 0 &&
         Rules.validarOportunidad({ etapa: 'e2', proxContacto: null }) !== null;
     }],
+    ['Fecha estimada de OC sugerida: un mes después, en día hábil (fin de semana, fin de mes y feriados)', () =>
+      Util.fechaOCSugerida('2028-02-25') === '2028-03-27' && Util.fechaOCSugerida('2026-09-25') === '2026-10-26' && Util.fechaOCSugerida('2026-01-31') === '2026-03-02' &&
+      Util.fechaOCSugerida('2026-11-08') === '2026-12-10' && Util.fechaOCSugerida('2026-11-24') === '2026-12-24'],
   ];
   function run() {
     let ok = 0;
@@ -5865,7 +5942,7 @@ const UI = (() => {
         <div class="small muted">${E(projName(proj(x.opp.proyectoId)))}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`
       : `<a class="pop-item" href="#/cuenta/${x.cliente.id}" style="text-decoration:none;color:inherit">
         <div style="display:flex;justify-content:space-between;gap:8px"><strong>${E(x.cliente.razonSocial)}</strong>${jef && x.cliente.vendedorId ? vendTag(usr(x.cliente.vendedorId)) : ''}</div>
-        <div class="small muted">Cuenta</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`;
+        <div class="small muted">${x.nota ? 'Recordatorio de una nota' : 'Cuenta'}</div><div style="margin-top:4px">${alertChip(x.alerta)}</div></a>`;
     $('#popover-root').innerHTML = `<div class="popover" role="dialog" aria-label="${titulo}"><header><h3>${titulo} (${al.length})</h3><span class="sim-label">Simulación</span></header>
       <div class="pop-body">${al.length ? al.slice(0, 20).map(item).join('') : '<div class="list-empty">Sin alertas pendientes.</div>'}</div>
       <footer>${Rules.puedeRuta(S.user, 'notificaciones') ? `<a class="btn sm" href="#/notificaciones">${I('mail')} Ver todas, correo de resumen y eventos de Outlook</a>` : `<a class="btn sm" href="#/stock" data-action="stk-ir-reservas">Ver avisos y reservas en Stock</a>`}</footer></div>`;
@@ -6181,13 +6258,54 @@ const UI = (() => {
     const o = oppEditable(id); if (!o) return;
     if (o.pendiente) return abrirCompletar(id);
     const last = contactosReales(o).filter(f => !f.auto).pop();
-    const canal = last ? last.canal : 'WhatsApp';
+    const canales = mediosDe(last), canal = canales.join(' · ');
     try {
-      const r = await Repo.registrarContacto(id, { canal, nota: '', proxContacto: prox, usuarioId: S.user.id });
+      const r = await Repo.registrarContacto(id, { canales, nota: '', proxContacto: prox, usuarioId: S.user.id });
       toast(`Contacto registrado (${canal}). Próximo: ${Util.fmtDate(prox)} (${etiqueta}).`, { undo: async () => { await Repo.deshacerContacto(r.followupId, r.prevProx); toast('Contacto deshecho.'); refresh(); } });
       refresh();
     } catch (e) { toast(e.message); }
   }
+  /** Notas de la cuenta, a la vista al registrar el contacto */
+  function notasCliente(c, limite = 4) {
+    const ns = ((c && c.notas) || []).slice(0, limite); if (!ns.length) return '';
+    return `<div class="notas-mini">${ns.map(n => `<div>${I('file').replace('<svg', '<svg width="12" height="12"')} ${E(n.texto)}${n.recordatorio && !n.hecho ? ` <span class="chip ${n.recordatorio <= hoy() ? 'warn' : 'info'}">${Util.fmtDate(n.recordatorio)}${n.hora ? ' ' + n.hora : ''}</span>` : ''}</div>`).join('')}</div>`;
+  }
+  /** Una sola ventana para todas las oportunidades del cliente que toca contactar */
+  function abrirContactoCliente(ids) {
+    const os = ids.map(oppById).filter(o => o && Rules.esAbierta(o) && !o.pendiente && Rules.puede(S.user, 'editar_opp', o)); if (!os.length) return;
+    const c = cli(os[0].clienteId), last = os.flatMap(o => contactosReales(o).filter(f => !f.auto)).sort((a, b) => a.fecha.localeCompare(b.fecha)).pop();
+    modal({ title: 'Registrar seguimiento', wide: true,
+      body: `<p class="muted" style="margin-top:0">${E(c.razonSocial)} · ${os.length} oportunidad${os.length === 1 ? '' : 'es'} con seguimiento pendiente</p>
+        <div class="stack">${notasCliente(c)}
+          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Oportunidades <span class="muted" style="font-weight:400">(el contacto se registra en las marcadas)</span></div>
+            <div class="seg-opps">${os.map(o => { const q = Rules.vigente(S.db, o), al = Rules.alertasOpp(S.db, o, hoy())[0]; return `<label class="seg-opp"><input type="checkbox" name="opp" value="${o.id}" checked>
+              <span><strong>${E(projName(proj(o.proyectoId)))}</strong> · ${E(Rules.resumenItems(q))}<br><span class="small muted">${q ? 'N° ' + E(q.numero) + ' · ' : ''}${E(Rules.etapa(o.etapa).nombre)} · ${money(Rules.montoUSD(S.db, o))}${o.proxContacto ? ' · contacto previsto ' + Util.fmtDate(o.proxContacto) : ''}</span>${al ? ' ' + alertChip(al) : ''}</span></label>`; }).join('')}</div></div>
+          <div>${canalesTitulo}${canalesHTML(mediosDe(last))}</div>
+          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">¿Respondió?</div>${resultadoChips('respondio')}</div>
+          <label class="field">Nota (opcional)<textarea name="nota" placeholder="Ej.: revisa las dos propuestas con su jefe; pide llamarlo el lunes"></textarea></label>
+          <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="prox" min="${hoy()}" value="${Util.addBizDays(hoy(), 3)}"></label>
+          ${proxChips()}
+        </div>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
+        const sel = [...root.querySelectorAll('[name=opp]:checked')].map(x => x.value);
+        if (!sel.length) { const e = new Error('Marca al menos una oportunidad.'); e.campos = {}; throw e; }
+        await Repo.registrarContactoVarios(sel, { canales: leerCanales(root), resultado: val(root, 'resultado'), nota: val(root, 'nota').trim(), proxContacto: val(root, 'prox'), usuarioId: S.user.id });
+        toast(`Seguimiento registrado en ${sel.length} oportunidad${sel.length === 1 ? '' : 'es'} de ${c.razonSocial}.`); refresh();
+      } }],
+      onOpen: bindFechaRapida });
+  }
+  async function contactoRapidoCliente(ids, prox, etiqueta) {
+    const os = ids.map(oppById).filter(o => o && Rules.esAbierta(o) && !o.pendiente && Rules.puede(S.user, 'editar_opp', o)); if (!os.length) return;
+    const last = os.flatMap(o => contactosReales(o).filter(f => !f.auto)).sort((a, b) => a.fecha.localeCompare(b.fecha)).pop(), canales = mediosDe(last);
+    try {
+      const rs = await Repo.registrarContactoVarios(os.map(o => o.id), { canales, nota: '', proxContacto: prox, usuarioId: S.user.id });
+      toast(`Contacto registrado en ${os.length} oportunidades (${canales.join(' · ')}). Próximo: ${Util.fmtDate(prox)} (${etiqueta}).`, { undo: async () => { for (const r of rs.slice().reverse()) await Repo.deshacerContacto(r.followupId, r.prevProx); toast('Contactos deshechos.'); refresh(); } });
+      refresh();
+    } catch (e) { toast(e.message); }
+  }
+  ACTIONS['contacte-cli'] = el => abrirContactoCliente(el.dataset.ids.split(','));
+  ACTIONS['mas3-cli'] = el => contactoRapidoCliente(el.dataset.ids.split(','), Util.addBizDays(hoy(), 3), '+3 días hábiles');
+  ACTIONS['mas7-cli'] = el => contactoRapidoCliente(el.dataset.ids.split(','), Util.nextBizDay(Util.addDays(hoy(), 7)), '+1 semana');
   ACTIONS['mas3'] = el => contactoRapido(el.dataset.id, Util.addBizDays(hoy(), 3), '+3 días hábiles');
   ACTIONS['mas7'] = el => contactoRapido(el.dataset.id, Util.nextBizDay(Util.addDays(hoy(), 7)), '+1 semana');
   ACTIONS['contacte'] = el => abrirContacto(el.dataset.id);
@@ -6198,7 +6316,13 @@ const UI = (() => {
   ACTIONS['reactivar'] = el => abrirCambioEtapa(el.dataset.id, null);
 
   const resultadoChips = sel => `<div class="radio-chips" role="radiogroup" aria-label="Resultado">${Config.RESULTADOS_CONTACTO.map(([v, l]) => `<label><input type="radio" name="resultado" value="${v}"${v === sel ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>`;
-  const canalesHTML = (sel) => `<div class="radio-chips" role="radiogroup" aria-label="Canal">${Config.CANALES.map(c => `<label><input type="radio" name="canal" value="${c}"${c === sel ? ' checked' : ''}><span>${c}</span></label>`).join('')}</div>`;
+  /** Medios de contacto: se marcan todos los usados (p. ej. correo y WhatsApp sin respuesta, y luego la llamada) */
+  const canalesHTML = sel => { const xs = [].concat(sel || []); return `<div class="radio-chips" role="group" aria-label="Medios de contacto">${Config.CANALES.map(c => `<label><input type="checkbox" name="canal" value="${c}"${xs.includes(c) ? ' checked' : ''}><span>${c}</span></label>`).join('')}</div>`; };
+  const canalesTitulo = '<div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Medios de contacto <span class="muted" style="font-weight:400">(marca todos los que usaste)</span></div>';
+  /** Medios marcados en la ventana; al menos uno */
+  const leerCanales = root => { const xs = [...root.querySelectorAll('[name=canal]:checked')].map(x => x.value); if (!xs.length) { const e = new Error('Marca al menos un medio de contacto.'); e.campos = {}; throw e; } return xs; };
+  /** Medios del último contacto (para proponerlos de nuevo) */
+  const mediosDe = f => f ? (f.canales || [f.canal]).filter(x => Config.CANALES.includes(x)) : ['WhatsApp'];
   const proxChips = () => fechaRapida('prox', [['Mañana', Util.addBizDays(hoy(), 1)], ['+3 días', Util.addBizDays(hoy(), 3)], ['+1 semana', Util.nextBizDay(Util.addDays(hoy(), 7))], ['+2 semanas', Util.nextBizDay(Util.addDays(hoy(), 14))]]);
 
   function abrirContacto(id) {
@@ -6209,14 +6333,15 @@ const UI = (() => {
       title: 'Registrar contacto',
       body: `<p class="muted" style="margin-top:0">${E(cli(o.clienteId).razonSocial)} · ${E(projName(proj(o.proyectoId)))}</p>
         <div class="stack">
-          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Canal</div>${canalesHTML(last ? last.canal : 'WhatsApp')}</div>
+          ${notasCliente(cli(o.clienteId))}
+          <div>${canalesTitulo}${canalesHTML(mediosDe(last))}</div>
           <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">¿Respondió?</div>${resultadoChips('respondio')}</div>
           <label class="field">Nota (opcional)<textarea name="nota" placeholder="Ej.: pide mejorar precio; revisa con el usuario final"></textarea></label>
           <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="prox" min="${hoy()}" value="${Util.addBizDays(hoy(), 3)}"></label>
           ${proxChips()}
         </div>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        await Repo.registrarContacto(id, { canal: val(root, 'canal'), resultado: val(root, 'resultado'), nota: val(root, 'nota').trim(), proxContacto: val(root, 'prox'), usuarioId: S.user.id });
+        await Repo.registrarContacto(id, { canales: leerCanales(root), resultado: val(root, 'resultado'), nota: val(root, 'nota').trim(), proxContacto: val(root, 'prox'), usuarioId: S.user.id });
         toast('Contacto registrado.'); refresh();
       } }],
       onOpen: bindFechaRapida,
@@ -6303,7 +6428,7 @@ const UI = (() => {
           <span class="field-hint" id="criterio">${E(Rules.etapa(sel).criterio)}</span></label>
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" min="${hoy()}" value="${proxDef}"></label>
         ${fechaRapida('proxContacto', [['+3 días', Util.addBizDays(hoy(), 3)], ['+1 semana', Util.nextBizDay(Util.addDays(hoy(), 7))]])}
-        <label class="field">Fecha estimada de OC<input type="date" name="fechaOC" value="${o.fechaOC || ''}" min="${hoy()}"></label>
+        <label class="field">Fecha estimada de OC<input type="date" name="fechaOC" value="${o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : Util.fechaOCSugerida(hoy())}" min="${hoy()}"></label>
         <label class="field">Nota (opcional)<input type="text" name="nota"></label></div>`,
       actions: [{ label: 'Cancelar' }, { label: 'Guardar', cls: 'primary', onClick: async r => {
         await Repo.cambiarEtapa(id, val(r, 'etapa'), { proxContacto: val(r, 'proxContacto'), fechaOC: val(r, 'fechaOC'), nota: val(r, 'nota').trim() }, S.user.id);
@@ -6325,7 +6450,7 @@ const UI = (() => {
           <span class="field-hint" id="criterio">${E(Rules.etapa(o.etapa).criterio)}</span></label>
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" min="${hoy()}" value="${Util.addBizDays(o.fechaInicio, 3) >= hoy() ? Util.addBizDays(o.fechaInicio, 3) : Util.addBizDays(hoy(), 1)}">
           <span class="field-hint">Sugerido: 3 días hábiles después del envío.</span></label>
-        <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" min="${hoy()}"><span class="field-hint">La eliges tú; no tiene valor por defecto.</span></label>
+        <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" min="${hoy()}" value="${Util.fechaOCSugerida(hoy())}"><span class="field-hint">Sugerida: un mes desde hoy (día hábil). Puedes cambiarla.</span></label>
         <label class="field">Proyecto<select name="proyectoId">${proyectoOptions(o.proyectoId, o.clienteId)}</select></label></div>`,
       actions: [{ label: 'Después' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
         await Repo.completarPendiente(id, { etapa: val(r, 'etapa'), proxContacto: val(r, 'proxContacto'), fechaOC: val(r, 'fechaOC'), proyectoId: val(r, 'proyectoId') }, S.user.id);
@@ -6943,12 +7068,13 @@ const UI = (() => {
       title: 'Registrar gestión de la cuenta',
       body: `<p class="muted" style="margin-top:0">${E(c.razonSocial)} · contacto sin cotización (actualiza el estado de la cuenta)</p>
         <div class="stack">
-          <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">Canal</div>${canalesHTML('WhatsApp')}</div>
+          ${notasCliente(c)}
+          <div>${canalesTitulo}${canalesHTML('WhatsApp')}</div>
           <div><div class="small" style="font-weight:600;color:var(--text-2);margin-bottom:6px">¿Respondió? <span class="req">*</span></div>${resultadoChips('')}<input type="hidden" name="resultadoErr"></div>
           <label class="field">Nota (opcional)<textarea name="nota" placeholder="Ej.: sin proyectos por ahora; volver a llamar el próximo mes"></textarea></label>
         </div>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async root => {
-        await Repo.registrarGestionCuenta(clienteId, { canal: val(root, 'canal'), resultado: val(root, 'resultado'), nota: val(root, 'nota') }, S.user.id);
+        await Repo.registrarGestionCuenta(clienteId, { canales: leerCanales(root), resultado: val(root, 'resultado'), nota: val(root, 'nota') }, S.user.id);
         toast(`Gestión registrada. Estado de la cuenta: ${Config.ESTADOS_CUENTA[Rules.cuenta(S.db, clienteId, hoy()).estado].nombre}.`); refresh();
       } }],
     });
@@ -7085,6 +7211,18 @@ const UI = (() => {
       <button class="btn sm" data-action="contacte" data-id="${o.id}" title="Registrar contacto con canal y nota">${I('check')} Contacté</button>
       <button class="btn sm" data-action="mas3" data-id="${o.id}" title="Contacté hoy; vuelvo en 3 días hábiles">+3 días</button>
       <button class="btn sm" data-action="mas7" data-id="${o.id}" title="Contacté hoy; vuelvo en 1 semana">+1 semana</button></div>`;
+  }
+  /** Cliente con varias oportunidades que toca contactar: una tarjeta y una sola ventana de seguimiento */
+  function grupoItem(xs) {
+    const c = cli(xs[0].o.clienteId), ids = xs.map(x => x.o.id).join(',');
+    return `<div class="op-item op-grupo"><div class="op-main">
+        <div class="op-title"><a href="#/cuenta/${c.id}" style="color:inherit">${E(c.razonSocial)}</a> ${segHTML(c.id)} <span class="chip info">${xs.length} oportunidades</span></div>
+        ${notasCliente(c, 2)}
+        <ul class="grupo-opps">${xs.map(({ o, a }) => `<li><a href="#/op/${o.id}">${E(projName(proj(o.proyectoId)))}</a> <span class="muted">· ${E(Rules.resumenItems(Rules.vigente(S.db, o)))}</span> ${etapaHTML(o.etapa)} <span class="chip num">${money(Rules.montoUSD(S.db, o))}</span>${a ? alertChip(a) : ''}</li>`).join('')}</ul></div>
+      <div class="op-actions">
+        <button class="btn sm primary" data-action="contacte-cli" data-ids="${ids}" title="Una sola ventana para todas sus oportunidades">${I('check')} Contacté</button>
+        <button class="btn sm" data-action="mas3-cli" data-ids="${ids}" title="Contacté hoy por todas; vuelvo en 3 días hábiles">+3 días</button>
+        <button class="btn sm" data-action="mas7-cli" data-ids="${ids}" title="Contacté hoy por todas; vuelvo en 1 semana">+1 semana</button></div></div>`;
   }
   function opItem(o, alerta, acciones = true) {
     const c = cli(o.clienteId), q = Rules.vigente(S.db, o);
@@ -7225,15 +7363,21 @@ const UI = (() => {
       if (L[k]) L[k].push({ o, a });
     }));
     L.atrasado.sort((x, y) => (y.a.dias || 0) - (x.a.dias || 0));
-    const ctas = Rules.alertasUsuario(db, u, h).filter(x => x.cliente);
+    const ctas = Rules.alertasUsuario(db, u, h).filter(x => x.cliente && !x.nota), recs = Rules.recordatorios(db, u, h);
     const total = new Set(Object.values(L).flat().map(x => x.o.id)).size;
     const cob = av.cobertura;
     const cobChip = cob == null ? '<span class="chip ok">Meta cumplida</span>' : cob >= 1 ? '<span class="chip ok">Cubierta</span>' : cob >= 0.5 ? '<span class="chip warn">Parcial</span>' : '<span class="chip bad">Baja</span>';
     const LIM = 8;
     const mas = (key, n) => n > LIM ? `<div style="padding:10px 14px"><button class="btn sm" data-action="expandir" data-k="${key}">${S.expand[key] ? 'Mostrar menos' : `Ver todas (${n})`}</button></div>` : '';
     const corta = (key, arr) => S.expand[key] ? arr : arr.slice(0, LIM);
-    const sec = (key, titulo, hint, cls) => `<section class="list-card"><header><h2>${titulo}</h2><span class="count ${cls || ''}">${L[key].length}</span><span class="hint">${hint}</span></header>
-      ${L[key].length ? corta(key, L[key]).map(x => opItem(x.o, x.a)).join('') + mas(key, L[key].length) : '<div class="list-empty">Nada pendiente aquí.</div>'}</section>`;
+    // En cada sección, las oportunidades del mismo cliente van juntas, con una sola ventana de seguimiento
+    const agrupar = arr => { const m = new Map(); arr.forEach(x => { const k = Rules.esAbierta(x.o) && !x.o.pendiente && x.o.proxContacto ? x.o.clienteId : 'solo:' + x.o.id; if (!m.has(k)) m.set(k, []); m.get(k).push(x); }); return [...m.values()]; };
+    const sec = (key, titulo, hint, cls) => { const gs = agrupar(L[key]);   // las que no se contactan desde aquí (completar, reactivar) quedan solas
+      return `<section class="list-card"><header><h2>${titulo}</h2><span class="count ${cls || ''}">${L[key].length}</span><span class="hint">${hint}</span></header>
+      ${gs.length ? corta(key, gs).map(g => g.length > 1 ? grupoItem(g) : opItem(g[0].o, g[0].a)).join('') + mas(key, gs.length) : '<div class="list-empty">Nada pendiente aquí.</div>'}</section>`; };
+    const secRecs = recs.length ? `<section class="list-card"><header><h2>Recordatorios</h2><span class="count warn">${recs.length}</span><span class="hint">De tus notas de clientes</span></header>
+      ${recs.map(x => `<div class="op-item"><div class="op-main"><div class="op-title"><a href="#/cuenta/${x.cliente.id}" style="color:inherit">${E(x.cliente.razonSocial)}</a> <span class="chip ${x.nota.recordatorio < h ? 'warn' : 'info'}">${x.nota.recordatorio < h ? 'Desde el ' + Util.fmtDate(x.nota.recordatorio) : 'Hoy'}${x.nota.hora ? ' · ' + x.nota.hora : ''}</span></div><div class="op-sub">${E(x.nota.texto)}</div></div>
+        <div class="op-actions"><button class="btn sm primary" data-action="nota-hecha" data-cliente="${x.cliente.id}" data-id="${x.nota.id}">${I('check')} Hecho</button><button class="btn sm" data-action="nota-posponer" data-cliente="${x.cliente.id}" data-id="${x.nota.id}">Posponer</button></div></div>`).join('')}</section>` : '';
     view().innerHTML = `
       <div class="page-head"><div><h1>Hola, ${E(firstName(u))}</h1><p class="muted">${cap(Util.dayName(h))} ${Util.fmtDate(h)} · ${total} oportunidad${total === 1 ? '' : 'es'} requieren tu atención${ctas.length ? ` · ${ctas.length} cuenta${ctas.length === 1 ? '' : 's'} sin cotizar` : ''}</p></div>
         <a class="btn primary" href="#/nueva">${I('plus')} Nueva cotización</a></div>
@@ -7262,6 +7406,7 @@ const UI = (() => {
       </section>
       <div class="grid g2" style="margin-top:14px;align-items:start">
         <div class="stack">
+          ${secRecs}
           ${sec('hoy', 'Contactar hoy', 'Próximo contacto = hoy')}
           ${sec('atrasado', 'Atrasados', 'Más de 5 días hábiles se escala', 'bad')}
           ${sec('sin_proximo', 'Sin próximo contacto', 'Completa lo mínimo', 'bad')}
@@ -7775,7 +7920,7 @@ const UI = (() => {
     const l = Rules.listasDeOficina(S.db, (S.user && S.user.oficina) || 'PE')[0] || Rules.LISTA_GENERAL;
     return { clienteId: '', clienteNuevo: { razonSocial: '', ruc: '' }, contacto: '', numero: '', fechaEmision: hoy(), moneda, tcs, tc: moneda === 'USD' ? null : tcs[moneda], tcBase: 'USD', listaId: l.id,
       condicionPago: '', validezDias: Config.VALIDEZ_DIAS, plazo: '', items: [itemVacio()], descuento: 0, descuentoTipo: 'pct', descuentoPct: 0, proyectoSel: '', proyectoNuevo: { nombre: '', usuarioFinal: '' }, contactoCorreo: '', contactoTelefono: '', direccion: '', distrito: '', ciudad: '', pais: '', condicionEspecial: '',
-      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: '', facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
+      modo: 'nueva', modoTocado: false, oppDestinoId: '', etapa: 'e1', proxContacto: Util.addBizDays(hoy(), 3), fechaOC: Util.fechaOCSugerida(hoy()), facturacion: '', origenId: '', origenMarca: '', origenTexto: '', leadId: '', referencia: '', numAuto: false };
   }
   /** Número sugerido: INICIALES-AAMMDD-correlativo del vendedor (el mismo en la demo y en el piloto) */
   const NUM_PRUEBA = 'PRUEBA (se numera al registrar)';
@@ -8052,12 +8197,13 @@ const UI = (() => {
       </div>`)}
       ${sec(3, 'Ítems', (() => {
         d.items.forEach(it => { if (!it.uid) it.uid = uidItem(); if (!it.descTipo) it.descTipo = 'pct'; });
-        const cab = `<colgroup><col style="width:72px"><col style="width:84px"><col style="width:170px"><col style="width:130px"><col><col style="width:124px"><col style="width:118px"><col style="width:104px"><col style="width:104px"></colgroup>
+        const cab = `<colgroup><col style="width:72px"><col style="width:84px"><col style="width:170px"><col style="width:130px"><col><col style="width:124px"><col style="width:118px"><col style="width:104px"><col style="width:156px"></colgroup>
           <thead><tr><th>Cant.</th><th>Uni.</th><th>Código</th><th>Marca</th><th>Descripción</th><th>V. unit. (${d.moneda})</th><th>Dscto.</th><th class="r">Total</th><th></th></tr></thead>`;
         const conI = d.items.map((it, i) => [it, i]);
         const principales = conI.filter(([it]) => !it.opcional && !it.alternativa), alternativas = conI.filter(([it]) => it.alternativa && !it.opcional), opcionales = conI.filter(([it]) => it.opcional);
         const ls = Rules.listas(S.db), variasListas = ls.length > 1;
-        const fila = ([it, i]) => `<tr${it.opcional ? ' class="fila-opc"' : it.alternativa ? ' class="fila-alt"' : ''}>
+        const fila = ([it, i]) => { const g = it.opcional ? opcionales : it.alternativa ? alternativas : principales, k = g.findIndex(x => x[1] === i);
+          return `<tr${it.opcional ? ' class="fila-opc"' : it.alternativa ? ' class="fila-alt"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
           <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios">${variasListas ? listaItemHTML(it, i) : ''}${hojaItemHTML(it, i)}
@@ -8065,12 +8211,12 @@ const UI = (() => {
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options([...new Set([...marcasDisponibles(), it.marca].filter(Boolean))].map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción" title="${E(it.descripcion)}"></td>
           <td><input type="number" min="0" step="0.01" data-nqi="${i}" data-k="valorUnit" value="${E(it.valorUnit)}" aria-label="Valor unitario"><div class="field-hint" id="nq-lista-${i}">${listaHint(d, it)}</div></td>
-          <td><span style="display:flex;gap:3px"><input type="number" min="0" step="any" data-nqi="${i}" data-k="desc" value="${E(it.desc || '')}" placeholder="0" aria-label="Descuento del ítem" style="min-width:0">
+          <td><span style="display:flex;gap:3px"><input type="number" min="0" step="any" data-nqi="${i}" data-k="desc" value="${E(+it.desc ? it.desc : '')}" placeholder="" aria-label="Descuento del ítem" style="min-width:0">
             <select data-nqi="${i}" data-k="descTipo" aria-label="Tipo de descuento del ítem" style="width:52px;padding:3px">${options([['pct', '%'], ['monto', d.moneda]], it.descTipo || 'pct')}</select></span></td>
           <td class="r num nq-total" id="nq-tot-${i}">${Util.nfMon(Rules.lineaNeta(it, d.moneda), d.moneda)}</td>
-          <td class="nowrap r">${/^(kit|glb)$/i.test(it.unidad) ? `<button type="button" class="btn sm ghost" data-action="nq-kit" data-i="${i}" title="Detallar las partes del kit (interno: no sale en el PDF)">Partes${it.partes && it.partes.length ? ' (' + it.partes.length + ')' : ''}</button>` : ''}
+          <td class="nowrap r"><span class="nq-orden"><button type="button" class="btn sm ghost" data-action="nq-mover" data-i="${i}" data-d="-1" title="Subir" aria-label="Subir ítem"${k ? '' : ' disabled'}>▲</button><button type="button" class="btn sm ghost" data-action="nq-mover" data-i="${i}" data-d="1" title="Bajar" aria-label="Bajar ítem"${k < g.length - 1 ? '' : ' disabled'}>▼</button></span>${/^(kit|glb)$/i.test(it.unidad) ? `<button type="button" class="btn sm ghost" data-action="nq-kit" data-i="${i}" title="Detallar las partes del kit (interno: no sale en el PDF)">Partes${it.partes && it.partes.length ? ' (' + it.partes.length + ')' : ''}</button>` : ''}
             ${it.opcional ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-alt" data-i="${i}" title="${it.alternativa ? 'Pasar a ítem principal' : 'Alternativa para un ítem, de la misma u otra marca (mismo documento, no suma al total)'}" aria-label="Alternativa">⇄</button>`}
-            ${it.alternativa ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-opc" data-i="${i}" title="${it.opcional ? 'Pasar a ítem principal (suma al total)' : 'Pasar a opcionales (no suma al total)'}" aria-label="${it.opcional ? 'Pasar a principal' : 'Pasar a opcional'}">${it.opcional ? '↑' : '↓'}</button>`}<button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`;
+            ${it.alternativa ? '' : `<button type="button" class="btn sm ghost" data-action="nq-toggle-opc" data-i="${i}" title="${it.opcional ? 'Pasar a ítem principal (suma al total)' : 'Pasar a opcionales (no suma al total)'}" aria-label="${it.opcional ? 'Pasar a principal' : 'Pasar a opcional'}">${it.opcional ? '↑' : '↓'}</button>`}<button type="button" class="btn sm ghost" data-action="nq-del-item" data-i="${i}" aria-label="Quitar ítem"${d.items.length < 2 ? ' disabled' : ''}>${I('x')}</button></td></tr>`; };
         return `<input type="hidden" name="items">
         ${variasListas ? `<div class="btn-row" style="margin-bottom:8px;align-items:center"><label class="small" style="display:flex;gap:6px;align-items:center">Lista de precios predeterminada<select data-nq="listaId" data-nq-render="1" style="min-width:200px">${options(Rules.listasDeOficina(S.db, null).map(l => [l.id, `${l.nombre} · ${l.moneda}${l.oficina ? ' · ' + Config.OFICINAS[l.oficina] : ''}`]), d.listaId || 'L-1')}</select></label><span class="small muted">Al buscar un código se muestran primero sus precios; si el producto está en otras listas, puedes cambiarla en cada ítem.</span></div>` : ''}
         <div class="table-wrap"><table class="tbl items-edit">${cab}<tbody>${principales.map(fila).join('') || '<tr><td colspan="9" class="muted center">Agrega al menos un ítem principal.</td></tr>'}</tbody></table></div>
@@ -8106,7 +8252,7 @@ const UI = (() => {
         <label class="field"><span>Etapa <span class="req">*</span></span><select data-nq="etapa" data-nq-render="1">${options(Rules.ETAPAS_ABIERTAS.map(e => [e, `${Rules.etapa(e).nombre} (${Util.pct(Rules.prob(e))})`]), d.etapa)}</select>
           <span class="field-hint">${E(Rules.etapa(d.etapa).criterio)}</span><span id="nq-grande">${grandeHTML(d, usd)}</span></label>
         <label class="field"><span>Próximo contacto <span class="req">*</span></span><input type="date" name="proxContacto" data-nq="proxContacto" min="${hoy()}" value="${d.proxContacto}"><span class="field-hint">Sugerido: 3 días hábiles (${Util.fmtDate(Util.addBizDays(hoy(), 3))}).</span></label>
-        <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" data-nq="fechaOC" min="${hoy()}" value="${d.fechaOC}"><span class="field-hint">La eliges tú; no tiene valor por defecto.</span></label>
+        <label class="field"><span>Fecha estimada de OC <span class="req">*</span></span><input type="date" name="fechaOC" data-nq="fechaOC" min="${hoy()}" value="${d.fechaOC}"><span class="field-hint">Sugerida: un mes desde hoy (día hábil). Puedes cambiarla.</span></label>
         <label class="field"><span>Facturación estimada <span class="req">*</span></span><select name="facturacion" data-nq="facturacion">${factOpts(d.facturacion, 'Elige…')}</select><span class="field-hint">Dato interno para la proyección: no sale en el PDF.</span></label>
       </div>`)}
       <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-action="nq-cancelar">Cancelar</button>
@@ -8159,7 +8305,7 @@ const UI = (() => {
     return `<span class="t">Suma</span><span class="num right" id="nq-t-suma">${Util.money(t.suma, cur)}</span>
       <span class="t">Descuento general</span><span style="display:flex;gap:4px;justify-content:flex-end;align-items:center;flex-wrap:wrap" id="nq-desc-gen">
         <select data-nq="descuentoTipo" aria-label="Tipo de descuento general" style="width:76px;min-height:30px;padding:3px 6px"${conItem ? ' disabled' : ''}>${options([['pct', '%'], ['monto', cur]], d.descuentoTipo)}</select>
-        <input type="number" min="0" step="${d.descuentoTipo === 'pct' ? '0.5' : '0.01'}" name="descuento" data-nq="${d.descuentoTipo === 'pct' ? 'descuentoPct' : 'descuento'}" value="${E(d.descuentoTipo === 'pct' ? d.descuentoPct : d.descuento)}" style="width:96px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento general"${conItem ? ' disabled' : ''}>
+        <input type="number" min="0" step="${d.descuentoTipo === 'pct' ? '0.5' : '0.01'}" name="descuento" data-nq="${d.descuentoTipo === 'pct' ? 'descuentoPct' : 'descuento'}" value="${E(+(d.descuentoTipo === 'pct' ? d.descuentoPct : d.descuento) || '')}" style="width:96px;min-height:30px;padding:3px 6px;text-align:right" aria-label="Descuento general"${conItem ? ' disabled' : ''}>
         <span class="small muted" id="nq-desc-monto" style="width:100%;text-align:right">${conItem ? 'Anulado: hay descuentos por ítem' : d.descuentoTipo === 'pct' ? '= ' + Util.money(t.descuento, cur) : '≈ ' + t.descuentoPct + '%'}</span></span>
       <span class="t">Neto sin ${E(imp.nombreImpuesto)}</span><span class="num right" id="nq-t-neto">${Util.money(t.neto, cur)}</span>
       <span class="t">${E(imp.nombreImpuesto)} ${Math.round(imp.impuesto * 100)}%</span><span class="num right" id="nq-t-igv">${Util.money(t.igv, cur)}</span>
@@ -8265,6 +8411,13 @@ const UI = (() => {
     else if (el.dataset.nqModo) { const d = S.nueva.d; d.modo = el.dataset.nqModo; d.oppDestinoId = el.dataset.opp || ''; d.modoTocado = true; render(true); }
   });
   ACTIONS['nq-add-item'] = () => { S.nueva.d.items.push(itemVacio()); render(true); };
+  /** Sube o baja un ítem dentro de su tabla (principales, alternativas u opcionales); el PDF sigue este orden */
+  ACTIONS['nq-mover'] = el => {
+    const d = S.nueva.d, i = +el.dataset.i, dir = +el.dataset.d, it = d.items[i], mismo = x => !!x.opcional === !!it.opcional && !!x.alternativa === !!it.alternativa;
+    let j = i + dir; while (j >= 0 && j < d.items.length && !mismo(d.items[j])) j += dir;
+    if (j < 0 || j >= d.items.length) return;
+    [d.items[i], d.items[j]] = [d.items[j], d.items[i]]; render(true);
+  };
   ACTIONS['nq-toggle-opc'] = el => { const it = S.nueva.d.items[+el.dataset.i]; it.opcional = !it.opcional; render(true); };
   /** Alternativa de otra marca: queda en el mismo documento, junto al ítem principal que reemplaza */
   ACTIONS['nq-toggle-alt'] = el => {
@@ -8405,7 +8558,7 @@ const UI = (() => {
       validezDias: q.validezDias, plazo: q.plazo, condicionEspecial: q.condicionEspecial || '', referencia: q.referencia || '', direccion: q.clienteDireccion || '', distrito: q.clienteDistrito || '', ciudad: q.clienteCiudad || '', pais: q.clientePais || '',
       contactoCorreo: q.contactoCorreo || '', contactoTelefono: q.contactoTelefono || '', items: q.items.map(it => Object.assign({ listaUSD: null }, it)), descuento: q.descuento || 0, descuentoTipo: q.descuentoTipo || 'monto', descuentoPct: q.descuentoPct || 0, proyectoSel: o.proyectoId,
       modo: 'revision', modoTocado: true, oppDestinoId: o.id, etapa: Rules.esAbierta(o) ? o.etapa : 'e3', proxContacto: Util.addBizDays(hoy(), 3),
-      fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : '', facturacion: factDe(o), numAuto: true });
+      fechaOC: o.fechaOC && o.fechaOC >= hoy() ? o.fechaOC : Util.fechaOCSugerida(hoy()), facturacion: factDe(o), numAuto: true });
     S.nueva = { tab: 'plataforma', fase: 'form', d, archivo: '' };
     go('nueva');
   };
@@ -9085,16 +9238,47 @@ const UI = (() => {
               <span class="small muted">${k.gestion ? 'Gestión de cuenta' : `<a href="#/op/${k.oppId}">${k.oppId}</a>`}</span><div style="margin-top:4px">${E(k.nota) || '<span class="muted">Sin nota</span>'}</div></div></li>`).join('')}</ul>` : '<p class="muted">Sin contactos registrados.</p>'}
           </section>
         </div>
+        <div class="stack">${notasCard(c)}
         <section class="card"><div class="card-head"><h2>Contactos</h2>${editK ? `<button class="btn sm primary" data-action="contacto-nuevo" data-cliente="${c.id}">${I('plus')} Agregar</button>` : ''}</div>
           ${c.contactos.length ? `<div class="stack">${c.contactos.map(k => `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px dashed var(--border);padding-bottom:10px">
             <div style="min-width:0"><strong>${E(k.nombre)}</strong>${k.cargo ? `<div class="small">${E(k.cargo)}</div>` : ''}<div class="small muted" style="overflow-wrap:anywhere">${E(k.correo || 'sin correo')} · ${E(k.telefono || 'sin teléfono')}</div></div>
             <div class="btn-row">${contactoLinks(k)}${editK ? `<button class="btn sm" data-action="contacto-editar" data-cliente="${c.id}" data-k="${k.id}">Editar</button>` : ''}</div></div>`).join('')}</div>`
             : '<p class="muted">Sin contactos. Registrarlos es opcional, pero quedan en la agenda común.</p>'}
-        </section>
+        </section></div>
       </div>`;
     const g = $('#cuenta-grid');
     if (g && window.matchMedia('(max-width: 860px)').matches) g.style.gridTemplateColumns = 'minmax(0,1fr)';
   };
+  /** Notas de la cuenta: indicaciones para contactar al cliente, con recordatorio opcional para quien la escribe */
+  function notasCard(c) {
+    const u = S.user, ns = c.notas || [], puedeEd = n => n.usuarioId === u.id || ['jefatura', 'admin'].includes(u.rol);
+    return `<section class="card"><div class="card-head"><h2>Notas</h2><span class="sub">${ns.length || ''}</span><button class="btn sm primary" data-action="nota-nueva" data-cliente="${c.id}" style="margin-left:auto">${I('plus')} Agregar nota</button></div>
+      ${ns.length ? `<div class="stack">${ns.map(n => `<div class="nota-item"><div style="white-space:pre-wrap;overflow-wrap:anywhere">${E(n.texto)}</div>
+        <div class="small muted">${E((usr(n.usuarioId) || {}).nombre || '')} · ${Util.fmtFechaHora(n.creada)}${n.recordatorio ? ` · ${n.hecho ? `<span class="chip ok">Recordatorio atendido</span>` : `<span class="chip ${n.recordatorio <= hoy() ? 'warn' : 'info'}">Recordar ${Util.fmtDate(n.recordatorio)}${n.hora ? ' ' + n.hora : ''}</span>`}` : ''}</div>
+        <div class="btn-row" style="margin-top:4px">${n.usuarioId === u.id && n.recordatorio && !n.hecho ? `<button class="btn sm" data-action="nota-hecha" data-cliente="${c.id}" data-id="${n.id}">${I('check')} Hecho</button><button class="btn sm" data-action="nota-posponer" data-cliente="${c.id}" data-id="${n.id}">Posponer</button>` : ''}
+          ${puedeEd(n) ? `<button class="btn sm ghost" data-action="nota-editar" data-cliente="${c.id}" data-id="${n.id}">Editar</button><button class="btn sm ghost bad" data-action="nota-borrar" data-cliente="${c.id}" data-id="${n.id}">Eliminar</button>` : ''}</div></div>`).join('')}</div>`
+        : '<p class="muted small" style="margin:0">Ej.: "Llamar a partir de las 3 pm", "No trabajan miércoles ni viernes". Puedes ponerle un recordatorio.</p>'}</section>`;
+  }
+  const notaDe = el => { const c = cli(el.dataset.cliente); return [c, (c.notas || []).find(n => n.id === el.dataset.id)]; };
+  function abrirNota(c, n) {
+    modal({ title: n ? 'Editar nota' : `Nota · ${c.razonSocial}`, body: `<label class="field"><span>Nota <span class="req">*</span></span><textarea name="texto" rows="3" maxlength="500" placeholder="Ej.: Llamar a partir de las 3 pm · No trabajan miércoles ni viernes">${E(n ? n.texto : '')}</textarea></label>
+      <div class="grid g2" style="margin-top:10px"><label class="field">Recordatorio (opcional)<input type="date" name="recordatorio" min="${hoy()}" value="${E(n && n.recordatorio ? n.recordatorio : '')}"><span class="field-hint">Te avisa ese día en "Mi día" y en la campana.</span></label>
+        <label class="field">Hora (opcional)<input type="time" name="hora" value="${E(n ? n.hora || '' : '')}"></label></div>
+      ${fechaRapida('recordatorio', [['Mañana', Util.addBizDays(hoy(), 1)], ['+3 días', Util.addBizDays(hoy(), 3)], ['+1 semana', Util.nextBizDay(Util.addDays(hoy(), 7))]])}`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
+        await Repo.guardarNotaCliente(c.id, { id: n && n.id, texto: r.querySelector('[name=texto]').value, recordatorio: val(r, 'recordatorio'), hora: val(r, 'hora') }, S.user.id); toast('Nota guardada.'); refresh(); } }],
+      onOpen: bindFechaRapida });
+  }
+  ACTIONS['nota-nueva'] = el => abrirNota(cli(el.dataset.cliente), null);
+  ACTIONS['nota-editar'] = el => { const [c, n] = notaDe(el); abrirNota(c, n); };
+  ACTIONS['nota-borrar'] = el => { const [c, n] = notaDe(el);
+    modal({ title: 'Eliminar nota', body: `<p style="margin-top:0">${E(n.texto)}</p>`, actions: [{ label: 'Cancelar' }, { label: 'Eliminar', cls: 'bad', onClick: async () => { await Repo.eliminarNotaCliente(c.id, n.id, S.user.id); toast('Nota eliminada.'); refresh(); } }] }); };
+  ACTIONS['nota-hecha'] = async el => { try { await Repo.recordatorioNota(el.dataset.cliente, el.dataset.id, {}, S.user.id); toast('Recordatorio atendido.'); refresh(); } catch (e) { toast(e.message); } };
+  ACTIONS['nota-posponer'] = el => { const [c, n] = notaDe(el);
+    modal({ title: 'Posponer recordatorio', body: `<p class="small" style="margin-top:0">${E(c.razonSocial)}: ${E(n.texto)}</p><div class="grid g2"><label class="field">Nueva fecha<input type="date" name="fecha" min="${hoy()}" value="${Util.addBizDays(hoy(), 1)}"></label><label class="field">Hora (opcional)<input type="time" name="hora" value="${E(n.hora || '')}"></label></div>
+      ${fechaRapida('fecha', [['Mañana', Util.addBizDays(hoy(), 1)], ['+3 días', Util.addBizDays(hoy(), 3)], ['+1 semana', Util.nextBizDay(Util.addDays(hoy(), 7))]])}`,
+      actions: [{ label: 'Cancelar' }, { label: 'Posponer', cls: 'primary', onClick: async r => { await Repo.recordatorioNota(c.id, n.id, { posponer: val(r, 'fecha'), hora: val(r, 'hora') }, S.user.id); toast(`Recordatorio para el ${Util.fmtDate(val(r, 'fecha'))}.`); refresh(); } }],
+      onOpen: bindFechaRapida }); };
   ACTIONS['asignar-cuenta-btn'] = async el => {
     const to = $('#asig-cta').value, c = cli(el.dataset.id);
     if (!to || to === c.vendedorId) return toast('Elige un vendedor distinto.');
