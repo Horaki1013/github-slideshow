@@ -371,6 +371,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .pdf-back{position:fixed;inset:0;z-index:110;background:#5b6573;overflow:auto;padding:0 12px 24px}
 .pdf-toolbar{position:sticky;top:0;z-index:2;display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:10px;background:#3d4652;margin:0 -12px 16px}
 .pdf-toolbar .sim-label{margin-right:auto}
+.pdf-toolbar .pdf-formato{display:flex;align-items:center;gap:6px;color:#fff}
+.pdf-toolbar .pdf-formato select{max-width:min(320px,70vw)}
 .hoja{background:#fff;color:#111;width:min(210mm,100%);margin:0 auto;padding:14mm 12mm;box-shadow:0 6px 24px rgba(0,0,0,.35);font-family:var(--font);font-size:11px;line-height:1.35}
 .hoja .h-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .hoja .h-logo{font-size:22px;font-weight:800;color:var(--brand);letter-spacing:.02em}
@@ -4543,8 +4545,9 @@ const Repo = (() => {
     /** Deja en el seguimiento que la cotización se envió por correo (y a quién) */
     async registrarEnvioCotizacion(quoteId, d, usuarioId) {
       const q = db.quotes.find(x => x.id === quoteId) || fail('Cotización no encontrada.'), o = opp(q.oppId);
-      q.envios = (q.envios || []).concat([{ en: Util.ahora(), para: String(d.para || '').slice(0, 300), via: d.via === 'outlook' ? 'outlook' : 'eml', usuarioId }]);
-      db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Correo', nota: `Cotización N° ${q.numero} enviada ${d.via === 'outlook' ? 'desde Outlook' : '(borrador de correo descargado)'} a ${String(d.para || '').slice(0, 200)}`, proxContacto: o.proxContacto || null, usuarioId, auto: true });
+      const formato = ['enlaces', 'solo'].includes(d.formato) ? d.formato : 'completo';
+      q.envios = (q.envios || []).concat([{ en: Util.ahora(), para: String(d.para || '').slice(0, 300), via: d.via === 'outlook' ? 'outlook' : 'eml', formato, usuarioId }]);
+      db.followups.push({ id: 'S-' + (db.seq.fu++), oppId: o.id, fecha: hoy(), canal: 'Correo', nota: `Cotización N° ${q.numero} enviada ${d.via === 'outlook' ? 'desde Outlook' : '(borrador de correo descargado)'} a ${String(d.para || '').slice(0, 200)}${formato === 'completo' ? '' : formato === 'enlaces' ? ' (hojas de datos como enlaces)' : ' (solo la hoja de cotización)'}`, proxContacto: o.proxContacto || null, usuarioId, auto: true });
       touch();
     },
     /** PUT /borradores — cotización a medio hacer que el vendedor guarda para continuar después (solo la ve él) */
@@ -6499,7 +6502,7 @@ const UI = (() => {
   const EMPRESA_DEMO = { razonSocial: 'TECHVALUE S.A.', ruc: '20000000000 (dato de ejemplo)', direccion: 'dirección de ejemplo', central: 'central de ejemplo', web: 'www.techvalue.com.pe',
     area: 'Depto. de Ventas (PE)', formaPago: 'Abono en cuenta a nombre de TECHVALUE S.A. (datos bancarios de ejemplo)', entrega: 'Según el procedimiento de atención vigente (texto de ejemplo).',
     despacho: '', terminos: 'La aceptación de la propuesta económica por parte del cliente da conformidad a nuestros términos y condiciones de venta.' };
-  function pdfHTML({ q, cliente, contacto, proyecto, vendedor }) {
+  function pdfHTML({ q, cliente, contacto, proyecto, vendedor, formato }) {
     const emp = empresaPDF((vendedor && vendedor.oficina) || 'PE'), col = Object.assign({ unidad: true, codigo: true, marca: true }, emp.columnas || {});
     const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
     const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
@@ -6512,7 +6515,7 @@ const UI = (() => {
     const descTxt = it => { const d = dscUnit(it); return d.length ? `<div class="h-desc">${d.map(E).join('<br>')}</div>` : ''; };
     const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}${descTxt(it)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
     const cabItems = `<thead><tr><th>Item</th><th class="r">Cant.</th>${col.unidad ? '<th>Uni.</th>' : ''}${col.codigo ? '<th>Código</th>' : ''}${col.marca ? '<th>Marca</th>' : ''}<th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead>`;
-    const anx = anexosPrevistos({ q, vendedor });
+    const anx = anexosPrevistos({ q, vendedor, formato }), hje = hojasEnlace({ q, vendedor, formato });
     const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '');
     const fila = (k1, v1, k2, v2) => `<tr><td class="k">${k1}</td><td>${v1}</td><td class="k">${k2}</td><td>${v2}</td></tr>`;
     return `<div class="hoja">
@@ -6560,6 +6563,7 @@ const UI = (() => {
         ${cnd.terminos ? `<tr><td class="k">Términos de venta</td><td>${cnd.terminosEnlace ? `<a href="${E(cnd.terminosEnlace.url)}" target="_blank" rel="noopener">Revisar el siguiente enlace: ${E(cnd.terminosEnlace.texto || 'Procedimiento de atención')}</a><br>` : ''}${E(cnd.terminos)}</td></tr>` : ''}
       </tbody></table>
       ${emp.cierre ? `<p class="h-cierre">${E(emp.cierre).replace(/\n/g, '<br>')}</p>` : ''}
+      ${hje.length ? `<div class="h-anexos"><strong>Hojas de datos (enlaces directos):</strong>${hje.map(h => `<div>${E((h.marca ? h.marca + ' ' : '') + h.codigo)}: <a href="${E(h.url)}" target="_blank" rel="noopener" style="overflow-wrap:anywhere">${E(h.url)}</a></div>`).join('')}</div>` : ''}
       ${anx.length ? `<div class="h-anexos"><strong>Se adjuntan en el mismo PDF:</strong> ${anx.map(a => E(a.nombre)).join(' · ')}</div>` : ''}
       ${emp.pieMarcas ? `<div class="h-marcas"><img src="${E(emp.pieMarcas)}" alt="Marcas que representamos"></div>` : ''}
       <div class="h-foot"><span>${E(emp.razonSocial)} · ${E(emp.direccion)} · Central: ${E(emp.central)}</span><span>${E(emp.web || '')}</span></div>
@@ -6594,7 +6598,7 @@ const UI = (() => {
   }
   let logoPDF = null;
   const piePDF = { src: null, im: null };
-  async function pdfCotizacion({ q, cliente, contacto, proyecto, vendedor }) {
+  async function pdfCotizacion({ q, cliente, contacto, proyecto, vendedor, formato }) {
     const emp = empresaPDF((vendedor && vendedor.oficina) || 'PE'), col = Object.assign({ unidad: true, codigo: true, marca: true }, emp.columnas || {});
     if (emp.logo && !logoPDF) { try { logoPDF = await PdfDoc.imagen(emp.logo); } catch (e) { logoPDF = null; } }
     if (piePDF.src !== (emp.pieMarcas || null)) { piePDF.src = emp.pieMarcas || null; try { piePDF.im = piePDF.src ? await PdfDoc.imagen(piePDF.src) : null; } catch (e) { piePDF.im = null; } }
@@ -6745,8 +6749,22 @@ const UI = (() => {
       y = yy + 2;
     });
     // Texto de cierre de la plantilla (firma, saludo, aclaraciones) y lista de anexos que van en el mismo PDF
-    const anx = anexosPrevistos({ q, vendedor });
+    const anx = anexosPrevistos({ q, vendedor, formato }), hje = hojasEnlace({ q, vendedor, formato });
     if (emp.cierre) { y += 8; const ls = doc.partir(emp.cierre, R - L, 'F1', 8); asegurar(ls.length * 9.5 + 4); ls.forEach(s => { doc.texto(s, L, y, { t: 8, color: NEGRO }); y += 9.5; }); }
+    if (hje.length) {
+      // Formato "enlaces": una línea por producto, con el link clicable (el texto se corta si no cabe; el enlace va completo)
+      y += 8; asegurar(24); doc.texto('Hojas de datos (enlaces directos)', L, y, { f: 'F2', t: 8, color: AZ }); y += 11;
+      hje.forEach(h => {
+        asegurar(10);
+        const et = `${(h.marca ? h.marca + ' ' : '') + h.codigo}: `, x0 = L + PdfDoc.ancho(et, 'F2', 7.5), max = R - x0;
+        let tx = h.url; while (tx.length > 8 && PdfDoc.ancho(tx, 'F1', 7.5) > max) tx = tx.slice(0, -2);
+        if (tx !== h.url) tx = tx.slice(0, -1) + '…';
+        const w = PdfDoc.ancho(tx, 'F1', 7.5);
+        doc.texto(et, L, y, { f: 'F2', t: 7.5, color: NEGRO }).texto(tx, x0, y, { t: 7.5, color: [0, 70, 200] });
+        doc.linea(x0, y + 1.5, x0 + w, y + 1.5, { color: [0, 70, 200], lw: 0.4 }); doc.enlace(x0, y - 8, w, 10, h.url);
+        y += 9.5;
+      });
+    }
     if (anx.length) { y += 6; const ls = doc.partir('Se adjuntan en este PDF: ' + anx.map(a => a.nombre).join(' · '), R - L, 'F2', 7.5); asegurar(ls.length * 9 + 4); ls.forEach(s => { doc.texto(s, L, y, { f: 'F2', t: 7.5, color: AZ }); y += 9; }); }
     pie();
     // Número de página en todas
@@ -6845,17 +6863,28 @@ const UI = (() => {
   /** Nombre del PDF de una cotización: COT_<número>.pdf */
   const nombrePdfCot = q => `COT_${Util.nombreArchivo(q.numero) || 'cotizacion'}.pdf`;
   const hojaDeItem = it => { if (/^https?:\/\//i.test(it.hojaDatos || '')) return it.hojaDatos; const c = String(it.codigo || '').trim().toUpperCase(); const p = c && (S.db.catalogo || []).find(x => x.hojaDatos && x.codigo.toUpperCase() === c && (!it.marca || x.marca === it.marca)); return (c && (S.db.hojasDatos || {})[c + '|' + (it.marca || '')]) || (p ? p.hojaDatos : null); };
-  /** Qué se adjunta al PDF (nombres, en orden): anexos activos de la plantilla de la oficina y hojas de datos de los productos cotizados */
-  function anexosPrevistos({ q, vendedor }) {
-    const of = (vendedor && vendedor.oficina) || 'PE', emp = empresaPDF(of), out = [];
-    (emp.anexos || []).filter(a => a.activo !== false).forEach(a => out.push({ tipo: 'anexo', nombre: a.nombre, anexo: a, url: a.url }));
-    if (emp.hojasDatos !== false) {
-      const vistas = new Set();
-      // Primero el link; si falla (o no hay link), el PDF subido
-      (q.items || []).forEach(it => { const u = hojaDeItem(it), pdf = hojaPDFDe(it), k = u || (pdf && pdf.id); if (k && !vistas.has(k)) { vistas.add(k); out.push({ tipo: 'hoja', nombre: `Hoja de datos ${it.codigo}`, url: u, pdf, codigo: it.codigo, marca: it.marca || '' }); } });
-    }
+  /** Formatos de la cotización que se descarga o envía (el vendedor elige antes de enviar) */
+  const FORMATOS_COT = [['completo', 'Completa, con las hojas de datos integradas'], ['enlaces', 'Con las hojas de datos como enlaces directos'], ['solo', 'Solo la hoja de cotización']];
+  const formatoCot = f => FORMATOS_COT.some(x => x[0] === f) ? f : 'completo';
+  /** Hojas de datos de los productos cotizados (sin repetir): { codigo, marca, url, pdf } */
+  function hojasCotizadas({ q, vendedor }) {
+    if (empresaPDF((vendedor && vendedor.oficina) || 'PE').hojasDatos === false) return [];
+    const vistas = new Set(), out = [];
+    (q.items || []).forEach(it => { const u = hojaDeItem(it), pdf = hojaPDFDe(it), k = u || (pdf && pdf.id); if (k && !vistas.has(k)) { vistas.add(k); out.push({ url: u, pdf, codigo: it.codigo, marca: it.marca || '' }); } });
     return out;
   }
+  /** Qué se adjunta al PDF (nombres, en orden) según el formato:
+      completo = anexos activos de la plantilla + hojas de datos; enlaces = anexos + solo las hojas sin link (las demás van como enlace en la cotización); solo = nada */
+  function anexosPrevistos({ q, vendedor, formato }) {
+    const f = formatoCot(formato), emp = empresaPDF((vendedor && vendedor.oficina) || 'PE'), out = [];
+    if (f === 'solo') return out;
+    (emp.anexos || []).filter(a => a.activo !== false).forEach(a => out.push({ tipo: 'anexo', nombre: a.nombre, anexo: a, url: a.url }));
+    // Primero el link; si falla (o no hay link), el PDF subido
+    hojasCotizadas({ q, vendedor }).filter(h => f === 'completo' || !h.url).forEach(h => out.push(Object.assign({ tipo: 'hoja', nombre: `Hoja de datos ${h.codigo}` }, h)));
+    return out;
+  }
+  /** Formato "enlaces": las hojas de datos con link van como enlaces directos dentro de la cotización */
+  const hojasEnlace = ({ q, vendedor, formato }) => formatoCot(formato) === 'enlaces' ? hojasCotizadas({ q, vendedor }).filter(h => h.url).map(h => Object.assign({}, h, { url: linkDirecto(h.url) })) : [];
   /** Links "para compartir" de Google Drive, Dropbox y OneDrive → descarga directa */
   function linkDirecto(url) {
     try {
@@ -6883,8 +6912,8 @@ const UI = (() => {
     if (String.fromCharCode(...b.slice(0, 5)) !== '%PDF-') throw new Error('el link abre una página web, no el PDF');
     return b;
   }
-  /** Arma el PDF final: cotización y, a continuación, los anexos y las hojas de datos completas (también las protegidas, que se descifran).
-      Al cliente le llega un solo archivo, sin links. Devuelve { blob, avisos, adjuntos, faltan } (faltan: hojas que no se pudieron incluir) */
+  /** Arma el PDF final según ctx.formato: cotización y, a continuación, los anexos y las hojas de datos completas (también las protegidas, que se descifran).
+      "completo": un solo archivo, sin links; "enlaces": las hojas con link van como enlaces en la cotización; "solo": solo la cotización. Devuelve { blob, avisos, adjuntos, faltan } (faltan: hojas que no se pudieron incluir) */
   async function documentoCotizacion(ctx) {
     const base = await pdfCotizacion(ctx), lista = anexosPrevistos(ctx), avisos = [], adjuntos = [], faltan = [];
     const PDFLib = lista.length ? await Util.cargarPDFLib() : null;
@@ -6943,10 +6972,16 @@ const UI = (() => {
     if (r.avisos.length) toast(r.avisos.join(' ') + (r.faltan.length ? ' Sube su PDF con el botón "Hoja de datos" del ítem.' : ''), { ms: 9000 });
     if (!(await guardarEnCarpeta(r.blob, q, cliente))) toast(AVISO_CARPETA, { ms: 7000 });
   }
+  /** Último formato elegido por el usuario (comodidad de este navegador; si no se puede leer, "completo") */
+  const formatoGuardado = () => { try { return formatoCot(localStorage.getItem('formato-cot:' + S.user.id)); } catch (e) { return 'completo'; } };
+  const recordarFormato = f => { try { localStorage.setItem('formato-cot:' + S.user.id, f); } catch (e) { /* sin almacenamiento */ } };
+  const selFormato = (f, attrs) => `<select ${attrs} aria-label="Formato de la cotización">${options(FORMATOS_COT, f)}</select>`;
   function mostrarPDF(ctx, borrador) {
+    ctx.formato = formatoCot(ctx.formato || formatoGuardado());
     S.pdf = ctx; S.pdfBorrador = !!borrador;
     $('#print-root').innerHTML = `<div class="pdf-back" role="dialog" aria-modal="true" aria-label="Cotización en PDF">
       <div class="pdf-toolbar"><span class="sim-label">${borrador ? 'Vista previa · aún no registrada' : 'PDF generado por la plataforma'}</span>
+        <label class="pdf-formato small">Formato ${selFormato(ctx.formato, 'data-change="pdf-formato"')}</label>
         <button class="btn primary" data-action="pdf-descargar">${I('download')} Descargar PDF</button>
         ${borrador || !['vendedor', 'jefatura'].includes(S.user.rol) ? '' : `<button class="btn" data-action="pdf-enviar">${I('mail')} Enviar por correo</button>`}
         <button class="btn" data-action="pdf-close">${I('x')} Cerrar</button></div>
@@ -6958,7 +6993,7 @@ const UI = (() => {
     if (!S.pdf) return;
     const vend = !S.pdfBorrador && S.user.rol === 'vendedor';
     try {
-      toast('Armando el PDF con sus anexos…');
+      toast(S.pdf.formato === 'solo' ? 'Armando el PDF…' : 'Armando el PDF con sus anexos…');
       const doc = await documentoListo(S.pdf);
       if (!doc) return;
       const { blob, avisos, adjuntos } = doc;
@@ -6969,6 +7004,7 @@ const UI = (() => {
       toast(vend ? 'PDF descargado. ' + (CarpetaCot.soportado() ? AVISO_CARPETA : 'Con Chrome o Edge puedes elegir una carpeta para que se guarden solos.') : 'PDF descargado.', { ms: vend ? 7000 : 5000 });
     } catch (e) { toast('No se pudo generar el PDF: ' + e.message); }
   };
+  CHANGES['pdf-formato'] = el => { if (!S.pdf) return; S.pdf.formato = formatoCot(el.value); recordarFormato(S.pdf.formato); mostrarPDF(S.pdf, S.pdfBorrador); };
   ACTIONS['pdf-close'] = () => { $('#print-root').innerHTML = ''; S.pdf = null; };
   /* ---------- Enviar la cotización por correo: con el speech del vendedor y el PDF completo adjunto ---------- */
   let M365 = null;   // estado de la conexión del servidor con Microsoft 365
@@ -6989,34 +7025,43 @@ const UI = (() => {
       `--${lim}`, `Content-Type: application/pdf; name="${adjunto.nombre}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${adjunto.nombre}"`, '', (await b64(adjunto.blob)).replace(/.{76}/g, '$&\r\n'), '', `--${lim}--`, ''];
     return new Blob([partes.filter((x, i) => x !== '' || i > 4).join('\r\n')], { type: 'message/rfc822' });
   }
+  /** Qué lleva el PDF que se envía, según el formato */
+  function adjuntoTxt(ctx) {
+    const anx = anexosPrevistos(ctx), hje = hojasEnlace(ctx);
+    return `Adjunto: ${E(nombrePdfCot(ctx.q))} (cotización${anx.length ? ' + ' + anx.map(a => E(a.nombre)).join(' + ') : ''}${hje.length ? `; ${hje.length} hoja(s) de datos como enlace` : ''}).`;
+  }
   ACTIONS['pdf-enviar'] = async () => {
     const ctx = S.pdf; if (!ctx) return;
     const u = S.user, sp = speechDe(u, ctx), k = (ctx.cliente.contactos || []).find(x => x.nombre === ctx.contacto) || {}, para = ctx.q.contactoCorreo || k.correo || '', st = await m365();
     const nombrePdf = nombrePdfCot(ctx.q);
-    modal({ title: `Enviar cotización N° ${ctx.q.numero}`, wide: true, body: `${st.configurado ? `<div class="alert ok" style="margin-top:0"><div>Se envía desde <strong>tu Outlook</strong> (${E(u.correo || 'sin correo registrado')})${st.buzonComun ? ` con copia al buzón común <strong>${E(st.buzonComun)}</strong>` : ''}, con el PDF completo adjunto. Queda en tus enviados.</div></div>`
+    const back = modal({ title: `Enviar cotización N° ${ctx.q.numero}`, wide: true, body: `${st.configurado ? `<div class="alert ok" style="margin-top:0"><div>Se envía desde <strong>tu Outlook</strong> (${E(u.correo || 'sin correo registrado')})${st.buzonComun ? ` con copia al buzón común <strong>${E(st.buzonComun)}</strong>` : ''}, con el PDF completo adjunto. Queda en tus enviados.</div></div>`
         : `<div class="alert info" style="margin-top:0"><div>${Repo.servidor() ? 'El servidor aún no está conectado a Microsoft 365.' : 'Sin el servidor de la empresa conectado a Microsoft 365.'} Se descargará un <strong>borrador de correo</strong> con el PDF adjunto: ábrelo y Outlook lo deja listo para enviar.</div></div>`}
       <div class="form-grid"><label class="field"><span>Para <span class="req">*</span></span><input type="text" name="para" value="${E(para)}" placeholder="correo@cliente.com"></label>
         <label class="field">CC<input type="text" name="cc" value="" placeholder="Opcional (separados por coma)"></label></div>
       <label class="field" style="margin-top:8px">Asunto<input type="text" name="asunto" value="${E(sp.asunto)}"></label>
       <label class="field" style="margin-top:8px">Mensaje <span class="muted small">(tu speech predeterminado; cámbialo en "Mis datos")</span><textarea name="cuerpo" rows="10">${E(sp.cuerpo)}</textarea></label>
-      <p class="small muted">Adjunto: ${E(nombrePdf)} (cotización${anexosPrevistos(ctx).length ? ' + ' + anexosPrevistos(ctx).map(a => E(a.nombre)).join(' + ') : ''}).</p>`,
+      <label class="field" style="margin-top:8px">Formato de la cotización ${selFormato(ctx.formato, 'name="formato"')}</label>
+      <p class="small muted" id="envio-adjunto">${adjuntoTxt(ctx)}</p>`,
       actions: [{ label: 'Cancelar' }, { label: `${I('mail')} ${st.configurado ? 'Enviar' : 'Descargar borrador de correo'}`, cls: 'primary', onClick: async r => {
         const d = { para: val(r, 'para'), cc: val(r, 'cc'), asunto: val(r, 'asunto'), cuerpo: r.querySelector('[name=cuerpo]').value };
+        ctx.formato = formatoCot(r.querySelector('[name=formato]').value); recordarFormato(ctx.formato);
         if (!/@/.test(d.para)) { const e = new Error('Indica el correo del destinatario.'); e.campos = { para: 'Obligatorio' }; throw e; }
-        toast('Armando el PDF con sus anexos…');
+        toast(ctx.formato === 'solo' ? 'Armando el PDF…' : 'Armando el PDF con sus anexos…');
         const doc = await documentoListo(ctx);
         if (!doc) return;
         if (st.configurado) {
           await AlmacenServidor.enviarCorreo({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjuntos: [{ nombre: nombrePdf, tipo: 'application/pdf', base64: await b64(doc.blob) }] });
-          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook' }, u.id).catch(() => {});
+          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook', formato: ctx.formato }, u.id).catch(() => {});
           toast(`Cotización enviada a ${d.para}${st.buzonComun ? ' (copia al buzón común)' : ''}.`);
         } else {
           Util.descargar(await eml({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjunto: { nombre: nombrePdf, blob: doc.blob } }), nombrePdf.replace(/\.pdf$/, '.eml'));
-          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'eml' }, u.id).catch(() => {});
+          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'eml', formato: ctx.formato }, u.id).catch(() => {});
           toast('Borrador de correo descargado: ábrelo con Outlook y pulsa Enviar.', { ms: 7000 });
         }
         if (doc.avisos.length) setTimeout(() => toast(doc.avisos.join(' '), { ms: 9000 }), 800);
       } }] });
+    // Cambiar el formato aquí actualiza lo que se adjunta y la vista previa de atrás
+    back.addEventListener('change', ev => { if (ev.target.name !== 'formato') return; ctx.formato = formatoCot(ev.target.value); recordarFormato(ctx.formato); back.querySelector('#envio-adjunto').innerHTML = adjuntoTxt(ctx); mostrarPDF(ctx, S.pdfBorrador); });
   };
 
   /* ---------- Fúnel vertical: leads arriba, por cerrar y cerradas abajo ---------- */

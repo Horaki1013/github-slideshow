@@ -129,6 +129,15 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 - **Varios medios de contacto:** en "Registrar contacto" y "Registrar gestión" se marcan todos los usados (p. ej. correo, WhatsApp y llamada). El seguimiento guarda `canales` (lista) y `canal` (texto "WhatsApp · Llamada · Correo", que es lo que muestran el historial y los reportes).
 - **Notas de la cuenta con recordatorio:** en la ficha de la cuenta y en la de cada oportunidad (tarjeta "Notas del cliente", sobre la bitácora), "Agregar nota" (p. ej. "Llamar a partir de las 3 pm", "No trabajan miércoles ni viernes"), con fecha y hora de recordatorio opcionales (`cliente.notas`). El recordatorio le llega a quien escribió la nota en "Mi día" (sección "Recordatorios") y en la campana (`Rules.recordatorios`), con "Hecho" y "Posponer". Las notas se ven también al registrar un contacto. Cualquier usuario agrega notas a cualquier cliente, aunque la cuenta o la oportunidad sean de otro vendedor (`Rules.puedeNotaCliente`); también desde el Directorio de clientes (botón "Notas" de cada empresa). Editan o eliminan quien la escribió, gerencia/jefatura y administración.
 
+### Formato de la cotización al descargar o enviar (25/11/2026)
+
+Antes de descargar o enviar, el vendedor elige el formato en la ventana del PDF (selector "Formato") y también en la ventana "Enviar cotización":
+- **Completa, con las hojas de datos integradas** (como hasta ahora): un solo PDF con la cotización, los anexos de la plantilla y las hojas de datos completas.
+- **Con las hojas de datos como enlaces directos:** la cotización lleva una sección "Hojas de datos (enlaces directos)" con una línea por producto y su link clicable (los links de Google Drive, Dropbox y OneDrive se convierten en descarga directa). Los anexos de la plantilla siguen adjuntos; una hoja que solo tiene PDF subido (sin link) se adjunta, porque no tiene enlace público.
+- **Solo la hoja de cotización:** sin anexos ni hojas de datos.
+
+La vista previa y el texto "Adjunto: …" de la ventana de envío cambian al elegir. La plataforma recuerda el último formato de cada usuario en ese navegador. El envío queda en el historial con su formato (`quote.envios[].formato` y la nota automática de la bitácora). El PDF que se guarda solo en la carpeta del vendedor al registrar la cotización sigue siendo el completo. Funciones: `FORMATOS_COT`, `anexosPrevistos({ …, formato })`, `hojasEnlace`, `pdfCotizacion({ …, formato })`.
+
 ### Revisión de código (25/11/2026)
 
 Limpieza, corrección de errores y optimización, sin cambios en el comportamiento:
