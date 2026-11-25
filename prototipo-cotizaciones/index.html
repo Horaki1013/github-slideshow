@@ -8114,6 +8114,16 @@ const UI = (() => {
           <td class="r num">${its.length}</td><td class="r num nowrap">${Util.money(totalesDraft(d).t.neto, d.moneda)}</td><td class="small nowrap">${Util.fmtFechaHora(b.actualizado)}</td>
           <td class="nowrap">${abierta ? '' : `<button class="btn sm primary" data-action="nq-borrador-abrir" data-id="${b.id}">Continuar</button> `}<button class="btn sm ghost" data-action="nq-borrador-borrar" data-id="${b.id}" aria-label="Eliminar">${I('x')}</button></td></tr>`; }).join('')}</tbody></table></div></section>`;
   }
+  /** Con una cotización a medio hacer (o una guardada que se retomó) abierta: empezar otra en blanco sin perderla */
+  function barraEnCurso(N) {
+    if (!enCurso() && !N.borradorId) return '';
+    return `<div class="alert info" style="margin:0 0 14px"><div>Estás editando la cotización de <strong>${E(clienteBorrador(N.d))}</strong>.${enCurso() ? ' Si empiezas otra, esta queda en "Para continuar después".' : ''}</div>
+      <button class="btn sm primary" data-action="nq-empezar-otra">${I('plus')} Empezar una nueva</button></div>`;
+  }
+  ACTIONS['nq-empezar-otra'] = async () => {
+    if (!(await resguardarEnCurso())) return;
+    S.nueva = null; render(); scrollTo(0, 0);
+  };
   ACTIONS['nq-guardar-borrador'] = async () => {
     if (!enCurso()) return toast('Aún no hay nada que guardar: elige el cliente o agrega un ítem.');
     const cliente = clienteBorrador(S.nueva.d);
@@ -8157,7 +8167,7 @@ const UI = (() => {
     } else if (N.tab === 'pdf' && N.fase === 'leyendo') {
       cuerpo = `<div class="card center" style="padding:40px 16px"><div class="spinner" aria-hidden="true"></div><h2>Leyendo cotización…</h2><p class="muted">${E(N.archivo)}</p></div>`;
     } else {
-      cuerpo = (N.tab === 'plataforma' ? borradoresHTML(N) : '') + formNueva(N);
+      cuerpo = (N.tab === 'plataforma' ? barraEnCurso(N) + borradoresHTML(N) : '') + formNueva(N);
     }
     view().innerHTML = `<div class="page-head"><div><h1>Nueva cotización</h1><p class="muted">Cotiza aquí y el PDF se genera solo, o registra un PDF que ya enviaste.</p></div></div>
       <div class="tabs" role="tablist"><button role="tab" class="${N.tab === 'plataforma' ? 'active' : ''}" data-action="nq-tab" data-tab="plataforma">${I('file').replace('<svg', '<svg width="16" height="16" style="vertical-align:-3px"')} Cotizar en la plataforma</button>

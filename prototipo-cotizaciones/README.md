@@ -138,6 +138,10 @@ Antes de descargar o enviar, el vendedor elige el formato en la ventana del PDF 
 
 La vista previa y el texto "Adjunto: …" de la ventana de envío cambian al elegir. La plataforma recuerda el último formato de cada usuario en ese navegador. El envío queda en el historial con su formato (`quote.envios[].formato` y la nota automática de la bitácora). El PDF que se guarda solo en la carpeta del vendedor al registrar la cotización sigue siendo el completo. Funciones: `FORMATOS_COT`, `anexosPrevistos({ …, formato })`, `hojasEnlace`, `pdfCotizacion({ …, formato })`.
 
+### Corrección: empezar otra cotización con una guardada abierta (25/11/2026)
+
+Al retomar una cotización de "Para continuar después" (o con una a medio hacer), "Nueva cotización" siempre volvía a esa y no había forma de empezar otra. Ahora, sobre el formulario aparece "Estás editando la cotización de … · **Empezar una nueva**": la que está abierta queda en "Para continuar después" (sin duplicarse) y se abre una en blanco (`nq-empezar-otra`).
+
 ### Revisión de código (25/11/2026)
 
 Limpieza, corrección de errores y optimización, sin cambios en el comportamiento:
