@@ -129,6 +129,14 @@ Los permisos se validan en `Rules.puede()` y `Rules.puedeRuta()`. Si un usuario 
 - **Varios medios de contacto:** en "Registrar contacto" y "Registrar gestión" se marcan todos los usados (p. ej. correo, WhatsApp y llamada). El seguimiento guarda `canales` (lista) y `canal` (texto "WhatsApp · Llamada · Correo", que es lo que muestran el historial y los reportes).
 - **Notas de la cuenta con recordatorio:** en la ficha de la cuenta y en la de cada oportunidad (tarjeta "Notas del cliente", sobre la bitácora), "Agregar nota" (p. ej. "Llamar a partir de las 3 pm", "No trabajan miércoles ni viernes"), con fecha y hora de recordatorio opcionales (`cliente.notas`). El recordatorio le llega a quien escribió la nota en "Mi día" (sección "Recordatorios") y en la campana (`Rules.recordatorios`), con "Hecho" y "Posponer". Las notas se ven también al registrar un contacto. Cualquier usuario agrega notas a cualquier cliente, aunque la cuenta o la oportunidad sean de otro vendedor (`Rules.puedeNotaCliente`); también desde el Directorio de clientes (botón "Notas" de cada empresa). Editan o eliminan quien la escribió, gerencia/jefatura y administración.
 
+### Revisión de código (25/11/2026)
+
+Limpieza, corrección de errores y optimización, sin cambios en el comportamiento:
+- **Código repetido eliminado:** una sola implementación de SHA-256 (`Util.sha256` usa la de `PDFCifrado`, y las constantes de SHA-256 salen de las de SHA-512); `hojaGuardada` reutiliza `hojaDeItem`; un solo saneador de nombres de archivo (`Util.nombreArchivo`, también para `COT_<número>.pdf`); `Repo` busca la cuenta con un solo ayudante (`clienteDe`); el filtro de oportunidades para "Contacté" está en un solo lugar (`oppsContactables`).
+- **Seguridad:** el segmento declarado en el Excel de clientes (T1/T2/CO) se mostraba sin escapar en las cuentas, oportunidades, Mi día y notificaciones; ahora se escapa siempre (`segChip`). Se verificó con una sonda que inserta HTML en todos los textos de la base y recorre todas las pantallas y ventanas de cada usuario.
+- **Validaciones nuevas:** un BOM no puede renombrarse con el nombre de otro BOM; cantidades y valores negativos en sus partes quedan en 0; la unidad se normaliza a Kit/Glb también al actualizar; la hora al posponer un recordatorio se valida; las notas y los BOM rechazan un usuario inexistente con un mensaje claro en vez de un error.
+- **Rendimiento:** medido con datos reales del piloto, ninguna pantalla tarda más de 80 ms en dibujarse.
+
 ## Modo piloto (uso interno de prueba)
 
 El mismo `index.html` funciona en dos modos:
