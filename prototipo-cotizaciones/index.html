@@ -8254,7 +8254,7 @@ const UI = (() => {
           return `<tr${it.opcional ? ' class="fila-opc"' : it.alternativa ? ' class="fila-alt"' : ''}>
           <td><input type="number" min="0" data-nqi="${i}" data-k="cant" value="${E(it.cant)}" aria-label="Cantidad"></td>
           <td><select data-nqi="${i}" data-k="unidad" aria-label="Unidad">${options(Config.UNIDADES.map(x => [x, x]), it.unidad)}</select></td>
-          <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios">${variasListas ? listaItemHTML(it, i) : ''}${hojaItemHTML(it, i)}
+          <td>${stockHint(it)}<input type="text" autocomplete="off" data-ac="${i}" data-nqi="${i}" data-k="codigo" value="${E(it.codigo)}" placeholder="Código o descripción" aria-label="Código: escribe para buscar en la lista de precios">${variasListas ? listaItemHTML(it, i) : ''}<span id="nq-hoja-${i}">${hojaItemHTML(it, i)}</span>
             ${it.alternativa ? `<label class="field-hint" style="display:block">Alternativa a<select data-nq-altde="${i}" aria-label="Alternativa al ítem">${options(principales.map(([x], k) => [x.uid, `Ítem ${k + 1}${x.codigo ? ' · ' + x.codigo : ''}`]), it.alternativaDe || '', 'Elige el ítem…')}</select></label>` : ''}</td>
           <td><select data-nqi="${i}" data-k="marca" aria-label="Marca">${options([...new Set([...marcasDisponibles(), it.marca].filter(Boolean))].map(x => [x, x]), it.marca)}</select></td>
           <td><input type="text" data-nqi="${i}" data-k="descripcion" value="${E(it.descripcion)}" aria-label="Descripción" title="${E(it.descripcion)}"></td>
@@ -8416,7 +8416,9 @@ const UI = (() => {
     if (!S.nueva || !S.nueva.d || !el.closest || !el.closest('#nq-form')) return;
     if (el.dataset.nqCli) { aplicarCliente(el, false); return; }
     if (el.dataset.nq && el.tagName !== 'SELECT' && !el.dataset.nqRender) { setDraft(el.dataset.nq, el.value); actualizarCalculos(); }
-    if (el.dataset.nqi != null && el.type !== 'checkbox') { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); if (el.dataset.ac != null) mostrarAc(el); }
+    if (el.dataset.nqi != null && el.type !== 'checkbox') { S.nueva.d.items[+el.dataset.nqi][el.dataset.k] = el.value; actualizarCalculos(); if (el.dataset.ac != null) mostrarAc(el);
+      // El botón "Hoja de datos" aparece (o se actualiza) al escribir el código, aunque no se elija de la lista de precios
+      if (el.dataset.k === 'codigo' || el.dataset.k === 'marca') { const h = document.getElementById('nq-hoja-' + el.dataset.nqi); if (h) h.innerHTML = hojaItemHTML(S.nueva.d.items[+el.dataset.nqi], +el.dataset.nqi); } }
   });
   /** Cliente elegido en el buscador (o escrito): existente, nuevo con ese nombre o RUC */
   const NUEVO_CLIENTE = '+ Cliente nuevo (registrar)';
