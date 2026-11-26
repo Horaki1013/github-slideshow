@@ -556,15 +556,28 @@ const Config = {
     PEN: { nombre: 'Soles', simbolo: 'S/', dec: 2 },
     CLP: { nombre: 'Pesos Chilenos', simbolo: '$', dec: 0 },
     EUR: { nombre: 'Euros', simbolo: '€', dec: 2 },
+    COP: { nombre: 'Pesos Colombianos', simbolo: '$', dec: 0 },
+    ARS: { nombre: 'Pesos Argentinos', simbolo: '$', dec: 2 },
+    BOB: { nombre: 'Bolivianos', simbolo: 'Bs', dec: 2 },
   },
   /** Tipo de cambio de referencia (unidades por 1 USD) si aún no hay el del día; el servidor baja el oficial cada mañana */
-  TC_REF: { USD: 1, PEN: 3.75, CLP: 940, EUR: 0.92 },
+  TC_REF: { USD: 1, PEN: 3.75, CLP: 940, EUR: 0.92, COP: 4000, ARS: 1000, BOB: 6.96 },
   ROLES: { vendedor: 'Account Manager', jefatura: 'Jefatura de oficina', finanzas: 'Finanzas', logistica: 'Logística / Soporte', gestion: 'Gestión / Administración local', admin: 'Administración del sistema' },
+  /** Oficinas activas. Para abrir una en otro país de PAISES_DATOS, agregarla aquí (p. ej. CO: 'Colombia'): toma su identificador fiscal, moneda, impuesto y zona horaria */
   OFICINAS: { PE: 'Perú', CL: 'Chile' },
-  /** Ajustes predeterminados de cada oficina (administración los puede cambiar en "Datos de la empresa") */
-  OFICINA_DEF: {
-    PE: { moneda: 'USD', pais: 'Perú', ciudad: 'Lima', impuesto: 0.18, nombreImpuesto: 'IGV', zona: 'America/Lima' },
-    CL: { moneda: 'USD', pais: 'Chile', ciudad: 'Santiago', impuesto: 0.19, nombreImpuesto: 'IVA', zona: 'America/Santiago' },
+  /** Datos de cada país: identificador tributario del cliente (y de la empresa en el encabezado), moneda local, impuesto y zona horaria */
+  PAISES_DATOS: {
+    PE: { nombre: 'Perú', idFiscal: 'RUC', idFiscalEmpresa: 'R.U.C.', moneda: 'PEN', impuesto: 0.18, nombreImpuesto: 'IGV', zona: 'America/Lima', ciudad: 'Lima' },
+    CL: { nombre: 'Chile', idFiscal: 'RUT', idFiscalEmpresa: 'RUT', moneda: 'CLP', impuesto: 0.19, nombreImpuesto: 'IVA', zona: 'America/Santiago', ciudad: 'Santiago' },
+    CO: { nombre: 'Colombia', idFiscal: 'NIT', idFiscalEmpresa: 'NIT', moneda: 'COP', impuesto: 0.19, nombreImpuesto: 'IVA', zona: 'America/Bogota', ciudad: 'Bogotá' },
+    AR: { nombre: 'Argentina', idFiscal: 'CUIT', idFiscalEmpresa: 'CUIT', moneda: 'ARS', impuesto: 0.21, nombreImpuesto: 'IVA', zona: 'America/Argentina/Buenos_Aires', ciudad: 'Buenos Aires' },
+    EC: { nombre: 'Ecuador', idFiscal: 'RUC', idFiscalEmpresa: 'R.U.C.', moneda: 'USD', impuesto: 0.15, nombreImpuesto: 'IVA', zona: 'America/Guayaquil', ciudad: 'Quito' },
+    BO: { nombre: 'Bolivia', idFiscal: 'NIT', idFiscalEmpresa: 'NIT', moneda: 'BOB', impuesto: 0.13, nombreImpuesto: 'IVA', zona: 'America/La_Paz', ciudad: 'La Paz' },
+  },
+  /** Ajustes predeterminados de cada oficina (administración los puede cambiar en "Datos de la empresa"); salen de PAISES_DATOS. Moneda de cotización por defecto: USD */
+  get OFICINA_DEF() {
+    if (!this._oficinaDef) { const o = {}; Object.entries(this.PAISES_DATOS).forEach(([k, p]) => { o[k] = { moneda: 'USD', pais: p.nombre, ciudad: p.ciudad, impuesto: p.impuesto, nombreImpuesto: p.nombreImpuesto, zona: p.zona }; }); Object.defineProperty(this, '_oficinaDef', { value: o }); }
+    return this._oficinaDef;
   },
   /** Texto predeterminado del correo con que se envía una cotización; cada vendedor lo ajusta en "Mis datos" */
   SPEECH_DEF: {
@@ -2995,6 +3008,11 @@ const Rules = (() => {
   }
   /* ---------- Clientes: identificación fiscal y sedes ---------- */
   const esPeru = pais => !String(pais || '').trim() || /^per[uú]$/i.test(String(pais).trim());
+  /** Código de país (Config.PAISES_DATOS) por el nombre que trae el cliente; sin país, el de la oficina; desconocido, null */
+  const paisDe = (pais, oficina) => { const t = Util.norm(pais || ''); if (!t) return Config.PAISES_DATOS[oficina] ? oficina : 'PE';
+    const e = Object.entries(Config.PAISES_DATOS).find(([k, p]) => Util.norm(p.nombre) === t || k.toLowerCase() === t); return e ? e[0] : null; };
+  /** Identificador tributario del cliente según su país (RUC en Perú, RUT en Chile, NIT, CUIT…); sin país, el de la oficina */
+  const idFiscal = (pais, oficina) => { const k = paisDe(pais, oficina); return k ? Config.PAISES_DATOS[k].idFiscal : 'ID fiscal'; };
   /** RUC de 11 dígitos en Perú; en otro país (RUT, NIT…) basta un identificador de 5 caracteres o más */
   const rucValido = (ruc, pais) => esPeru(pais) ? /^\d{11}$/.test(String(ruc || '').trim()) : String(ruc || '').trim().length >= 5;
   const normSede = s => [s.direccion, s.distrito, s.ciudad, s.pais || 'Perú'].map(Util.norm).join('|');
@@ -3541,7 +3559,7 @@ const Rules = (() => {
         lineas, marcas: Object.keys(porMarca), porMarca, cotizado: its.map(it => `${it.cant} x ${it.codigo}${it.marca ? ' (' + it.marca + ')' : ''}${it.descripcion ? ' ' + it.descripcion : ''}`).join('; '),
         resumen: resumenItems(q), monto: usd, moneda: cur, montoOriginal: neto, etapa: (etapa(o.etapa) || {}).nombre || o.etapa, estado: estadoReporte(o), prob: o.etapa === 'pausa' ? 0 : prob(o.etapa),
         ponderado: ponderado(db, o), fechaFactura: ff || '', horizonte: ff ? horizonteNombre(horizonte(ff, hoy)) : 'Sin fecha', fechaOC: o.fechaOC || '', origen: origenNombre(db, o.origenOpp), origenId: o.origenOpp.id,
-        ultimo: u ? { fecha: u.fecha, canal: u.canal || '', nota: u.nota || '' } : null };
+        ultimo: u ? { fecha: u.fecha, canal: u.canal || '', nota: u.nota || '', sinRespuesta: u.resultado === 'sin_respuesta' } : null };
     }).filter(r => (!F.marca || r.marcas.includes(F.marca)) && (!t || Util.norm([r.id, r.cliente, r.proyecto, r.numero, r.cotizado, r.origen].join(' ')).includes(t)))
       .sort((a, b) => b.fecha.localeCompare(a.fecha));
     const gan = r => r.estado === 'ganadas', per = r => r.estado === 'perdidas';
@@ -3639,7 +3657,7 @@ const Rules = (() => {
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
-    alertasOpp, alertasUsuario, recordatorios, puedeNotaCliente, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
+    alertasOpp, alertasUsuario, recordatorios, puedeNotaCliente, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, paisDe, idFiscal, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
     origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads,
     esOrigenLead, leadsClasificados, panelLeads, rankingPersonal, normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
@@ -5190,14 +5208,18 @@ const Repo = (() => {
       touch();
       return l;
     },
-    /** POST /tipos-cambio — guarda el tipo de cambio del día que entregó el servidor ({ PE: {USD, EUR, CLP}, CL: {USD, EUR, PEN} }) */
+    /** POST /tipos-cambio — guarda el tipo de cambio del día que entregó el servidor: { PE: {USD, EUR, CLP}, CL: {USD, EUR, PEN}, CO: {USD, EUR}, … }
+        Cada país publica su moneda local por unidad de moneda extranjera; aquí se pasa a "unidades por 1 USD" */
     async guardarTiposCambio(tipos, fecha) {
-      const f = /^\d{4}-\d{2}-\d{2}$/.test(fecha || '') ? fecha : hoy(), porUSD = {};
-      const pe = tipos && tipos.PE, cl = tipos && tipos.CL, v = (t, m) => t && t[m] && +t[m].valor;
-      // A "unidades por 1 USD": Perú publica soles por unidad; Chile, pesos por unidad
-      if (v(pe, 'USD')) porUSD.PE = { PEN: v(pe, 'USD'), ...(v(pe, 'EUR') ? { EUR: +(v(pe, 'USD') / v(pe, 'EUR')).toFixed(6) } : {}), ...(v(pe, 'CLP') ? { CLP: +(v(pe, 'USD') / v(pe, 'CLP')).toFixed(2) } : {}), fuente: pe.USD.fuente || 'SUNAT' };
-      if (v(cl, 'USD')) porUSD.CL = { CLP: v(cl, 'USD'), ...(v(cl, 'EUR') ? { EUR: +(v(cl, 'USD') / v(cl, 'EUR')).toFixed(6) } : {}), ...(v(cl, 'PEN') ? { PEN: +(v(cl, 'USD') / v(cl, 'PEN')).toFixed(4) } : {}), fuente: cl.USD.fuente || 'Banco Central de Chile' };
-      if (!porUSD.PE && !porUSD.CL) return false;
+      const f = /^\d{4}-\d{2}-\d{2}$/.test(fecha || '') ? fecha : hoy(), porUSD = {}, v = (t, m) => t && t[m] && +t[m].valor;
+      const dec = m => m === 'CLP' ? 2 : m === 'PEN' ? 4 : 6, FUENTE = { PE: 'SUNAT', CL: 'Banco Central de Chile' };
+      Object.entries(tipos || {}).forEach(([pais, t]) => {
+        const local = (Config.PAISES_DATOS[pais] || {}).moneda, usd = v(t, 'USD'); if (!local || !usd) return;
+        const x = local === 'USD' ? {} : { [local]: usd };
+        Object.keys(t).filter(m => m !== 'USD' && m !== local && v(t, m) && Config.MONEDAS[m]).forEach(m => { x[m] = +(usd / v(t, m)).toFixed(dec(m)); });
+        porUSD[pais] = Object.assign(x, { fuente: t.USD.fuente || FUENTE[pais] || 'referencial' });
+      });
+      if (!Object.keys(porUSD).length) return false;
       db.tcs = db.tcs || {};
       if (JSON.stringify(db.tcs[f]) === JSON.stringify(porUSD)) return false;
       db.tcs[f] = porUSD;
@@ -5852,6 +5874,10 @@ const SelfTest = (() => {
       const und = Rules.nombreDesdePartes({ unidad: 'Und', codigo: 'A', partes: [{ codigo: 'B' }] });
       return it.codigo === 'ARK-1123' && it.descripcion === 'Computador embebido ARK' && it.marca === 'Advantech' && und.codigo === 'A';
     }],
+    ['Identificador tributario del cliente por país (RUC, RUT, NIT, CUIT); sin país, el de la oficina', () =>
+      Rules.idFiscal('', 'PE') === 'RUC' && Rules.idFiscal('', 'CL') === 'RUT' && Rules.idFiscal('Chile', 'PE') === 'RUT' && Rules.idFiscal('Perú', 'CL') === 'RUC' && Rules.idFiscal('peru', 'CL') === 'RUC'
+      && Rules.idFiscal('Colombia', 'PE') === 'NIT' && Rules.idFiscal('Argentina', 'PE') === 'CUIT' && Rules.idFiscal('Bolivia', 'PE') === 'NIT' && Rules.idFiscal('Ecuador', 'PE') === 'RUC' && Rules.idFiscal('España', 'PE') === 'ID fiscal'
+      && Config.OFICINA_DEF.CL.impuesto === 0.19 && Config.OFICINA_DEF.PE.nombreImpuesto === 'IGV' && Config.OFICINA_DEF.CO.zona === 'America/Bogota'],
     ['Kit/Glb: "Incluye" con la descripción para cotización de las demás partes (con cantidad; sin descripción no sale)', () => {
       const inc = Rules.incluyeDe({ unidad: 'Glb', partes: [{ codigo: 'ARK-1', descCot: 'Equipo' }, { codigo: 'I5', descCot: 'PROCESADOR INTEL CORE I5', cant: 1 }, { codigo: 'RAM', descCot: 'RAM 8 GB', cant: 2 }, { codigo: 'TORN', cant: 4 }] });
       return inc.join('|') === 'PROCESADOR INTEL CORE I5|RAM 8 GB x2' && !Rules.incluyeDe({ unidad: 'Und', partes: [{ codigo: 'A' }, { codigo: 'B', descCot: 'x' }] }).length;
@@ -5968,6 +5994,8 @@ const UI = (() => {
   const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
   const options = (list, sel, ph) => (ph != null ? `<option value="">${E(ph)}</option>` : '') + list.map(([v, l]) => `<option value="${E(v)}"${String(v) === String(sel) ? ' selected' : ''}>${E(l)}</option>`).join('');
   const vendedores = () => Rules.vendedoresActivos(S.db);
+  /** Monedas que se ofrecen: USD, la moneda local de cada oficina activa, EUR y las que ya use el registro (las de países sin oficina no aparecen) */
+  const monedasVisibles = (...extra) => [...new Set(['USD', ...Object.keys(Config.OFICINAS).map(k => (Config.PAISES_DATOS[k] || {}).moneda), 'EUR', ...extra].filter(m => m && Config.MONEDAS[m]))];
   /** Datos que ve el usuario actual (su oficina, sin lo eliminado) */
   const snap = async () => Rules.vista(await Repo.snapshot(), S.user);
   const piloto = () => Repo.modo() === 'piloto';
@@ -6613,7 +6641,7 @@ const UI = (() => {
   function pdfHTML({ q, cliente, contacto, proyecto, vendedor, formato }) {
     const emp = empresaPDF((vendedor && vendedor.oficina) || 'PE'), col = Object.assign({ unidad: true, codigo: true, marca: true }, emp.columnas || {});
     const t = Rules.totales(q), cur = q.moneda, cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
+    const k = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente, (vendedor && vendedor.oficina) || 'PE');
     const n2 = v => Util.nfMon(v, cur), imp = Rules.impuestoDe(q);
     const princ = Rules.principales(q), alt = Rules.alternativas(q), opc = Rules.opcionales(q);
     const nroDe = uid => { const k = princ.findIndex(x => x.uid && x.uid === uid); return k >= 0 ? k + 1 : null; };
@@ -6633,7 +6661,7 @@ const UI = (() => {
       <h2 class="h-title"${emp.color ? ` style="color:${E(emp.color)}"` : ''}>${E(emp.titulo || 'COTIZACIÓN')} Nº ${E(q.numero)}</h2>
       <table class="h-datos"><tbody>
         ${fila('Dirigido a', E(cliente.razonSocial), 'Emitido por', E(vendedor.nombre))}
-        ${fila(Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
+        ${fila(Rules.idFiscal(ub.pais, (vendedor && vendedor.oficina) || 'PE'), E(cliente.ruc || '—'), 'Cargo', E(vendedor.cargo || 'Ejecutivo(a) de cuentas'))}
         ${fila('Dirección', E(ub.direccion || '—'), 'Área', E(emp.area))}
         ${fila('Distrito/Comuna', E(ub.distrito || '—'), 'Teléfono', E(vendedor.telefono || emp.central))}
         ${fila('Ciudad/País', E(ub.ciudadPais), 'Correo', E(vendedor.correo || '—'))}
@@ -6685,7 +6713,7 @@ const UI = (() => {
     const e = Object.assign({}, S.db.empresa ? {} : EMPRESA_DEMO, (window.__PILOTO_EXTRA && window.__PILOTO_EXTRA.empresa) || {}, Rules.empresaOficina(S.db, of || 'PE'), S.db.pieMarcas ? { pieMarcas: S.db.pieMarcas.imagen } : {});
     const pl = (S.db.empresa && S.db.empresa.oficinas && S.db.empresa.oficinas[of || 'PE']) || {};
     e.anexos = pl.anexos || []; e.oficina = of || 'PE';
-    if (!e.etiquetaFiscal) e.etiquetaFiscal = (of || 'PE') === 'CL' ? 'RUT' : 'R.U.C.';
+    if (!e.etiquetaFiscal) e.etiquetaFiscal = (Config.PAISES_DATOS[of || 'PE'] || Config.PAISES_DATOS.PE).idFiscalEmpresa;
     return e;
   };
   /** Color de la plantilla (#rrggbb) en RGB para el PDF */
@@ -6694,8 +6722,10 @@ const UI = (() => {
   /** Condiciones de una cotización: las copiadas al emitirla y, si no hay copia, las vigentes */
   const condicionesDe = (q, emp) => Object.assign({}, emp, q.condiciones || {});
   /** Dónde lo piden: lo guardado en la cotización y, si falta, lo de la cuenta */
-  function ubicacionDe(q, cliente) {
-    const direccion = q.clienteDireccion || cliente.direccion || '', ciudad = q.clienteCiudad || cliente.ciudad || 'Lima', pais = q.clientePais || cliente.pais || 'Perú';
+  /** Ubicación del cliente en la cotización; sin ciudad ni país, los de la oficina del vendedor (Lima, Perú · Santiago, Chile…) */
+  function ubicacionDe(q, cliente, oficina) {
+    const of = Config.PAISES_DATOS[oficina] || Config.PAISES_DATOS.PE, propio = q.clientePais || cliente.pais;
+    const direccion = q.clienteDireccion || cliente.direccion || '', ciudad = q.clienteCiudad || cliente.ciudad || (propio ? '' : of.ciudad), pais = propio || of.nombre;
     // Distrito: el de la cotización; si la cotización no trae dirección propia, el de la cuenta
     const distrito = q.clienteDistrito != null && (q.clienteDistrito || q.clienteDireccion) ? q.clienteDistrito : (cliente.distrito || '');
     return { direccion, distrito, ciudad, pais, ciudadPais: [ciudad, pais].filter(Boolean).join(', ') };
@@ -6718,7 +6748,7 @@ const UI = (() => {
     const L = 40, R = 555, LIM = doc.H - 70 - (im ? ph + 10 : 0);
     const cur = q.moneda, n2 = v => Util.nfMon(v, cur), imp = Rules.impuestoDe(q);
     const t = Rules.totales(q), cp = Rules.condicion(q.condicionPago), pl = Rules.plazo(q.plazo);
-    const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente);
+    const dc = datosContacto(q, cliente, contacto), cnd = condicionesDe(q, emp), ub = ubicacionDe(q, cliente, (vendedor && vendedor.oficina) || 'PE');
     const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre}${proyecto.usuarioFinal ? ' — ' + proyecto.usuarioFinal : ''}` : '');
     let y = 0;
     const pie = () => {
@@ -6741,7 +6771,7 @@ const UI = (() => {
     const asegurar = h => { if (y + h > LIM) { nuevaPagina(); return true; } return false; };
     encabezado(false);
     // Datos del cliente y del emisor
-    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], [Rules.esPeru(ub.pais) ? 'RUC' : 'ID fiscal', cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Distrito/Comuna', ub.distrito], ['Ciudad/País', ub.ciudadPais],
+    const izq = [['Dirigido a', cliente.razonSocial, 'F2', 9], [Rules.idFiscal(ub.pais, (vendedor && vendedor.oficina) || 'PE'), cliente.ruc || '', 'F2', 9], ['Dirección', ub.direccion], ['Distrito/Comuna', ub.distrito], ['Ciudad/País', ub.ciudadPais],
       ['Teléfono', dc.telefono], ['Contacto', contacto || ''], ['Email', dc.correo], ['Referencia', ref]];
     const der = [['Emitido por', vendedor.nombre], ['Cargo', vendedor.cargo || 'Account Manager'], ['Área', emp.area || ''], ['Teléfono', vendedor.telefono || emp.central || ''],
       ['Correo', vendedor.correo || '', 'F1', 8, vendedor.correo ? 'mailto:' + vendedor.correo : ''], ['Fecha de emisión', Util.fmtDate(q.fechaEmision)]];
@@ -8403,7 +8433,7 @@ const UI = (() => {
         <label class="field c3"><span>N° de cotización <span class="req">*</span></span><input type="text" name="numero" data-nq="numero" value="${E(d.numero)}" placeholder="Como figura en el PDF">${plat ? `<span class="field-hint">${d.numAuto ? 'Correlativo automático (editable)' : 'Número editado a mano'}</span>` : ''}
           <span id="nq-dup">${dupHTML(dup)}</span></label>
         <label class="field c3"><span>Fecha de emisión <span class="req">*</span></span><input type="date" name="fechaEmision" data-nq="fechaEmision" data-nq-render="1" max="${hoy()}" value="${d.fechaEmision}"></label>
-        <label class="field c6">Moneda<select data-nq="moneda" data-nq-render="1">${options(Object.entries(Config.MONEDAS).map(([k, m]) => [k, `${k} – ${m.nombre}`]), d.moneda)}</select></label>
+        <label class="field c6">Moneda<select data-nq="moneda" data-nq-render="1">${options(monedasVisibles(d.moneda).map(k => [k, `${k} – ${Config.MONEDAS[k].nombre}`]), d.moneda)}</select></label>
         ${tcHTML(d)}
         <label class="field c4"><span>Condición de pago <span class="req">*</span></span><select name="condicionPago" data-nq="condicionPago">${options(Config.CONDICIONES_PAGO.map(x => [x.id, x.nombre]), d.condicionPago, 'Selecciona…')}</select></label>
         <label class="field c6"><span>Plazo de entrega <span class="req">*</span></span><select name="plazo" data-nq="plazo">${options(Config.PLAZOS_ENTREGA.map(x => [x.id, x.nombre]), d.plazo, 'Selecciona…')}</select>${plazoHint(d)}</label>
@@ -8480,10 +8510,10 @@ const UI = (() => {
     if (!d.tcs) fijarTC(d);
     const monedasItems = new Set(d.items.map(it => it.listaMoneda).filter(Boolean));
     if (d.moneda === 'USD' && ![...monedasItems].some(m => m !== 'USD')) return '';
-    const base = d.tcBase || 'USD', otras = Object.keys(Config.MONEDAS).filter(m => m !== base);
+    const base = d.tcBase || 'USD', visibles = monedasVisibles(d.moneda, base).filter(m => d.tcs[m] > 0 || m === 'USD'), otras = visibles.filter(m => m !== base);
     const val = m => +(d.tcs[m] / d.tcs[base]).toPrecision(8);
     return `<div class="field c12 tc-box"><span>Tipos de cambio de esta cotización <span class="req">*</span> <span class="muted" style="font-weight:400">· del ${Util.fmtDate(d.fechaEmision)}${d.tcs.fuente ? ' · ' + E(d.tcs.fuente) : ''} · editables</span></span>
-      <div class="tc-row"><label class="small">Moneda base<select data-nq-tcbase="1">${options(Object.keys(Config.MONEDAS).map(m => [m, m]), base)}</select></label>
+      <div class="tc-row"><label class="small">Moneda base<select data-nq-tcbase="1">${options(visibles.map(m => [m, m]), base)}</select></label>
         ${otras.map(m => `<label class="small${m === d.moneda ? ' tc-cot' : ''}">1 ${base} =<span style="display:flex;gap:4px;align-items:center"><input type="number" min="0" step="any" data-nq-tc="${m}" value="${val(m)}" aria-label="Tipo de cambio ${m}"> ${m}</span></label>`).join('')}</div>
       <span class="field-hint">Al cambiar un tipo de cambio, los ítems con precio de lista sin editar se recalculan. La conversión entre listas en otra moneda usa estos mismos valores.</span></div>`;
   }
@@ -9772,7 +9802,7 @@ const UI = (() => {
     const conProd = !nueva && S.db.catalogo.some(p => Rules.listaIdDe(p) === l.id);
     modal({ title: nueva ? 'Nueva lista de precios' : 'Editar lista · ' + l.nombre, body: `<div class="form-grid">
         <label class="field"><span>Nombre <span class="req">*</span></span><input type="text" name="nombre" value="${E(l.nombre || '')}" placeholder="Ej.: Lista 2 Chile (proyectos)"></label>
-        <label class="field"><span>Moneda de los precios <span class="req">*</span></span><select name="moneda"${conProd ? ' disabled' : ''}>${options(Object.entries(Config.MONEDAS).map(([k, m]) => [k, `${k} – ${m.nombre}`]), l.moneda)}</select>${conProd ? '<span class="field-hint">Con productos no se cambia: crea otra lista.</span>' : ''}</label>
+        <label class="field"><span>Moneda de los precios <span class="req">*</span></span><select name="moneda"${conProd ? ' disabled' : ''}>${options(monedasVisibles(l.moneda).map(k => [k, `${k} – ${Config.MONEDAS[k].nombre}`]), l.moneda)}</select>${conProd ? '<span class="field-hint">Con productos no se cambia: crea otra lista.</span>' : ''}</label>
         <label class="field">Oficina<select name="oficina">${options([['', 'Ambas oficinas'], ...Object.entries(Config.OFICINAS)], l.oficina || '')}</select><span class="field-hint">Al cotizar, cada vendedor ve primero las listas de su oficina.</span></label></div>
         ${nueva ? '' : `<label style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer"><input type="checkbox" name="activa"${l.activa !== false ? ' checked' : ''}> Lista activa (se ofrece al cotizar)</label>`}`,
       actions: [{ label: 'Cancelar' }, { label: `${I('check')} Guardar`, cls: 'primary', onClick: async r => {
@@ -9891,13 +9921,13 @@ const UI = (() => {
       <form data-submit="plantilla" class="stack" novalidate style="margin-top:14px">
         <section class="card"><div class="card-head"><h2>Plantilla de cotización · ${E(Config.OFICINAS[of])}</h2><span class="sub">${edP ? 'La editan jefatura, gerencia y administración' : 'Solo lectura'}</span></div><div class="form-grid">
           <label class="field">Título<input type="text" name="titulo" value="${E(pl.titulo || '')}" placeholder="COTIZACIÓN"${ro}></label>
-          <label class="field">Identificador fiscal<input type="text" name="etiquetaFiscal" value="${E(pl.etiquetaFiscal || '')}" placeholder="${of === 'CL' ? 'RUT' : 'R.U.C.'}"${ro}></label>
+          <label class="field">Identificador fiscal<input type="text" name="etiquetaFiscal" value="${E(pl.etiquetaFiscal || '')}" placeholder="${E((Config.PAISES_DATOS[of] || Config.PAISES_DATOS.PE).idFiscalEmpresa)}"${ro}></label>
           <label class="field">Color principal<input type="color" name="color" value="${E(pl.color || '#015088')}"${ro}></label>
           <label class="field" style="grid-column:1 / -1">Texto antes de los ítems<input type="text" name="intro" value="${E(pl.intro || '')}" placeholder="Tenemos el agrado de cotizar lo siguiente:"${ro}></label>
           <label class="field" style="grid-column:1 / -1">Nota bajo los totales<input type="text" name="notaPrecio" value="${E(pl.notaPrecio || '')}" placeholder="* Precio de lista actual"${ro}></label>
           <label class="field" style="grid-column:1 / -1">Texto de cierre (opcional: saludo, firma, aclaraciones)<textarea name="cierre" rows="2"${ro}>${E(pl.cierre || '')}</textarea></label>
           <div class="field" style="grid-column:1 / -1"><span>Columnas de los ítems</span><div class="btn-row">${[['unidad', 'Unidad'], ['codigo', 'Código'], ['marca', 'Marca']].map(([k, n]) => `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="col_${k}"${pl.columnas[k] !== false ? ' checked' : ''}${ro}> ${n}</label>`).join('')}<span class="small muted">Cantidad, descripción, valor unitario y total van siempre. Lo oculto pasa a la descripción.</span></div></div>
-          <label class="field">Moneda por defecto<select name="moneda"${ro}>${options([['', `${def.moneda} (predeterminada)`], ...Object.keys(Config.MONEDAS).map(m => [m, m])], pl.moneda || '')}</select></label>
+          <label class="field">Moneda por defecto<select name="moneda"${ro}>${options([['', `${def.moneda} (predeterminada)`], ...monedasVisibles(pl.moneda, (Config.PAISES_DATOS[of] || {}).moneda).map(m => [m, m])], pl.moneda || '')}</select></label>
           <label class="field">Impuesto (nombre)<input type="text" name="nombreImpuesto" value="${E(pl.nombreImpuesto || '')}" placeholder="${def.nombreImpuesto}"${ro}></label>
           <label class="field">Impuesto (%)<input type="number" step="0.01" min="0" name="impuesto" value="${pl.impuesto != null ? +(pl.impuesto * 100).toFixed(2) : ''}" placeholder="${def.impuesto * 100}"${ro}></label>
           <label style="display:flex;gap:8px;align-items:center;grid-column:1 / -1"><input type="checkbox" name="hojasDatos"${pl.hojasDatos !== false ? ' checked' : ''}${ro}> Adjuntar automáticamente las hojas de datos de los productos cotizados (las que tengan link en la lista de precios)</label>
@@ -10269,7 +10299,7 @@ const UI = (() => {
     ['marcas', 'Marca(s)', r => r.marcas.join(', '), 18, true], ['monto', 'Monto USD (sin IGV)', r => r.monto, 16, true], ['montoOriginal', 'Monto en la moneda de la cotización', r => r.moneda + ' ' + Util.nf2.format(r.montoOriginal), 20, false],
     ['etapa', 'Etapa', r => r.etapa, 16, true], ['prob', 'Probabilidad de cierre (%)', r => Math.round(r.prob * 100), 14, true], ['ponderado', 'Ponderado USD', r => r.ponderado, 14, false],
     ['horizonte', 'Horizonte de facturación', r => r.horizonte, 16, true], ['fechaFactura', 'Fecha estimada de factura', r => r.fechaFactura, 14, false], ['fechaOC', 'Fecha estimada de OC', r => r.fechaOC, 14, false],
-    ['origen', 'Origen del lead', r => r.origen, 30, true], ['ultimo', 'Última bitácora', r => r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${r.ultimo.canal}${r.ultimo.nota ? ' · ' + r.ultimo.nota : ''}` : '', 50, true],
+    ['origen', 'Origen del lead', r => r.origen, 30, true], ['ultimo', 'Última bitácora', r => r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${r.ultimo.canal} · ${r.ultimo.sinRespuesta ? 'Cliente no respondió/no brindó feedback' : r.ultimo.nota}`.replace(/ · $/, '') : '', 50, true],
   ];
   PAGES['leads-equipo'] = async () => {
     const db = S.db, F = S.leqF = S.leqF || leqInicial(), P = Rules.panelLeads(db, leqFiltros(F), hoy()), T = P.tot, vend = vendedores();
@@ -10308,13 +10338,14 @@ const UI = (() => {
         ${P.filas.slice(0, 300).map(r => { const u = usr(r.vendedorId); return `<tr data-action="leq-ir" data-id="${r.id}" style="cursor:pointer" title="Abrir la oportunidad ${E(r.id)}"><td class="nowrap">${Util.fmtDate(r.fecha)}</td>
           <td class="nowrap"><a href="#/op/${r.id}">${E(r.id)}</a><div class="cell-sub">${r.numero ? 'N° ' + E(r.numero) : ''}</div></td><td>${E(r.cliente || '—')}${r.proyecto ? `<div class="cell-sub">${E(r.proyecto)}</div>` : ''}</td><td>${u ? vendTag(u) : '—'}</td>
           <td class="small">${E(r.resumen)}<div class="cell-sub">${E(r.marcas.join(', '))}</div></td><td class="r num nowrap">${usd(r.monto)}</td><td class="nowrap">${etapaHTML(r.o.etapa)}<div class="cell-sub">${Math.round(r.prob * 100)} %</div></td>
-          <td class="nowrap small">${E(r.horizonte)}</td><td class="small">${E(r.origen)}</td><td class="small">${r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${E(r.ultimo.canal)}<div class="cell-sub">${E(r.ultimo.nota.slice(0, 80))}</div>` : '<span class="muted">Sin contactos</span>'}</td></tr>`; }).join('')
+          <td class="nowrap small">${E(r.horizonte)}</td><td class="small">${E(r.origen)}</td><td class="small">${r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${E(r.ultimo.canal)}<div class="cell-sub">${r.ultimo.sinRespuesta ? '<span class="chip warn">Cliente no respondió/no brindó feedback</span>' : E(r.ultimo.nota.slice(0, 80))}</div>` : '<span class="muted">Sin contactos</span>'}</td></tr>`; }).join('')
           || '<tr><td colspan="10" class="center muted" style="padding:20px">Sin leads con estos filtros. Las oportunidades cuentan como lead si su origen es de tipo lead (HubSpot, fabricante, referido…).</td></tr>'}</tbody></table></div>
         ${P.filas.length > 300 ? '<p class="small muted">Se muestran las 300 más recientes; el Excel trae todas.</p>' : ''}</section>`;
   };
   filtro('leqf', () => S.leqF);
   ACTIONS['leq-limpiar'] = () => { S.leqF = leqInicial(); render(true); };
-  ACTIONS['leq-ir'] = (el, ev) => { if (ev && ev.target.closest('a')) return; go('op/' + el.dataset.id); };
+  // Toda la fila abre la oportunidad (también el enlace OP-…: el manejador general cancela la navegación del enlace)
+  ACTIONS['leq-ir'] = el => go('op/' + el.dataset.id);
   /** Excel de leads: se eligen los campos antes de generarlo (la elección se recuerda en este navegador) */
   ACTIONS['leq-excel'] = () => {
     const clave = 'leq-campos:' + S.user.id;

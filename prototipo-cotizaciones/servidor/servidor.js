@@ -44,7 +44,8 @@ const CONFIG_DEF = {
   hojasDeDatos: true,                     // descargar y guardar copia de las hojas de datos
   microsoft365: null,                     // { tenantId, clientId, clientSecret, buzonComun, remitente, teamsWebhook } (ver LEEME-SERVIDOR)
   demo: false,                            // permite inicializar con data simulada (modelo para el programador)
-  hojasRedLocal: false,                   // permitir links de hojas de datos dentro de la red interna (por seguridad, no)
+  hojasRedLocal: false,
+  paisesTipoCambio: [],                   // además de Perú y Chile: ["CO", "AR", "EC", "BO"] al abrir esas oficinas (tipo de cambio referencial)                   // permitir links de hojas de datos dentro de la red interna (por seguridad, no)
 };
 const CONFIG = (() => {
   let c = {};
@@ -226,13 +227,21 @@ const FUENTES_TC = {
     return out;   // pesos por unidad de la moneda
   },
 };
+// Otros países (se activan en config.json → "paisesTipoCambio": ["CO", "AR", "EC", "BO"]): tipo de cambio referencial de ExchangeRate-API (open.er-api.com)
+const referencial = moneda => async () => {
+  const r = await fetchJson('https://open.er-api.com/v6/latest/USD'), local = moneda === 'USD' ? 1 : +r.rates[moneda], eur = +r.rates.EUR;
+  if (!(local > 0) || !(eur > 0)) throw new Error('sin dato de ' + moneda);
+  return [['USD', local, 'ExchangeRate-API (referencial)'], ['EUR', +(local / eur).toFixed(6), 'ExchangeRate-API (referencial)']];   // moneda local por unidad
+};
+Object.assign(FUENTES_TC, { CO: referencial('COP'), AR: referencial('ARS'), BO: referencial('BOB'), EC: referencial('USD') });
+const paisesTC = () => [...new Set(['PE', 'CL', ...(Array.isArray(CONFIG.paisesTipoCambio) ? CONFIG.paisesTipoCambio : [])])].filter(p => FUENTES_TC[p]);
 function fetchJson(url) {
   return fetch(url, { headers: { 'User-Agent': 'plataforma-cotizaciones' }, signal: AbortSignal.timeout(15000) }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 const hoyISO = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 async function actualizarTipoCambio() {
   if (!CONFIG.tipoCambio) return;
-  for (const pais of Object.keys(FUENTES_TC)) {
+  for (const pais of paisesTC()) {
     try {
       const filas = await FUENTES_TC[pais]();
       const st = db.prepare('INSERT INTO tipos_cambio (fecha, moneda, pais, valor, fuente) VALUES (?, ?, ?, ?, ?) ON CONFLICT(fecha, moneda, pais) DO UPDATE SET valor = excluded.valor, fuente = excluded.fuente');
@@ -243,7 +252,7 @@ async function actualizarTipoCambio() {
 }
 function tiposCambio() {
   const out = {};
-  for (const pais of ['PE', 'CL']) {
+  for (const pais of paisesTC()) {
     const filas = db.prepare('SELECT moneda, valor, fecha, fuente FROM tipos_cambio t WHERE pais = ? AND fecha = (SELECT max(fecha) FROM tipos_cambio WHERE pais = t.pais AND moneda = t.moneda)').all(pais);
     out[pais] = Object.fromEntries(filas.map(f => [f.moneda, { valor: f.valor, fecha: f.fecha, fuente: f.fuente }]));
   }

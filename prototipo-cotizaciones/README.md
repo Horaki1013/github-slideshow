@@ -146,6 +146,29 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### Preparada para otros países: identificador tributario, moneda e impuesto (27/11/2026)
+
+- **`Config.PAISES_DATOS`:** cada país tiene su identificador tributario del cliente y de la empresa, su moneda local, su impuesto, su zona horaria y su ciudad principal.
+  - Perú: RUC / R.U.C., PEN, IGV 18 %.
+  - Chile: RUT, CLP, IVA 19 %.
+  - Colombia: NIT, COP, IVA 19 %.
+  - Argentina: CUIT, ARS, IVA 21 %.
+  - Ecuador: RUC, USD, IVA 15 %.
+  - Bolivia: NIT, BOB, IVA 13 %.
+
+  `Config.OFICINA_DEF` sale de esa tabla. Para abrir una oficina basta agregarla a `Config.OFICINAS` (p. ej. `CO: 'Colombia'`).
+- **En la cotización:**
+  - El identificador del cliente sale según su país (`Rules.idFiscal`): RUC en Perú, RUT en Chile, NIT en Colombia y Bolivia, CUIT en Argentina. Si el cliente no tiene país, se usa el de la oficina del vendedor; antes, fuera de Perú decía "ID fiscal".
+  - Sin ciudad ni país del cliente, se usan los de la oficina (antes siempre "Lima, Perú"). La plantilla peruana no cambia.
+- **Monedas:**
+  - Se agregan COP, ARS y BOB, con tipo de cambio de referencia.
+  - Las listas de monedas muestran USD, EUR y la moneda local de cada oficina activa (hoy las mismas de siempre: USD, PEN, CLP, EUR); las de países sin oficina no aparecen.
+  - El tipo de cambio del día que entrega el servidor se convierte para cualquier país; para Perú y Chile da los mismos valores que antes.
+- **Servidor:** `"paisesTipoCambio": ["CO", "AR", "EC", "BO"]` en `config.json` activa el tipo de cambio referencial diario de esos países (open.er-api.com).
+- **Leads del equipo:**
+  - El enlace OP-… de la lista no abría la oportunidad; ahora la abre, igual que el resto de la fila.
+  - Si la última bitácora es "No respondió", la lista y el Excel dicen "Cliente no respondió/no brindó feedback".
+
 ### Leads del equipo, para jefatura y gerencia (27/11/2026)
 
 Menú de jefatura → **Leads del equipo** (ruta `#/leads-equipo`, `Rules.panelLeads`). Muestra las oportunidades que vinieron de un lead, de todos los vendedores: las de la bandeja y las que el vendedor clasificó con un origen de tipo lead al cotizar. Montos en USD sin IGV.
