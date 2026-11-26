@@ -6658,7 +6658,7 @@ const UI = (() => {
       ${opc.length ? `<div class="h-banda">Opcionales</div>
       <table class="h-items">${cabItems}<tbody>
         ${opc.map((it, i) => filaItem(it, 'Opcional ' + (i + 1))).join('')}</tbody></table>
-      <p class="h-nota">* En caso opte por alguno de estos artículos opcionales, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.</p>` : ''}
+      <p class="h-nota">* Los opcionales son equipos complementarios que recomendamos para el óptimo funcionamiento de la solución cotizada. En caso opte por alguno de ellos, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.</p>` : ''}
       <div class="h-notas">${E(emp.notaPrecio || '* Precio de lista actual')}${t.descuento ? '<br>** Descuento especial válido solo para esta oferta' : ''}<br>Los precios están expresados en ${E((Config.MONEDAS[cur] || Config.MONEDAS.USD).nombre)} (${cur}).</div>
       <h3 style="margin:14px 0 4px;color:var(--brand)">Condiciones comerciales</h3>
       <table class="h-cond"><tbody>
@@ -6836,7 +6836,7 @@ const UI = (() => {
       doc.texto('Opcionales', L + 6, y + 10.5, { f: 'F2', t: 8.5, color: AZ });
       y += 18;
       filas(opcionales, i => 'Opcional ' + (i + 1));
-      nota('* En caso opte por alguno de estos artículos opcionales, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.');
+      nota('* Los opcionales son equipos complementarios que recomendamos para el óptimo funcionamiento de la solución cotizada. En caso opte por alguno de ellos, detállelo en la Orden de Compra. Los opcionales no incluyen el cálculo del IGV.');
     }
     y += 14; asegurar(14);
     doc.texto(`Los precios están expresados en ${(Config.MONEDAS[cur] || Config.MONEDAS.USD).nombre} (${cur})`, L, y, { f: 'F2', t: 8.5, color: AZ });

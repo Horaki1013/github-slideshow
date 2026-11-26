@@ -164,6 +164,7 @@ Menú de jefatura → **Leads del equipo** (ruta `#/leads-equipo`, `Rules.panelL
 - **Ventana de partes del Kit/Glb:** nuevas columnas **Orden** (la 1 es la principal) y **Descripción para cotización**, a la izquierda del N° de parte. La parte principal da el código y la descripción del ítem (como antes). En las demás se escribe lo que verá el cliente (p. ej. "PROCESADOR INTEL CORE I5", "RAM 8 GB").
 - **En la cotización (PDF y vista previa):** bajo la descripción del ítem aparece **"Incluye:"** con esas descripciones, una por línea, y "x2" si la cantidad de la parte es distinta de 1 (`Rules.incluyeDe`). Las partes sin descripción para cotización no salen. Los códigos y descripciones internas de las partes no se imprimen.
 - Se guarda en la cotización y en la biblioteca de BOM (`partes[].descCot`). El Excel del BOM la incluye en una columna al final.
+- **Nota de opcionales:** bajo la tabla de opcionales del PDF y la vista previa: "Los opcionales son equipos complementarios que recomendamos para el óptimo funcionamiento de la solución cotizada.", seguida de la indicación de detallarlos en la Orden de Compra y de que no incluyen el IGV.
 - **Descripciones alineadas a la izquierda:** en el PDF, la descripción de cada ítem va alineada a la izquierda (antes, centrada), centrada solo en vertical.
 
 ### Agenda que la plataforma programa a cada usuario, y avisos al equipo (26/11/2026)
