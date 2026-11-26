@@ -454,7 +454,7 @@ tr.quick-open>td{border-bottom:0}
 .tot-box .totals{margin-top:0}
 .items-edit tr.fila-opc td{background:#fff8e6}
 .items-edit td.center{text-align:center}
-.hoja .h-items td.d{background:#c5d9f1}
+.hoja .h-items td.d{background:#c5d9f1;text-align:left}
 .hoja .h-items tr.opc td:first-child{white-space:nowrap}
 .hoja .h-banda{background:#f1f5f9;color:var(--brand);font-weight:700;padding:5px 6px;margin-top:12px}
 .hoja .h-wm{color:#b42318;font-weight:700;font-size:9.5px;text-align:center;margin-bottom:6px;letter-spacing:.05em}
@@ -479,6 +479,7 @@ tr.quick-open>td{border-bottom:0}
 .opc-head.alt-head { color: var(--warn); }
 .lista-item { margin-top: 3px; font-size: 11px; padding: 2px 4px; min-height: 0; width: 100%; }
 .h-desc { color: #a15c00; font-size: 10px; margin-top: 2px; }
+.h-inc { font-size: 10px; margin-top: 3px; text-align: left; }
 .notas-mini { background: #fff8e6; border: 1px solid #f3dfb0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; display: grid; gap: 3px; margin: 4px 0; }
 .op-grupo .op-main { cursor: default; } .grupo-opps { margin: 4px 0 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; } .grupo-opps li { overflow-wrap: anywhere; }
 .seg-opps { display: grid; gap: 6px; } .seg-opp { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer; } .seg-opp input { margin-top: 3px; }
@@ -2758,6 +2759,13 @@ const Rules = (() => {
   }
   /** Ítems que suman al total (los opcionales se cotizan aparte) */
   /** Kit o Glb con desglose: en la cotización sale con el código, la descripción y la marca de su PRIMERA parte (p. ej. un ARK) */
+  /** Kit/Glb: lo que va bajo el ítem en la cotización ("Incluye:"): la "Descripción para cotización" de las partes después de la principal
+      (las que la dejan vacía no salen); con cantidad distinta de 1 se agrega "x2" */
+  function incluyeDe(it) {
+    if (!it || !/^(kit|glb)$/i.test(it.unidad || '') || !Array.isArray(it.partes)) return [];
+    return it.partes.filter(x => String(x.codigo || x.descripcion || '').trim()).slice(1).filter(x => String(x.descCot || '').trim())
+      .map(x => String(x.descCot).trim() + ((+x.cant || 0) !== 1 ? ` x${Util.nf2.format(+x.cant || 0).replace(/\.00$/, '')}` : ''));
+  }
   function nombreDesdePartes(it) {
     if (!it || !/^(kit|glb)$/i.test(it.unidad || '') || !Array.isArray(it.partes)) return it;
     const p0 = it.partes.find(x => String(x.codigo || x.descripcion || '').trim()); if (!p0) return it;
@@ -3512,6 +3520,45 @@ const Rules = (() => {
   /** Oportunidades que el vendedor clasificó como lead al cotizar (sin un lead de la bandeja detrás, que ya se lista aparte) */
   const leadsClasificados = (db, vendedorId) => reales(db).filter(o => (!vendedorId || o.vendedorId === vendedorId) && o.origenOpp && !o.origenOpp.leadId && esOrigenLead(db, o.origenOpp.id))
     .sort((a, b) => String(b.fechaInicio).localeCompare(String(a.fechaInicio)));
+  /** Leads del equipo (jefatura): oportunidades con origen de tipo lead (de la bandeja o clasificadas por el vendedor al cotizar),
+      con lo cotizado, montos en USD, probabilidad, horizonte de facturación, origen y última bitácora; y resúmenes por marca, origen, vendedor y producto.
+      F: { desde, hasta (fecha de inicio), vendedorId, origen, marca, estado ('abiertas' | 'ganadas' | 'perdidas' | 'pausa'), q } */
+  function panelLeads(db, F = {}, hoy = Util.today()) {
+    const t = Util.norm(F.q || '');
+    const filas = reales(db).filter(o => o.origenOpp && esOrigenLead(db, o.origenOpp.id) && (!F.vendedorId || o.vendedorId === F.vendedorId) && (!F.origen || o.origenOpp.id === F.origen)
+      && (!F.desde || (o.fechaInicio || '') >= F.desde) && (!F.hasta || (o.fechaInicio || '') <= F.hasta) && (!F.estado || estadoReporte(o) === F.estado)).map(o => {
+      const q = vigente(db, o), cur = q ? q.moneda : 'USD', its = q ? principales(q) : [], usd = montoUSD(db, o), neto = q ? totales(q).neto : 0;
+      // Monto en USD de cada línea (para repartir por marca y por producto)
+      const lineas = its.map(it => ({ it, usd: neto > 0 ? Util.round2(usd * lineaNeta(it, cur) / neto) : 0 }));
+      const porMarca = {}; lineas.forEach(l => { const k = l.it.marca || '(sin marca)'; porMarca[k] = (porMarca[k] || 0) + l.usd; });
+      if (!lineas.length) porMarca[o.origenOpp.marca || '(sin marca)'] = usd;
+      const fu = followupsOf(db, o).filter(f => f.canal !== 'Sistema'), u = fu[fu.length - 1] || null, ff = fechaFactura(db, o), cl = (ix(db).client || {})[o.clienteId] || db.clients.find(x => x.id === o.clienteId) || {};
+      return { o, q, id: o.id, numero: q ? q.numero : '', fecha: o.fechaInicio || '', vendedorId: o.vendedorId, cliente: cl.razonSocial || '', proyecto: (db.projects.find(p => p.id === o.proyectoId) || {}).nombre || '',
+        lineas, marcas: Object.keys(porMarca), porMarca, cotizado: its.map(it => `${it.cant} x ${it.codigo}${it.marca ? ' (' + it.marca + ')' : ''}${it.descripcion ? ' ' + it.descripcion : ''}`).join('; '),
+        resumen: resumenItems(q), monto: usd, moneda: cur, montoOriginal: neto, etapa: (etapa(o.etapa) || {}).nombre || o.etapa, estado: estadoReporte(o), prob: o.etapa === 'pausa' ? 0 : prob(o.etapa),
+        ponderado: ponderado(db, o), fechaFactura: ff || '', horizonte: ff ? horizonteNombre(horizonte(ff, hoy)) : 'Sin fecha', fechaOC: o.fechaOC || '', origen: origenNombre(db, o.origenOpp), origenId: o.origenOpp.id,
+        ultimo: u ? { fecha: u.fecha, canal: u.canal || '', nota: u.nota || '' } : null };
+    }).filter(r => (!F.marca || r.marcas.includes(F.marca)) && (!t || Util.norm([r.id, r.cliente, r.proyecto, r.numero, r.cotizado, r.origen].join(' ')).includes(t)))
+      .sort((a, b) => b.fecha.localeCompare(a.fecha));
+    const gan = r => r.estado === 'ganadas', per = r => r.estado === 'perdidas';
+    const sumar = (m, k, r, monto) => { const g = m.get(k) || { clave: k, n: 0, monto: 0, ganados: 0, montoGanado: 0, perdidos: 0 }; g.n++; g.monto += monto; if (gan(r)) { g.ganados++; g.montoGanado += monto; } if (per(r)) g.perdidos++; m.set(k, g); };
+    const lista = m => [...m.values()].map(g => Object.assign(g, { monto: Util.round2(g.monto), montoGanado: Util.round2(g.montoGanado), tasa: g.ganados + g.perdidos ? g.ganados / (g.ganados + g.perdidos) : null })).sort((a, b) => b.n - a.n || b.monto - a.monto);
+    const mM = new Map(), mO = new Map(), mV = new Map(), mP = new Map();
+    filas.forEach(r => {
+      Object.entries(r.porMarca).forEach(([k, v]) => sumar(mM, k, r, v));
+      sumar(mO, r.origen, r, r.monto); sumar(mV, r.vendedorId, r, r.monto);
+      r.lineas.forEach(l => { const k = String(l.it.codigo || '').trim().toUpperCase(); if (!k) return;
+        const g = mP.get(k) || { clave: k, codigo: l.it.codigo, marca: l.it.marca || '', descripcion: l.it.descripcion || '', leads: new Set(), cant: 0, monto: 0, ganados: 0, montoGanado: 0 };
+        g.leads.add(r.id); g.cant += +l.it.cant || 0; g.monto += l.usd; if (gan(r)) { g.ganados++; g.montoGanado += l.usd; } mP.set(k, g); });
+    });
+    const productos = [...mP.values()].map(g => Object.assign(g, { n: g.leads.size, monto: Util.round2(g.monto), montoGanado: Util.round2(g.montoGanado), leads: undefined })).sort((a, b) => b.n - a.n || b.monto - a.monto);
+    const g = filas.filter(gan), p = filas.filter(per), ab = filas.filter(r => r.estado === 'abiertas');
+    const tot = { n: filas.length, monto: Util.round2(Util.sum(filas, r => r.monto)), ganados: g.length, montoGanado: Util.round2(Util.sum(g, r => r.monto)), perdidos: p.length,
+      tasa: g.length + p.length ? g.length / (g.length + p.length) : null, abiertas: ab.length, ponderado: Util.round2(Util.sum(ab, r => r.ponderado)) };
+    const porMarca = lista(mM);
+    return { filas, tot, porMarca, masLeads: porMarca[0] || null, masVendida: porMarca.filter(x => x.ganados).sort((a, b) => b.ganados - a.ganados || b.montoGanado - a.montoGanado)[0] || null,
+      porOrigen: lista(mO), porVendedor: lista(mV), productos };
+  }
   /** Rankings personales del vendedor en un período: clientes y productos que más vende (ventas ganadas) y tipos de lead más comunes */
   function rankingPersonal(db, vendedorId, desde, hasta) {
     const ganadas = reales(db).filter(o => o.vendedorId === vendedorId && o.etapa === 'ganada' && (o.fechaCierre || '') >= desde && (o.fechaCierre || '') <= hasta);
@@ -3584,14 +3631,14 @@ const Rules = (() => {
   const puedeRuta = (user, ruta) => !!user && (RUTAS[user.rol] || []).includes(ruta);
   const oppsVisibles = (db, user) => user.rol === 'jefatura' ? db.opps : user.rol === 'vendedor' ? db.opps.filter(o => o.vendedorId === user.id) : [];
 
-  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, descEsPct, conDescItems, lineaNeta, nombreDesdePartes, impuestoDe, tcUSD, convertir, alternativas, opcionales,
+  return { etapa, condicion, plazo, motivo, esAbierta, ETAPAS_ABIERTAS, prob, reales, descItem, descEsPct, conDescItems, lineaNeta, nombreDesdePartes, incluyeDe, impuestoDe, tcUSD, convertir, alternativas, opcionales,
     listas, listaDe, listaIdDe, listasDeOficina, tcsDelDia, LISTA_GENERAL, empresaOficina, rankingClientes, reporteFollowup, ESTADOS_REPORTE, esGerencia, alcance, oficinaDe, vista, vendedoresActivos, puedeRol, ix, quotesOf, followupsOf, vigente, vencidasSinOC, totales, quoteNetoUSD,
     quoteTotalUSD, montoUSD, ponderado, marcaPrincipal, marcas, resumenItems, fechaOCRef, fechaFactura, eventosCobro, horizonte, fechaDeHorizonte,
     horizonteNombre, proyeccion, facturadas, facturadoMes, avanceMeta, comision, comisionProyectada, tasaCierre, cicloVenta, cotizacionesEnviadas, ranking, segmento,
     alertasOpp, alertasUsuario, recordatorios, puedeNotaCliente, saludSeguimiento, cuentas, cuenta, alertaCuenta, validarCliente, validarContacto, esPeru, sedesDe, normSede, validarCambioEtapa, validarCotizacion, validarOportunidad, candidatosRevision,
     siguienteRevision, numeroDuplicado, hermanos, INICIO, puede, puedeRuta, oppsVisibles, puedePaso, numeroAM, principales, rolNombre, planClientes,
     origenes, origenDe, origenNombre, validarOrigen, reglasLead, clasificarCorreo, sugerirVendedor, leadPendiente, horasSinAtender, indicadoresLeads,
-    esOrigenLead, leadsClasificados, rankingPersonal, normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
+    esOrigenLead, leadsClasificados, panelLeads, rankingPersonal, normCod, marcaInv, productos, stock, almacenesActivos, stockProducto, plazoSugerido, interpretarStock, maxSemanas };
 })();
 
 /* =====================================================================
@@ -4881,7 +4928,7 @@ const Repo = (() => {
       if (!nombre) fail('Ponle un nombre al BOM (p. ej. "Tablero de control 24 V").', { bomNombre: 'Obligatorio' });
       if (!Config.MONEDAS[d.moneda]) fail('Moneda no válida.');
       const partes = (d.partes || []).filter(x => String(x.codigo || x.descripcion || '').trim())
-        .map(x => ({ cant: Math.max(0, +x.cant || 0), codigo: String(x.codigo || '').trim(), marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: Util.round2(Math.max(0, +x.valorUnit || 0)) }));
+        .map(x => ({ cant: Math.max(0, +x.cant || 0), codigo: String(x.codigo || '').trim(), marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: Util.round2(Math.max(0, +x.valorUnit || 0)), ...(String(x.descCot || '').trim() ? { descCot: String(x.descCot).trim().slice(0, 160) } : {}) }));
       if (!partes.length) fail('El BOM no tiene partes.');
       const unidad = /^glb$/i.test(d.unidad) ? 'Glb' : 'Kit';
       db.boms = db.boms || [];
@@ -5541,7 +5588,8 @@ const Repo = (() => {
         it.listaId ? { listaId: it.listaId, listaPrecio: +it.listaPrecio || null, listaMoneda: it.listaMoneda || 'USD' } : {},
         // Desglose interno de un kit o global: no sale en el PDF
         Array.isArray(it.partes) && it.partes.some(x => String(x.codigo || x.descripcion || '').trim()) ? { partes: it.partes.filter(x => String(x.codigo || x.descripcion || '').trim()).map(x => ({ cant: +x.cant || 0, codigo: String(x.codigo || '').trim(),
-          marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: rd(+x.valorUnit || 0), ...(x.listaId ? { listaId: x.listaId } : {}) })) } : {}));
+          marca: String(x.marca || '').trim(), descripcion: String(x.descripcion || '').trim(), valorUnit: rd(+x.valorUnit || 0), ...(x.listaId ? { listaId: x.listaId } : {}),
+          ...(String(x.descCot || '').trim() ? { descCot: String(x.descCot).trim().slice(0, 160) } : {}) })) } : {}));
       items.forEach(Rules.nombreDesdePartes);   // Kit/Glb: código y descripción de su primera parte
       const ofi = Config.OFICINA_DEF[Rules.oficinaDe(db, p.vendedorId)] || Config.OFICINA_DEF.PE, imp = (db.empresa && db.empresa.oficinas && db.empresa.oficinas[Rules.oficinaDe(db, p.vendedorId)]) || {};
       const tcs = {}; Object.keys(Config.MONEDAS).forEach(m => { if (m !== 'USD' && p.tcs && +p.tcs[m] > 0) tcs[m] = +p.tcs[m]; });
@@ -5799,6 +5847,10 @@ const SelfTest = (() => {
       const it = Rules.nombreDesdePartes({ unidad: 'Glb', codigo: 'TAB', descripcion: 'Tablero', marca: 'Moxa', partes: [{ codigo: 'ARK-1123', descripcion: 'Computador embebido ARK', marca: 'Advantech' }, { codigo: 'X' }] });
       const und = Rules.nombreDesdePartes({ unidad: 'Und', codigo: 'A', partes: [{ codigo: 'B' }] });
       return it.codigo === 'ARK-1123' && it.descripcion === 'Computador embebido ARK' && it.marca === 'Advantech' && und.codigo === 'A';
+    }],
+    ['Kit/Glb: "Incluye" con la descripción para cotización de las demás partes (con cantidad; sin descripción no sale)', () => {
+      const inc = Rules.incluyeDe({ unidad: 'Glb', partes: [{ codigo: 'ARK-1', descCot: 'Equipo' }, { codigo: 'I5', descCot: 'PROCESADOR INTEL CORE I5', cant: 1 }, { codigo: 'RAM', descCot: 'RAM 8 GB', cant: 2 }, { codigo: 'TORN', cant: 4 }] });
+      return inc.join('|') === 'PROCESADOR INTEL CORE I5|RAM 8 GB x2' && !Rules.incluyeDe({ unidad: 'Und', partes: [{ codigo: 'A' }, { codigo: 'B', descCot: 'x' }] }).length;
     }],
   ];
   function run() {
@@ -6565,7 +6617,8 @@ const UI = (() => {
     const dscUnit = it => { const dsc = Rules.descItem(it, cur); if (!dsc) return [];
       return Rules.descEsPct(it) ? [`Dscto. ${+it.desc} %`, `− ${n2(Util.redondear((+it.valorUnit || 0) * (+it.desc) / 100, cur))} c/u`] : ['Dscto. en total', `− ${n2(dsc)}`]; };
     const descTxt = it => { const d = dscUnit(it); return d.length ? `<div class="h-desc">${d.map(E).join('<br>')}</div>` : ''; };
-    const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}</td><td class="r">${n2(+it.valorUnit)}${descTxt(it)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
+    const incluyeTxt = it => { const inc = Rules.incluyeDe(it); return inc.length ? `<div class="h-inc"><strong>Incluye:</strong>${inc.map(x => `<br>· ${E(x)}`).join('')}</div>` : ''; };
+    const filaItem = (it, et) => `<tr${it.opcional ? ' class="opc"' : ''}><td>${et}</td><td class="r">${E(it.cant)}</td>${col.unidad ? `<td>${E(it.unidad)}</td>` : ''}${col.codigo ? `<td><strong>${E(it.codigo)}</strong></td>` : ''}${col.marca ? `<td><strong>${E(it.marca)}</strong></td>` : ''}<td class="d">${E(it.descripcion)}${incluyeTxt(it)}</td><td class="r">${n2(+it.valorUnit)}${descTxt(it)}</td><td class="r">${n2(Rules.lineaNeta(it, cur))}</td></tr>`;
     const cabItems = `<thead><tr><th>Item</th><th class="r">Cant.</th>${col.unidad ? '<th>Uni.</th>' : ''}${col.codigo ? '<th>Código</th>' : ''}${col.marca ? '<th>Marca</th>' : ''}<th>Descripción</th><th class="r">Valor Unit.* ${cur}</th><th class="r">Total Neto ${cur}</th></tr></thead>`;
     const anx = anexosPrevistos({ q, vendedor, formato }), hje = hojasEnlace({ q, vendedor, formato });
     const ref = q.referencia || (proyecto && proyecto.tipo !== 'directa' && proyecto.nombre ? `${proyecto.nombre} — ${proyecto.usuarioFinal}` : '');
@@ -6722,7 +6775,9 @@ const UI = (() => {
         // El descuento se detalla bajo el valor unitario; la etiqueta del ítem puede ir en varias líneas (Alt. 1 / reemplaza al ítem 1)
         const vuL = dsc ? (Rules.descEsPct(it) ? [`Dscto. ${+it.desc} %`, `− ${n2(Util.redondear((+it.valorUnit || 0) * (+it.desc) / 100, cur))} c/u`] : ['Dscto. en total', `− ${n2(dsc)}`]) : [], et = String(etiqueta(i)).split('\n');
         const cod = C.cod ? doc.partir(it.codigo, C.cod.w - 6, 'F2', 7.5) : [], mar = C.mar ? doc.partir(it.marca, C.mar.w - 6, 'F2', 7.5) : [], des = doc.partir((C.cod ? '' : it.codigo + (C.mar ? '' : ' · ' + it.marca) + '\n') + txtD, C.des.w - 10, 'F1', 7);
-        const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length, 1 + vuL.length, et.length, 1), h = nl * lh + 10;
+        // Kit/Glb: "Incluye:" con la descripción para cotización de sus partes
+        const inc = Rules.incluyeDe(it), incL = inc.length ? ['Incluye:', ...inc.flatMap(x => doc.partir('· ' + x, C.des.w - 10, 'F1', 6.5))] : [];
+        const lh = 8.6, nl = Math.max(cod.length, mar.length, des.length + incL.length, 1 + vuL.length, et.length, 1), h = nl * lh + 10;
         if (asegurar(h)) cabecera();
         const mid = y + h / 2;
         doc.rect(C.des.x + 2, y + 2, C.des.w - 4, h - 4, { fill: CELESTE });
@@ -6730,7 +6785,10 @@ const UI = (() => {
         doc.texto(Util.nf2.format(+it.cant || 0).replace(/\.00$/, ''), C.cant.x, mid + 2.5, { t: 7.5, align: 'center', w: C.cant.w, color: NEGRO });
         if (C.uni) doc.texto(it.unidad || 'Und', C.uni.x, mid + 2.5, { t: 7.5, align: 'center', w: C.uni.w, color: NEGRO });
         const centrar = (ls, c, f, tt, k0) => ls.forEach((s, k) => doc.texto(s, c.x, mid - (ls.length * lh) / 2 + lh * (k + 0.8), { f, t: tt, align: 'center', w: c.w, color: NEGRO }));
-        if (C.cod) centrar(cod, C.cod, 'F2', 7.5); if (C.mar) centrar(mar, C.mar, 'F2', 7.5); centrar(des, C.des, 'F1', 7);
+        if (C.cod) centrar(cod, C.cod, 'F2', 7.5); if (C.mar) centrar(mar, C.mar, 'F2', 7.5);
+        // Descripción alineada a la izquierda (centrada en vertical), con "Incluye:" debajo en los Kit/Glb
+        const todas = [...des, ...incL], y0 = mid - (todas.length * lh) / 2;
+        todas.forEach((s, k) => doc.texto(s, C.des.x + 6, y0 + lh * (k + 0.8), k < des.length ? { f: 'F1', t: 7, color: NEGRO } : { f: k === des.length ? 'F2' : 'F1', t: 6.5, color: NEGRO }));
         [n2(+it.valorUnit), ...vuL].forEach((s, k, a) => doc.texto(s, C.vu.x + C.vu.w - 4, mid - (a.length * lh) / 2 + lh * (k + 0.8), { t: k ? 6.5 : 7.5, align: 'right', color: k ? NARANJA : NEGRO }));
         doc.texto(n2(Rules.lineaNeta(it, cur)), C.tot.x + C.tot.w - 4, mid + 2.5, { t: 7.5, align: 'right', color: NEGRO });
         y += h;
@@ -8614,14 +8672,14 @@ const UI = (() => {
     const tipo = /^glb$/i.test(it.unidad) ? 'GLB' : 'KIT', et = etiquetaItem(items, it), varios = items.filter(x => /^(kit|glb)$/i.test(x.unidad) && (x.partes || []).length || x === it).length > 1;
     const ps = (partes || it.partes || []).filter(x => String(x.codigo || x.descripcion || '').trim()), r = v => Util.redondear(+v || 0, moneda);
     const suma = r(Util.sum(ps, x => (+x.cant || 0) * (+x.valorUnit || 0)));
-    const filas = [['N°', 'Cant.', 'N° de parte', 'Marca', 'Descripción', `V. unit. (${moneda})`, `Total (${moneda})`],
-      ...ps.map((x, k) => [k + 1, +x.cant || 0, x.codigo || '', x.marca || '', x.descripcion || '', r(x.valorUnit), r((+x.cant || 0) * (+x.valorUnit || 0))]),
+    const filas = [['N°', 'Cant.', 'N° de parte', 'Marca', 'Descripción', `V. unit. (${moneda})`, `Total (${moneda})`, 'Descripción para cotización (sale en el PDF)'],
+      ...ps.map((x, k) => [k + 1, +x.cant || 0, x.codigo || '', x.marca || '', x.descripcion || '', r(x.valorUnit), r((+x.cant || 0) * (+x.valorUnit || 0)), k ? x.descCot || '' : '(ítem principal)']),
       [], ['', '', '', '', `Suma por ${it.unidad}`, '', suma], ['', '', '', '', `Cantidad de ${it.unidad} en la cotización`, '', +it.cant || 0], ['', '', '', '', 'Total de las partes', '', r(suma * (+it.cant || 0))],
       ...(Math.abs(r(it.valorUnit) - suma) > 0.005 ? [['', '', '', '', `Precio del ${it.unidad} en la cotización (editado)`, '', r(it.valorUnit)]] : []),
       [], ['Cotización', numero || '(sin número)'], ['Cliente', cliente || '(sin cliente)'], ['Ítem', `${et.replace(/(\d+)$/, ' $1')} · ${it.codigo || ''} · ${it.descripcion || ''}`], ['Moneda', moneda], ['Fecha de emisión', fecha ? Util.fmtDate(fecha) : ''],
-      ['Nota', 'Documento interno: en el PDF de la cotización el cliente ve solo el ítem.']];
+      ['Nota', 'Documento interno: en el PDF el cliente ve el ítem y, debajo, "Incluye:" con la descripción para cotización de las demás partes.']];
     const nombre = Util.nombreArchivo(`BOM-${tipo}-${numero || 'SIN-NUMERO'}-${cliente || 'SIN-CLIENTE'}${varios ? '-' + et : ''}`).slice(0, 150).replace(/[.\s-]+$/, '') + '.xlsx';   // sin punto final (S.A.C..xlsx)
-    Util.descargar(Excel.libro([{ nombre: `BOM ${tipo} ${et}`, fija: true, anchos: [6, 8, 22, 14, 50, 16, 16], filas }]), nombre);
+    Util.descargar(Excel.libro([{ nombre: `BOM ${tipo} ${et}`, fija: true, anchos: [6, 8, 22, 14, 50, 16, 16, 34], filas }]), nombre);
     return nombre;
   }
   /** Desde una cotización registrada (ficha de la oportunidad o visor) */
@@ -8635,12 +8693,13 @@ const UI = (() => {
     const d = S.nueva.d, it = d.items[i], cur = d.moneda;
     const partes = (it.partes || []).map(x => Object.assign({}, x));
     if (!partes.length) partes.push({ cant: 1, codigo: '', marca: '', descripcion: '', valorUnit: '' });
-    const filaP = (x, k) => `<tr><td><input type="number" min="0" data-kp="${k}" data-kk="cant" value="${E(x.cant)}" style="width:64px"></td>
+    const filaP = (x, k) => `<tr><td class="nowrap small">${k + 1}${k ? '' : '<div class="muted">principal</div>'}</td><td><input type="number" min="0" data-kp="${k}" data-kk="cant" value="${E(x.cant)}" style="width:64px"></td>
+      <td>${k ? `<input type="text" data-kp="${k}" data-kk="descCot" value="${E(x.descCot || '')}" maxlength="160" placeholder="Ej.: RAM 8 GB" aria-label="Descripción para cotización de la parte ${k + 1}" style="min-width:150px">` : '<span class="small muted">Va como el ítem (código y descripción)</span>'}</td>
       <td><input type="text" data-kp="${k}" data-kk="codigo" value="${E(x.codigo)}" placeholder="N° de parte" list="kit-cods"></td><td><input type="text" data-kp="${k}" data-kk="descripcion" value="${E(x.descripcion)}"></td>
       <td><input type="number" min="0" step="any" data-kp="${k}" data-kk="valorUnit" value="${E(x.valorUnit)}" style="width:110px"></td><td class="r num" data-kt="${k}">${Util.nfMon((+x.cant || 0) * (+x.valorUnit || 0), cur)}</td>
       <td class="nowrap"><span class="nq-orden"><button type="button" class="btn sm ghost" data-kmov="${k}" data-d="-1" aria-label="Subir parte" title="Subir"${k ? '' : ' disabled'}>▲</button><button type="button" class="btn sm ghost" data-kmov="${k}" data-d="1" aria-label="Bajar parte" title="Bajar"${k < partes.length - 1 ? '' : ' disabled'}>▼</button></span><button type="button" class="btn sm ghost" data-kdel="${k}" aria-label="Quitar parte">${I('x')}</button></td></tr>`;
-    const cuerpo = () => `<p class="small muted" style="margin-top:0">${auto ? 'Opcional: ' : ''}Detalla qué partes incluye <strong>${E(it.codigo || 'este ítem')}</strong> (${E(it.unidad)}). Es interno: en el PDF el cliente ve solo el ítem, <strong>con el código y la descripción de la primera parte</strong> (ordénalas con ▲▼). Al escribir un N° de parte de la lista se completan descripción y precio (${cur}), editables.</p>
-      <div class="table-wrap"><table class="tbl"><thead><tr><th>Cant.</th><th>N° de parte</th><th>Descripción</th><th>V. unit. (${cur})</th><th class="r">Total</th><th></th></tr></thead><tbody id="kit-filas">${partes.map(filaP).join('')}</tbody></table></div>
+    const cuerpo = () => `<p class="small muted" style="margin-top:0">${auto ? 'Opcional: ' : ''}Detalla qué partes incluye <strong>${E(it.codigo || 'este ítem')}</strong> (${E(it.unidad)}). En el PDF el cliente ve el ítem <strong>con el código y la descripción de la primera parte</strong> (ordénalas con ▲▼) y, debajo, <strong>«Incluye:»</strong> con la <strong>descripción para cotización</strong> de las demás partes (si la dejas vacía, esa parte no sale; con cantidad mayor a 1 se agrega "x2"). Lo demás es interno. Al escribir un N° de parte de la lista se completan descripción y precio (${cur}), editables.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Orden</th><th>Cant.</th><th title="Lo único de esta parte que ve el cliente, bajo el ítem: «Incluye: …»">Descripción para cotización</th><th>N° de parte</th><th>Descripción</th><th>V. unit. (${cur})</th><th class="r">Total</th><th></th></tr></thead><tbody id="kit-filas">${partes.map(filaP).join('')}</tbody></table></div>
       <datalist id="kit-cods"></datalist>
       <div class="btn-row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-kadd="1">${I('plus')} Agregar parte</button><strong id="kit-suma">Suma por ${E(it.unidad)}: ${Util.money(Util.sum(partes, x => (+x.cant || 0) * (+x.valorUnit || 0)), cur)}</strong></div>
       <div class="kit-bom"><div class="small" style="font-weight:700;color:var(--text-2)">Biblioteca de BOM <span class="muted" style="font-weight:400">(la ve todo el equipo)</span></div>

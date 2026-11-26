@@ -146,6 +146,13 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### BOM: descripción para cotización e "Incluye" (27/11/2026)
+
+- **Ventana de partes del Kit/Glb:** nuevas columnas **Orden** (la 1 es la principal) y **Descripción para cotización**, a la izquierda del N° de parte. La parte principal da el código y la descripción del ítem (como antes). En las demás se escribe lo que verá el cliente (p. ej. "PROCESADOR INTEL CORE I5", "RAM 8 GB").
+- **En la cotización (PDF y vista previa):** bajo la descripción del ítem aparece **"Incluye:"** con esas descripciones, una por línea, y "x2" si la cantidad de la parte es distinta de 1 (`Rules.incluyeDe`). Las partes sin descripción para cotización no salen. Los códigos y descripciones internas de las partes no se imprimen.
+- Se guarda en la cotización y en la biblioteca de BOM (`partes[].descCot`). El Excel del BOM la incluye en una columna al final.
+- **Descripciones alineadas a la izquierda:** en el PDF, la descripción de cada ítem va alineada a la izquierda (antes, centrada), centrada solo en vertical.
+
 ### Agenda que la plataforma programa a cada usuario, y avisos al equipo (26/11/2026)
 
 Mecanismo general para que un módulo agende algo en el calendario de otra persona y avise al equipo:
