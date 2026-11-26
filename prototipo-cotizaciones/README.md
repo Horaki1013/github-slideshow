@@ -151,6 +151,7 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - Si la carpeta no responde, el aviso dice en qué archivo y paso se quedó (p. ej. "leyendo lista-precios.json (4.2 MB), hace 20 s").
 - Botón **"Diagnóstico de la carpeta"** en el ingreso: prueba por separado el permiso, el listado de la carpeta y la búsqueda, apertura y lectura de `datos.json`, `lista-precios.json` y `bloqueo.json`, con su tiempo (plazo de 15 s por paso), para enviar una captura a soporte (`AlmacenCompartido.diagnosticar`).
 - Al elegir la carpeta, queda recordada aunque la primera conexión no responda, para poder reintentar o diagnosticar.
+- Si la carpeta recordada no responde (por ejemplo, se movió o cambió de nombre en OneDrive), el aviso ofrece **"Elegir otra carpeta"**: se vuelve a elegir la del equipo y conecta. El aviso también nombra los pasos previos a la lectura (recuperar la carpeta, consultar el permiso, buscar `datos.json`) y el diagnóstico termina aunque el permiso no responda.
 
 ### Corrección: empezar otra cotización con una guardada abierta (25/11/2026)
 
