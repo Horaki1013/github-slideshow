@@ -3637,7 +3637,16 @@ const AlmacenCompartido = (() => {
   const esperar = ms => new Promise(r => setTimeout(r, ms));
   const firma = f => f.lastModified + ':' + f.size;
   async function archivo(nombre) { try { return await dir.getFileHandle(nombre); } catch (e) { if (e.name === 'NotFoundError' || e.name === 'TypeError') return null; throw e; } }
-  async function leerArchivo(nombre) { const h = await archivo(nombre); if (!h) return null; const f = await h.getFile(); return { texto: await f.text(), firma: firma(f) }; }
+  // Paso en curso (para decir en qué archivo se queda si la carpeta no responde)
+  let paso = null;
+  const marcar = t => { paso = { t, desde: Date.now() }; };
+  const mb = n => (n / 1048576).toFixed(1) + ' MB';
+  async function leerArchivo(nombre) {
+    marcar(`buscando ${nombre}`); const h = await archivo(nombre); if (!h) { paso = null; return null; }
+    marcar(`abriendo ${nombre}`); const f = await h.getFile();
+    marcar(`leyendo ${nombre} (${mb(f.size)})`); const texto = await f.text();
+    paso = null; return { texto, firma: firma(f) };
+  }
   async function firmaDe(nombre) { const h = await archivo(nombre); return h ? firma(await h.getFile()) : null; }
   async function escribirArchivo(nombre, texto, carpeta) {
     const h = await (carpeta || dir).getFileHandle(nombre, { create: true });
@@ -3661,6 +3670,26 @@ const AlmacenCompartido = (() => {
     /** Abre el selector de carpetas (requiere un clic del usuario) y recuerda la carpeta en este navegador */
     async elegir() { const h = await window.showDirectoryPicker({ id: 'techvalue-piloto', mode: 'readwrite' }); try { await Almacen.escribir('carpeta', h); } catch (e) { /* no se pudo recordar */ } return h; },
     async recordada() { try { return await Almacen.leer('carpeta'); } catch (e) { return null; } },
+    /** En qué paso está la lectura (o null), con los segundos que lleva */
+    pasoActual() { return paso ? `${paso.t}, hace ${Math.round((Date.now() - paso.desde) / 1000)} s` : null; },
+    /** Diagnóstico de la carpeta: cada paso por separado, con su tiempo y un plazo de 15 s por paso */
+    async diagnosticar(h) {
+      const out = [], plazo = (pr, ms = 15000) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error(`sin respuesta en ${ms / 1000} s`)), ms))]);
+      const medir = async (nombre, fn) => { const t0 = performance.now(); try { const r = await plazo(fn()); out.push({ paso: nombre, ok: true, ms: Math.round(performance.now() - t0), info: r && typeof r === 'object' ? 'encontrado' : r || '' }); return r; } catch (e) { out.push({ paso: nombre, ok: false, ms: Math.round(performance.now() - t0), info: e.message }); return undefined; } };
+      out.push({ paso: 'Navegador', ok: true, ms: 0, info: navigator.userAgent.replace(/^Mozilla\/5\.0 /, '') });
+      out.push({ paso: 'Carpeta', ok: true, ms: 0, info: h.name });
+      await medir('Permiso de lectura y escritura', async () => h.queryPermission ? await h.queryPermission({ mode: 'readwrite' }) : 'sin consulta');
+      await medir('Listar la carpeta', async () => { const xs = []; for await (const [n, e] of h.entries()) { xs.push(e.kind === 'directory' ? n + '/' : n); if (xs.length >= 40) break; } return xs.join(', '); });
+      for (const nombre of ['datos.json', 'lista-precios.json', 'bloqueo.json']) {
+        const fh = await medir(`${nombre}: buscar`, async () => { try { return await h.getFileHandle(nombre); } catch (e) { if (e.name === 'NotFoundError') return null; throw e; } });
+        if (!fh) { if (fh === null) out[out.length - 1].info = 'no existe'; continue; }
+        const f = await medir(`${nombre}: abrir`, () => fh.getFile());
+        if (!f) continue;
+        out[out.length - 1].info = `${mb(f.size)} · modificado ${new Date(f.lastModified).toLocaleString()}`;
+        await medir(`${nombre}: leer el contenido`, async () => { const t = await f.text(); return nombre === 'bloqueo.json' ? t.slice(0, 160) : `${t.length.toLocaleString()} caracteres, empieza con "${t.slice(0, 12)}"`; });
+      }
+      return out;
+    },
     async olvidar() { dir = null; try { await Almacen.borrar('carpeta'); } catch (e) { /* sin efecto */ } },
     async permiso(h, pedir) {
       const o = { mode: 'readwrite' };
@@ -4280,7 +4309,8 @@ const Repo = (() => {
           } catch (e) {
             clearTimeout(reloj);
             if (!estado.compartida) AlmacenCompartido.soltar();
-            estado.error = `No se pudo abrir la carpeta compartida: ${e.message}. Revisa que la carpeta esté disponible: si está en OneDrive, que OneDrive tenga la sesión iniciada y esté sincronizando (ícono de la nube junto al reloj); si es una unidad de red, que la VPN esté conectada. Luego pulsa "Conectar".`;
+            const enPaso = AlmacenCompartido.pasoActual();
+            estado.error = `No se pudo abrir la carpeta compartida: ${e.message}${enPaso ? ` (se quedó ${enPaso})` : ''}. Revisa que la carpeta esté disponible: si está en OneDrive, que OneDrive tenga la sesión iniciada y esté sincronizando (ícono de la nube junto al reloj); si es una unidad de red, que la VPN esté conectada. Luego pulsa "Conectar".`;
           }
         }
         // El archivo trae una versión nueva de los datos iniciales: se avisa y no se pisa lo guardado sin confirmar
@@ -7374,7 +7404,7 @@ const UI = (() => {
     if (!AlmacenCompartido.soportado()) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Este navegador no puede usar la carpeta compartida.</strong> Abre el archivo en Microsoft Edge o Google Chrome para trabajar con los datos del equipo. Aquí los datos quedan solo en este navegador.</div></div>`;
     if (e.compartida) return `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ Carpeta compartida: ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos.</div><button class="btn sm ghost" data-action="carpeta-elegir">Cambiar</button></div>`;
     if (S.carpetaRecordada) return `${e.error ? `<div class="alert bad" style="margin-bottom:8px" role="alert"><div class="small">${E(e.error)}</div></div>` : ''}<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Conecta la carpeta compartida «${E(S.carpetaRecordada.name)}»</strong> para ver los datos del equipo. El navegador te pedirá permiso.
-      <br><a href="#" data-action="carpeta-olvidar">No usar carpeta en esta PC</a></div><button class="btn sm primary" data-action="carpeta-conectar">Conectar</button></div>`;
+      <br><a href="#" data-action="carpeta-olvidar">No usar carpeta en esta PC</a></div><div class="btn-row"><button class="btn sm primary" data-action="carpeta-conectar">Conectar</button><button class="btn sm ghost" data-action="carpeta-diagnostico">Diagnóstico de la carpeta</button></div></div>`;
     return `<div class="alert info" style="margin-bottom:12px"><div class="small"><strong>Carpeta compartida del equipo.</strong> Elige la carpeta de red acordada (por ejemplo Z:\Ventas\Piloto); todos deben elegir la misma. Sin carpeta, los datos quedan solo en este navegador.</div><button class="btn sm primary" data-action="carpeta-elegir">Elegir carpeta…</button></div>`;
   }
   async function conectarCarpeta(h) {
@@ -7403,6 +7433,7 @@ const UI = (() => {
   }
   ACTIONS['carpeta-elegir'] = async () => {
     let h; try { h = await AlmacenCompartido.elegir(); } catch (e) { if (e.name !== 'AbortError') toast('No se pudo abrir la carpeta: ' + e.message); return; }
+    S.carpetaRecordada = h; render();   // queda recordada: si no responde, "Conectar" y "Diagnóstico" siguen a mano
     await conectarCarpeta(h);
   };
   ACTIONS['carpeta-conectar'] = async () => {
@@ -7412,7 +7443,18 @@ const UI = (() => {
     let reloj = null;
     const lenta = new Promise(res => { reloj = setTimeout(() => res('lenta'), 30000); });
     const r = await Promise.race([conectarCarpeta(h).then(() => 'ok'), lenta]); clearTimeout(reloj);
-    if (r === 'lenta') toast(`La carpeta ${h.name} no responde. Revisa que OneDrive tenga la sesión iniciada y esté sincronizando (o la VPN, si es una unidad de red) y vuelve a pulsar "Conectar".`, { ms: 12000 });
+    if (r === 'lenta') toast(`La carpeta ${h.name} no responde${AlmacenCompartido.pasoActual() ? ` (${AlmacenCompartido.pasoActual()})` : ''}. Revisa que OneDrive tenga la sesión iniciada y esté sincronizando (o la VPN, si es una unidad de red) y vuelve a pulsar "Conectar".`, { ms: 12000 });
+  };
+  /** Prueba la carpeta paso a paso y muestra el resultado (para enviar una captura a soporte) */
+  ACTIONS['carpeta-diagnostico'] = async () => {
+    const h = S.carpetaRecordada; if (!h) return;
+    try { if (!(await AlmacenCompartido.permiso(h, true))) { toast('Sin permiso para usar la carpeta.'); return; } } catch (e) { toast('No se pudo pedir permiso: ' + e.message); return; }
+    toast('Probando la carpeta paso a paso (puede tardar hasta un minuto)…', { ms: 8000 });
+    const r = await AlmacenCompartido.diagnosticar(h);
+    modal({ title: 'Diagnóstico de la carpeta compartida', wide: true, body: `<p class="small muted" style="margin-top:0">Toma una captura de esta ventana y envíala a soporte.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Paso</th><th>Resultado</th><th class="r">Tiempo</th><th>Detalle</th></tr></thead><tbody>
+      ${r.map(x => `<tr><td>${E(x.paso)}</td><td>${x.ok ? '<span class="chip ok">OK</span>' : '<span class="chip bad">Falla</span>'}</td><td class="r num nowrap">${x.ms ? (x.ms / 1000).toFixed(1) + ' s' : ''}</td><td class="small" style="overflow-wrap:anywhere">${E(String(x.info))}</td></tr>`).join('')}
+      </tbody></table></div>`, actions: [{ label: 'Cerrar', cls: 'primary' }] });
   };
   ACTIONS['carpeta-olvidar'] = async () => { await Repo.desconectarCarpeta(); S.carpetaRecordada = null; render(); };
   /* Logo de la empresa (solo en el piloto, viene en el archivo privado): reemplaza a la marca "tv" en el ingreso y en la barra superior */

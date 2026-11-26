@@ -146,6 +146,12 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### Diagnóstico de la carpeta compartida (26/11/2026)
+
+- Si la carpeta no responde, el aviso dice en qué archivo y paso se quedó (p. ej. "leyendo lista-precios.json (4.2 MB), hace 20 s").
+- Botón **"Diagnóstico de la carpeta"** en el ingreso: prueba por separado el permiso, el listado de la carpeta y la búsqueda, apertura y lectura de `datos.json`, `lista-precios.json` y `bloqueo.json`, con su tiempo (plazo de 15 s por paso), para enviar una captura a soporte (`AlmacenCompartido.diagnosticar`).
+- Al elegir la carpeta, queda recordada aunque la primera conexión no responda, para poder reintentar o diagnosticar.
+
 ### Corrección: empezar otra cotización con una guardada abierta (25/11/2026)
 
 Al retomar una cotización de "Para continuar después" (o con una a medio hacer), "Nueva cotización" siempre volvía a esa y no había forma de empezar otra. Ahora, sobre el formulario aparece "Estás editando la cotización de … · **Empezar una nueva**": la que está abierta queda en "Para continuar después" (sin duplicarse) y se abre una en blanco (`nq-empezar-otra`).
