@@ -185,6 +185,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .vt{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-weight:700;font-size:12px}
 .vt i{width:9px;height:9px;border-radius:3px;display:inline-block;flex:none}
 .kpi .k-sub{font-size:12px;color:var(--muted);margin-top:2px}
+label.check{display:flex;gap:6px;align-items:flex-start;cursor:pointer;font-size:14px}
+label.check input{margin-top:3px}
+.leq-bar{height:8px;border-radius:4px;background:var(--brand);min-width:2px}
+.leq-tabla tbody tr:hover td{background:var(--brand-50)}
 .meter{height:10px;background:var(--brand-50);border-radius:999px;overflow:hidden;margin-top:10px;border:1px solid var(--brand-100)}
 .meter > span{display:block;height:100%;background:var(--brand);border-radius:999px}
 .meter.big{height:16px}
@@ -3192,7 +3196,7 @@ const Rules = (() => {
   /* ---------- Permisos por rol ---------- */
   const RUTAS = {
     vendedor: ['mi-dia', 'oportunidades', 'op', 'nueva', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'ranking', 'reportes', 'agenda', 'notificaciones'],
-    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'ranking', 'reportes', 'agenda', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
+    jefatura: ['dashboard', 'oportunidades', 'op', 'leads', 'leads-equipo', 'stock', 'cuentas', 'cuenta', 'contactos', 'catalogo', 'proyeccion', 'facturado', 'ranking', 'reportes', 'agenda', 'postventa', 'usuarios', 'empresa', 'notificaciones'],
     finanzas: ['proyeccion', 'facturado', 'reportes', 'postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo', 'empresa'],
     logistica: ['postventa', 'cotizaciones', 'stock', 'contactos', 'catalogo'],
     gestion: ['stock', 'postventa', 'cotizaciones', 'catalogo', 'contactos'],
@@ -3528,8 +3532,8 @@ const Rules = (() => {
     const filas = reales(db).filter(o => o.origenOpp && esOrigenLead(db, o.origenOpp.id) && (!F.vendedorId || o.vendedorId === F.vendedorId) && (!F.origen || o.origenOpp.id === F.origen)
       && (!F.desde || (o.fechaInicio || '') >= F.desde) && (!F.hasta || (o.fechaInicio || '') <= F.hasta) && (!F.estado || estadoReporte(o) === F.estado)).map(o => {
       const q = vigente(db, o), cur = q ? q.moneda : 'USD', its = q ? principales(q) : [], usd = montoUSD(db, o), neto = q ? totales(q).neto : 0;
-      // Monto en USD de cada línea (para repartir por marca y por producto)
-      const lineas = its.map(it => ({ it, usd: neto > 0 ? Util.round2(usd * lineaNeta(it, cur) / neto) : 0 }));
+      // Monto en USD de cada línea, proporcional a su peso (con el descuento general repartido): para resumir por marca y por producto
+      const base = Util.sum(its, it => lineaNeta(it, cur)), lineas = its.map(it => ({ it, usd: base > 0 ? Util.round2(usd * lineaNeta(it, cur) / base) : 0 }));
       const porMarca = {}; lineas.forEach(l => { const k = l.it.marca || '(sin marca)'; porMarca[k] = (porMarca[k] || 0) + l.usd; });
       if (!lineas.length) porMarca[o.origenOpp.marca || '(sin marca)'] = usd;
       const fu = followupsOf(db, o).filter(f => f.canal !== 'Sistema'), u = fu[fu.length - 1] || null, ff = fechaFactura(db, o), cl = (ix(db).client || {})[o.clienteId] || db.clients.find(x => x.id === o.clienteId) || {};
@@ -5973,7 +5977,7 @@ const UI = (() => {
   const PAGES = {};
   const NAV = {
     vendedor: [['mi-dia', 'Mi día', 'home'], ['oportunidades', 'Oportunidades', 'list'], ['nueva', 'Nueva cotización', 'plus'], ['leads', 'Mis leads', 'mail'], ['cuentas', 'Mis cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Mi proyección', 'cash'], ['ranking', 'Mis rankings', 'trophy'], ['reportes', 'Reportes', 'list'], ['agenda', 'Mi agenda (Outlook)', 'cal'], ['notificaciones', 'Notificaciones', 'bell']],
-    jefatura: [['dashboard', 'Dashboard', 'chart'], ['reportes', 'Reportes de follow up', 'list'], ['agenda', 'Mi agenda (Outlook)', 'cal'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Empresa y plantilla', 'file']],
+    jefatura: [['dashboard', 'Dashboard', 'chart'], ['reportes', 'Reportes de follow up', 'list'], ['agenda', 'Mi agenda (Outlook)', 'cal'], ['oportunidades', 'Oportunidades', 'list'], ['leads', 'Bandeja de leads', 'mail'], ['leads-equipo', 'Leads del equipo', 'chart'], ['cuentas', 'Cuentas', 'users'], ['contactos', 'Directorio de clientes', 'book'], ['catalogo', 'Lista de precios', 'tag'], ['stock', 'Stock', 'stock'], ['proyeccion', 'Proyección de caja', 'cash'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['notificaciones', 'Notificaciones', 'bell'], ['usuarios', 'Usuarios', 'key'], ['empresa', 'Empresa y plantilla', 'file']],
     finanzas: [['proyeccion', 'Proyección de caja', 'cash'], ['reportes', 'Reportes de follow up', 'list'], ['facturado', 'Facturado', 'receipt'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['stock', 'Stock', 'stock'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book'], ['empresa', 'Empresa y plantilla', 'file']],
     logistica: [['postventa', 'Post-venta', 'box'], ['stock', 'Stock', 'stock'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
     gestion: [['stock', 'Stock', 'stock'], ['postventa', 'Post-venta', 'box'], ['cotizaciones', 'Cotizaciones', 'list'], ['catalogo', 'Lista de precios', 'tag'], ['contactos', 'Directorio de clientes', 'book']],
@@ -6218,7 +6222,7 @@ const UI = (() => {
     await Repo.reset();
     S.db = await snap();
     S.user = S.db.users.find(u => u.id === id) || null;
-    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 };
+    S.nueva = null; S.filtros = filtrosIniciales(); S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.leqF = null; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 };
     toast('Datos de demo restablecidos.');
     render();
   };
@@ -7541,7 +7545,7 @@ const UI = (() => {
       if (mias.length) setTimeout(() => toast(`${mias.length === 1 ? 'Se cerró 1 oportunidad' : 'Se cerraron ' + mias.length + ' oportunidades'} como perdida por cotización vencida sin OC (ver el historial de cada una).`), 900);
       S.filtros = filtrosIniciales(); S.nueva = null; S.ruta = null; S.repF = null; S.empF = null; S.usrF = null; S.catF = null;
       S.dash.vendedor = ''; S.proy.vendedor = ''; S.notif.vendedor = '';
-      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 }; S.catF = { q: '', marca: '' }; S.expand = {};
+      S.ctaF = { estado: '', vendedor: '', q: '' }; S.agF = { q: '', vendedor: '' }; S.cotF = { q: '', vendedor: '', etapa: '', lim: 50 }; S.leadF = { estado: 'pendientes', origen: '', vendedor: '', q: '' }; S.leqF = null; S.stkF = { tab: 'stock', q: '', pais: '', almacen: '', marca: '', solo: 'con', tipo: '', lim: 100 }; S.catF = { q: '', marca: '' }; S.expand = {};
       if (piloto()) guardarSesion(S.user.id);
       if (S.user.debeCambiar && piloto()) { location.hash = '#/' + Rules.INICIO[S.user.rol]; await render(); abrirCambioClave(true); return; }
       go(Rules.INICIO[S.user.rol]);
@@ -10253,6 +10257,95 @@ const UI = (() => {
       <p class="small muted">"Horas hábiles" cuenta solo días hábiles (lunes a viernes, sin feriados): ${LIM} h hábiles = ${LIM / 24} días hábiles desde la llegada sin primer contacto. ${jef ? 'La ★ sugiere al vendedor que ya tiene la empresa en su cartera (por RUC, dominio del correo o razón social).' : 'Al cotizar desde un lead, el origen pasa a la oportunidad.'}</p>`;
   };
   filtro('leadf', () => S.leadF);
+
+  /* ---------- Leads del equipo (jefatura y gerencia): las oportunidades que vinieron de un lead, de todos los vendedores, con resúmenes y Excel ---------- */
+  const leqInicial = () => ({ desde: Util.addMonths(hoy(), -5).slice(0, 7), hasta: hoy().slice(0, 7), vendedor: '', origen: '', marca: '', estado: '', q: '' });
+  const leqFiltros = F => ({ desde: F.desde ? F.desde + '-01' : '', hasta: F.hasta ? Util.endOfMonth(F.hasta + '-01') : '', vendedorId: F.vendedor, origen: F.origen, marca: F.marca, estado: F.estado, q: F.q });
+  /** Campos del Excel: [clave, título, valor, ancho, marcado por defecto] */
+  const LEQ_CAMPOS = [
+    ['oportunidad', 'Oportunidad', r => r.id, 12, true], ['numero', 'N° de cotización', r => r.numero, 18, true], ['fecha', 'Fecha de inicio', r => r.fecha, 12, true],
+    ['vendedor', 'Vendedor', r => (Rules.vendedoresActivos(S.db).concat(S.db.users).find(u => u.id === r.vendedorId) || {}).nombre || '', 20, true],
+    ['cliente', 'Cliente', r => r.cliente, 32, true], ['proyecto', 'Proyecto', r => r.proyecto, 26, false], ['cotizado', 'Qué se cotizó', r => r.cotizado, 60, true],
+    ['marcas', 'Marca(s)', r => r.marcas.join(', '), 18, true], ['monto', 'Monto USD (sin IGV)', r => r.monto, 16, true], ['montoOriginal', 'Monto en la moneda de la cotización', r => r.moneda + ' ' + Util.nf2.format(r.montoOriginal), 20, false],
+    ['etapa', 'Etapa', r => r.etapa, 16, true], ['prob', 'Probabilidad de cierre (%)', r => Math.round(r.prob * 100), 14, true], ['ponderado', 'Ponderado USD', r => r.ponderado, 14, false],
+    ['horizonte', 'Horizonte de facturación', r => r.horizonte, 16, true], ['fechaFactura', 'Fecha estimada de factura', r => r.fechaFactura, 14, false], ['fechaOC', 'Fecha estimada de OC', r => r.fechaOC, 14, false],
+    ['origen', 'Origen del lead', r => r.origen, 30, true], ['ultimo', 'Última bitácora', r => r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${r.ultimo.canal}${r.ultimo.nota ? ' · ' + r.ultimo.nota : ''}` : '', 50, true],
+  ];
+  PAGES['leads-equipo'] = async () => {
+    const db = S.db, F = S.leqF = S.leqF || leqInicial(), P = Rules.panelLeads(db, leqFiltros(F), hoy()), T = P.tot, vend = vendedores();
+    const marcasTodas = [...new Set(Rules.panelLeads(db, Object.assign(leqFiltros(F), { marca: '' }), hoy()).porMarca.map(m => m.clave))].sort();
+    const usd = v => Util.money0(v), pct = v => v == null ? '—' : Util.pct(v);
+    const kpi = (l, v, sub) => `<div class="kpi"><div class="k-label">${l}</div><div class="k-value">${v}</div>${sub ? `<div class="k-sub small muted">${sub}</div>` : ''}</div>`;
+    const dest = (titulo, x, txt) => `<div class="card" style="padding:12px 14px;margin:0"><div class="small muted">${titulo}</div><div style="font-size:20px;font-weight:700;margin:2px 0">${x ? E(x) : '—'}</div><div class="small">${txt}</div></div>`;
+    const tabla = (titulo, filas, nombre, conTasa = true) => { const max = Math.max(1, ...filas.map(r => r.n));
+      return `<section class="card" style="margin-top:12px"><h2 style="margin-top:0">${titulo}</h2><div class="table-wrap"><table class="tbl" style="min-width:640px"><thead><tr><th></th><th class="r">Leads</th><th style="width:22%"></th><th class="r">Monto USD</th><th class="r">Ganados</th><th class="r">Monto ganado</th>${conTasa ? '<th class="r">Tasa de cierre</th>' : ''}</tr></thead><tbody>
+        ${filas.slice(0, 15).map(r => `<tr><td>${nombre(r.clave)}</td><td class="r num">${r.n}</td><td><div class="leq-bar" style="width:${Math.round(r.n / max * 100)}%"></div></td><td class="r num">${usd(r.monto)}</td><td class="r num">${r.ganados}</td><td class="r num">${usd(r.montoGanado)}</td>${conTasa ? `<td class="r num">${pct(r.tasa)}</td>` : ''}</tr>`).join('') || '<tr><td colspan="7" class="muted center" style="padding:14px">Sin datos.</td></tr>'}</tbody></table></div></section>`; };
+    const top = P.productos[0], fl = leqFiltros(F);
+    // Oportunidades del período sin origen: no se sabe si vinieron de un lead (se completa en su ficha)
+    const sinOrigen = Rules.reales(db).filter(o => !o.origenOpp && (!fl.desde || (o.fechaInicio || '') >= fl.desde) && (!fl.hasta || (o.fechaInicio || '') <= fl.hasta) && (!fl.vendedorId || o.vendedorId === fl.vendedorId)).length;
+    view().innerHTML = `<div class="page-head"><div><h1>Leads del equipo</h1><p class="muted">Oportunidades que vinieron de un lead (bandeja o clasificadas por el vendedor al cotizar), de todos los vendedores · montos en USD sin IGV</p></div>
+        <div class="btn-row"><button class="btn primary" data-action="leq-excel">${I('download')} Descargar Excel</button></div></div>
+      <div class="card" style="padding:12px"><div class="filters" style="margin:0">
+        <label class="field">Desde<input type="month" data-change="leqf" name="desde" value="${E(F.desde)}"></label><label class="field">Hasta<input type="month" data-change="leqf" name="hasta" value="${E(F.hasta)}"></label>
+        <label class="field">Vendedor<select data-change="leqf" name="vendedor">${options(vend.map(v => [v.id, v.iniciales + ' · ' + v.nombre]), F.vendedor, 'Todos')}</select></label>
+        <label class="field">Origen<select data-change="leqf" name="origen">${options(Rules.origenes(db).filter(o => Rules.esOrigenLead(db, o.id)).map(o => [o.id, o.nombre]), F.origen, 'Todos')}</select></label>
+        <label class="field">Marca<select data-change="leqf" name="marca">${options(marcasTodas.map(m => [m, m]), F.marca, 'Todas')}</select></label>
+        <label class="field">Estado<select data-change="leqf" name="estado">${options([['abiertas', 'Abiertas'], ['ganadas', 'Ganadas'], ['perdidas', 'Perdidas'], ['pausa', 'En pausa']], F.estado, 'Todos')}</select></label>
+        <label class="field" style="flex:2 1 220px">Buscar<input type="text" data-input="leqf" name="q" value="${E(F.q)}" placeholder="Cliente, oportunidad, N° de cotización o producto" autocomplete="off"></label>
+        <div style="align-self:flex-end"><button class="btn ghost" data-action="leq-limpiar">Limpiar</button></div></div></div>
+      ${sinOrigen ? `<div class="alert info" style="margin-top:12px"><div><strong>${sinOrigen} oportunidad${sinOrigen === 1 ? '' : 'es'} del período sin origen</strong>: no cuentan aquí porque no se sabe si vinieron de un lead. Las cotizaciones nuevas piden el origen; en las anteriores lo completa el vendedor o jefatura desde la ficha de cada oportunidad.</div></div>` : ''}
+      <div class="grid g4" style="margin-top:12px">${kpi('Leads', T.n, `${T.abiertas} abiertas`)}${kpi('Monto cotizado', usd(T.monto), `Ponderado abiertas: ${usd(T.ponderado)}`)}${kpi('Ganados', `${T.ganados}`, usd(T.montoGanado))}${kpi('Tasa de cierre', pct(T.tasa), `${T.ganados} ganados · ${T.perdidos} perdidos`)}</div>
+      <div class="grid g3" style="margin-top:12px">
+        ${dest('Marca con más leads', P.masLeads && P.masLeads.clave, P.masLeads ? `${P.masLeads.n} leads · ${usd(P.masLeads.monto)}` : 'Sin leads en el período')}
+        ${dest('Marca con más leads vendidos', P.masVendida && P.masVendida.clave, P.masVendida ? `${P.masVendida.ganados} ganados · ${usd(P.masVendida.montoGanado)}` : 'Aún sin leads ganados')}
+        ${dest('Producto más cotizado en leads', top && top.codigo, top ? `${E(top.marca)} · ${top.n} leads · ${Util.nf2.format(top.cant).replace(/\.00$/, '')} unidades · ${usd(top.monto)}` : 'Sin productos')}</div>
+      ${tabla('Por marca', P.porMarca, k => E(k))}${tabla('Por origen', P.porOrigen, k => E(k))}
+      ${tabla('Por vendedor', P.porVendedor, k => { const u = usr(k); return u ? vendTag(u) + ' ' + E(u.nombre) : '—'; })}
+        <section class="card" style="margin-top:12px"><h2 style="margin-top:0">Productos de los leads</h2><div class="table-wrap"><table class="tbl" style="min-width:600px"><thead><tr><th>Código</th><th>Marca</th><th class="r">Leads</th><th class="r">Unidades</th><th class="r">Monto USD</th><th class="r">Ganados</th></tr></thead><tbody>
+          ${P.productos.slice(0, 15).map(p => `<tr><td><strong>${E(p.codigo)}</strong><div class="cell-sub">${E(p.descripcion.slice(0, 90))}</div></td><td>${E(p.marca)}</td><td class="r num">${p.n}</td><td class="r num">${Util.nf2.format(p.cant).replace(/\.00$/, '')}</td><td class="r num">${usd(p.monto)}</td><td class="r num">${p.ganados}</td></tr>`).join('') || '<tr><td colspan="6" class="muted center" style="padding:14px">Sin productos.</td></tr>'}</tbody></table></div></section>
+      <section class="card" style="margin-top:12px"><div class="card-head"><h2>Leads</h2><span class="sub">${P.filas.length} oportunidades · clic en una fila para abrirla</span></div>
+        <div class="table-wrap"><table class="tbl leq-tabla" style="min-width:1240px"><thead><tr><th>Inicio</th><th>Oportunidad</th><th>Cliente</th><th>Vendedor</th><th>Qué se cotizó</th><th class="r">Monto USD</th><th>Etapa</th><th>Horizonte</th><th>Origen</th><th>Última bitácora</th></tr></thead><tbody>
+        ${P.filas.slice(0, 300).map(r => { const u = usr(r.vendedorId); return `<tr data-action="leq-ir" data-id="${r.id}" style="cursor:pointer" title="Abrir la oportunidad ${E(r.id)}"><td class="nowrap">${Util.fmtDate(r.fecha)}</td>
+          <td class="nowrap"><a href="#/op/${r.id}">${E(r.id)}</a><div class="cell-sub">${r.numero ? 'N° ' + E(r.numero) : ''}</div></td><td>${E(r.cliente || '—')}${r.proyecto ? `<div class="cell-sub">${E(r.proyecto)}</div>` : ''}</td><td>${u ? vendTag(u) : '—'}</td>
+          <td class="small">${E(r.resumen)}<div class="cell-sub">${E(r.marcas.join(', '))}</div></td><td class="r num nowrap">${usd(r.monto)}</td><td class="nowrap">${etapaHTML(r.o.etapa)}<div class="cell-sub">${Math.round(r.prob * 100)} %</div></td>
+          <td class="nowrap small">${E(r.horizonte)}</td><td class="small">${E(r.origen)}</td><td class="small">${r.ultimo ? `${Util.fmtDate(r.ultimo.fecha)} · ${E(r.ultimo.canal)}<div class="cell-sub">${E(r.ultimo.nota.slice(0, 80))}</div>` : '<span class="muted">Sin contactos</span>'}</td></tr>`; }).join('')
+          || '<tr><td colspan="10" class="center muted" style="padding:20px">Sin leads con estos filtros. Las oportunidades cuentan como lead si su origen es de tipo lead (HubSpot, fabricante, referido…).</td></tr>'}</tbody></table></div>
+        ${P.filas.length > 300 ? '<p class="small muted">Se muestran las 300 más recientes; el Excel trae todas.</p>' : ''}</section>`;
+  };
+  filtro('leqf', () => S.leqF);
+  ACTIONS['leq-limpiar'] = () => { S.leqF = leqInicial(); render(true); };
+  ACTIONS['leq-ir'] = (el, ev) => { if (ev && ev.target.closest('a')) return; go('op/' + el.dataset.id); };
+  /** Excel de leads: se eligen los campos antes de generarlo (la elección se recuerda en este navegador) */
+  ACTIONS['leq-excel'] = () => {
+    const clave = 'leq-campos:' + S.user.id;
+    let pref = null; try { pref = JSON.parse(localStorage.getItem(clave) || 'null'); } catch (e) { pref = null; }
+    const marcado = c => pref && pref.campos ? pref.campos.includes(c[0]) : c[4];
+    const back = modal({ title: 'Descargar leads en Excel', wide: true, body: `<p class="small muted" style="margin-top:0">Elige qué campos lleva el Excel. Se descargan los ${Rules.panelLeads(S.db, leqFiltros(S.leqF || leqInicial()), hoy()).filas.length} leads de los filtros actuales.</p>
+      <div class="btn-row" style="margin-bottom:8px"><button type="button" class="btn sm ghost" data-leq-todos="1">Marcar todos</button><button type="button" class="btn sm ghost" data-leq-todos="0">Desmarcar todos</button></div>
+      <div class="leq-campos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px 14px">${LEQ_CAMPOS.map(c => `<label class="check"><input type="checkbox" name="campo" value="${c[0]}"${marcado(c) ? ' checked' : ''}> ${E(c[1])}</label>`).join('')}</div>
+      <label class="check" style="margin-top:12px"><input type="checkbox" name="resumen"${!pref || pref.resumen !== false ? ' checked' : ''}> Incluir hojas de resumen (por marca, origen, vendedor y productos)</label>`,
+      actions: [{ label: 'Cancelar' }, { label: `${I('download')} Generar Excel`, cls: 'primary', onClick: r => {
+        const campos = [...r.querySelectorAll('[name=campo]:checked')].map(x => x.value), resumen = r.querySelector('[name=resumen]').checked;
+        if (!campos.length) throw new Error('Elige al menos un campo.');
+        try { localStorage.setItem(clave, JSON.stringify({ campos, resumen })); } catch (e) { /* sin almacenamiento */ }
+        toast('Descargado: ' + descargarLeads(campos, resumen));
+      } }] });
+    back.addEventListener('click', ev => { const b = ev.target.closest('[data-leq-todos]'); if (b) back.querySelectorAll('[name=campo]').forEach(x => { x.checked = b.dataset.leqTodos === '1'; }); });
+  };
+  function descargarLeads(campos, resumen) {
+    const F = S.leqF || leqInicial(), P = Rules.panelLeads(S.db, leqFiltros(F), hoy()), cs = LEQ_CAMPOS.filter(c => campos.includes(c[0]));
+    const hojas = [{ nombre: 'Leads', fija: true, anchos: cs.map(c => c[3]), filas: [cs.map(c => c[1]), ...P.filas.map(r => cs.map(c => c[2](r)))] }];
+    if (resumen) {
+      const cab = ['Leads', 'Monto USD', 'Ganados', 'Monto ganado USD', 'Tasa de cierre (%)'], fila = r => [r.n, r.monto, r.ganados, r.montoGanado, r.tasa == null ? '' : Math.round(r.tasa * 100)];
+      hojas.push({ nombre: 'Por marca', fija: true, anchos: [24, 10, 14, 10, 16, 14], filas: [['Marca', ...cab], ...P.porMarca.map(r => [r.clave, ...fila(r)])] });
+      hojas.push({ nombre: 'Por origen', fija: true, anchos: [34, 10, 14, 10, 16, 14], filas: [['Origen', ...cab], ...P.porOrigen.map(r => [r.clave, ...fila(r)])] });
+      hojas.push({ nombre: 'Por vendedor', fija: true, anchos: [24, 10, 14, 10, 16, 14], filas: [['Vendedor', ...cab], ...P.porVendedor.map(r => [(usr(r.clave) || {}).nombre || '—', ...fila(r)])] });
+      hojas.push({ nombre: 'Productos', fija: true, anchos: [20, 16, 46, 10, 10, 14, 10], filas: [['Código', 'Marca', 'Descripción', 'Leads', 'Unidades', 'Monto USD', 'Ganados'], ...P.productos.map(p => [p.codigo, p.marca, p.descripcion, p.n, p.cant, p.monto, p.ganados])] });
+    }
+    const nombre = `leads_equipo_${F.desde || ''}_${F.hasta || ''}.xlsx`.replace(/__/g, '_');
+    Util.descargar(Excel.libro(hojas), nombre);
+    return nombre;
+  }
   ACTIONS['lead-cat'] = el => { S.leadF.origen = S.leadF.origen === el.dataset.o ? '' : el.dataset.o; render(true); };
   ACTIONS['lead-kpi'] = el => { S.leadF.estado = S.leadF.estado === el.dataset.e ? 'pendientes' : el.dataset.e; render(true); };
   CHANGES['lead-asignar'] = async el => {

@@ -146,6 +146,19 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### Leads del equipo, para jefatura y gerencia (27/11/2026)
+
+Menú de jefatura → **Leads del equipo** (ruta `#/leads-equipo`, `Rules.panelLeads`). Muestra las oportunidades que vinieron de un lead, de todos los vendedores: las de la bandeja y las que el vendedor clasificó con un origen de tipo lead al cotizar. Montos en USD sin IGV.
+- **Filtros:** período (mes de inicio), vendedor, origen, marca, estado (abiertas, ganadas, perdidas, en pausa) y búsqueda.
+- **Resúmenes:**
+  - leads, monto cotizado, ganados (cantidad y monto), tasa de cierre y ponderado de las abiertas;
+  - marca con más leads, marca con más leads vendidos y producto más cotizado;
+  - tablas por marca, origen y vendedor (leads, monto, ganados, monto ganado, tasa de cierre) y por producto (leads, unidades, monto, ganados).
+  - En una oportunidad con varias marcas, el monto se reparte por línea (con el descuento general prorrateado), así que el total por marca suma el total.
+- **Lista:** inicio, oportunidad y N° de cotización, cliente, vendedor, qué se cotizó, monto, etapa y probabilidad, horizonte de facturación, origen y última bitácora. Un clic en la fila abre la oportunidad.
+- **Excel:** "Descargar Excel" abre la lista de campos para marcar o desmarcar. Vienen marcados: oportunidad, N° de cotización, fecha, vendedor, cliente, qué se cotizó, marcas, monto USD, etapa, probabilidad, horizonte, origen del lead y última bitácora. Opcionales: proyecto, monto en la moneda de la cotización, ponderado, fecha estimada de factura y de OC. Se puede agregar hojas de resumen (por marca, origen, vendedor y productos). La elección se recuerda en el navegador.
+- Las oportunidades sin origen no cuentan como lead: la pantalla avisa cuántas hay en el período (el origen se completa desde la ficha de cada una).
+
 ### BOM: descripción para cotización e "Incluye" (27/11/2026)
 
 - **Ventana de partes del Kit/Glb:** nuevas columnas **Orden** (la 1 es la principal) y **Descripción para cotización**, a la izquierda del N° de parte. La parte principal da el código y la descripción del ítem (como antes). En las demás se escribe lo que verá el cliente (p. ej. "PROCESADOR INTEL CORE I5", "RAM 8 GB").
