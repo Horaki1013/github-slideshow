@@ -146,6 +146,13 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### Agenda que la plataforma programa a cada usuario, y avisos al equipo (26/11/2026)
+
+Mecanismo general para que un módulo agende algo en el calendario de otra persona y avise al equipo:
+- **`db.eventosAgenda`**: `{ id, usuarioId, asunto, fecha, hora ('' = todo el día), duracion (min), lugar, nota, zona (IANA), enlace, estado ('activo' | 'anulado') }`. Sin Microsoft 365, aparecen en "Mi agenda" de ese usuario. Con el servidor conectado a Microsoft 365, el servidor crea el evento en su Outlook, lo actualiza si cambia (fecha, hora, persona) y lo elimina si se anula. Lo hace cada 5 minutos y también al momento con `POST /api/sincronizar` (`AlmacenServidor.sincronizarAgenda`).
+- **`db.avisosEquipo`**: `{ id, titulo, texto, en }`. El servidor los publica una sola vez en el canal de Teams configurado (los de los últimos 2 días).
+- La agenda del vendedor y la jefatura sigue igual: los roles sin oportunidades ya no cargan las de todos.
+
 ### Diagnóstico de la carpeta compartida (26/11/2026)
 
 - Si la carpeta no responde, el aviso dice en qué archivo y paso se quedó (p. ej. "leyendo lista-precios.json (4.2 MB), hace 20 s").

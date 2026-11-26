@@ -16,6 +16,7 @@ El servidor deja que todo el equipo trabaje a la vez sobre los mismos datos, con
   - muestra y edita la agenda de Outlook de cada usuario;
   - envía cada mañana el resumen de pendientes y los reportes programados;
   - publica avisos en un canal de Teams.
+  - agenda en el Outlook de cada usuario lo que la plataforma le programa (p. ej. una atención), y lo actualiza o elimina si cambia; publica en Teams los avisos del equipo. Corre cada 5 minutos y al momento cuando la plataforma lo pide.
 - **Modo doble clic como respaldo.** Si el servidor se cae, el mismo HTML puede abrirse con doble clic y trabajar con la carpeta compartida, como antes.
 
 ## Instalación
@@ -72,6 +73,8 @@ Una vez que el servidor tiene datos, el HTML que entrega ya no incluye los datos
 - `buzonComun` va en copia de cada cotización enviada.
 - `remitente` es el buzón desde el que salen los resúmenes y reportes automáticos.
 - `teamsWebhook` es opcional. Para obtenerlo, crea en Teams un flujo de *Workflows* del tipo "Publicar en un canal cuando se reciba una solicitud de webhook" y pega aquí su URL. Así el canal recibe cada mañana los pendientes del equipo.
+
+Los eventos se crean en la zona horaria de la oficina del usuario (Perú o Chile). Con hora, duran lo indicado (por defecto 1 hora) y avisan 1 hora antes; sin hora, son de todo el día.
 
 6. Reiniciar el servidor y probarlo: desde la plataforma, *Empresa y plantilla → Microsoft 365 → Enviarme un correo de prueba*, o por consola con `node servidor.js probar-m365 tu-correo@empresa.com`.
 

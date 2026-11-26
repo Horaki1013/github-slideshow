@@ -156,6 +156,52 @@ module.exports = function crearM365({ CONFIG, log, usuarios, todos, meta, db: db
     const vs = M.Rules.vendedoresActivos(db), lineas = vs.map(v => `${v.nombre}: ${M.Rules.alertasUsuario(M.Rules.vista(db, v), v, ahora.fecha).length} pendientes`);
     try { await teams(lineas.join('\n'), `Pendientes del equipo · ${M.Util.fmtDate(ahora.fecha)}`); } catch (e) { registrar({ de: 'Teams', para: 'canal', asunto: 'Pendientes del equipo', estado: 'error', error: e.message }); }
   }
+  /* ---------- Agenda y avisos que pide la plataforma ----------
+     db.eventosAgenda: [{ id, usuarioId, asunto, fecha, hora ('' = todo el día), duracion (min), lugar, nota, zona (IANA), enlace, estado ('activo' | 'anulado') }]
+       → se crea, actualiza o elimina el evento en el Outlook de ese usuario (lo hecho queda en meta 'evento:<id>').
+     db.avisosEquipo: [{ id, titulo, texto, en }] → se publica una vez en el canal de Teams (si es de los últimos 2 días). */
+  const ZONA_WIN = { 'America/Lima': 'SA Pacific Standard Time', 'America/Santiago': 'Pacific SA Standard Time', 'America/Bogota': 'SA Pacific Standard Time', 'America/Mexico_City': 'Central Standard Time (Mexico)' };
+  const sumarMin = (fecha, hora, min) => { const d = new Date(`${fecha}T${hora || '00:00'}:00Z`); d.setUTCMinutes(d.getUTCMinutes() + min); return d.toISOString().slice(0, 19); };
+  let sincronizando = null;
+  function sincronizar() { if (!sincronizando) sincronizando = sincronizarYa().finally(() => { sincronizando = null; }); return sincronizando; }
+  async function sincronizarYa() {
+    const r = { eventos: 0, avisos: 0, errores: [] };
+    if (!configurado() && !C.teamsWebhook) return r;
+    const db = datos();
+    if (C.teamsWebhook) for (const a of (db.avisosEquipo || [])) {
+      if (meta('aviso:' + a.id)) continue;
+      meta('aviso:' + a.id, '1');
+      if (Date.now() - Date.parse(a.en || 0) > 2 * 86400000) continue;
+      try { await teams(String(a.texto || '').slice(0, 4000), String(a.titulo || '').slice(0, 200)); r.avisos++; } catch (e) { r.errores.push('Teams: ' + e.message); }
+    }
+    if (!configurado()) return r;
+    const enc = encodeURIComponent;
+    for (const e of (db.eventosAgenda || [])) {
+      const k = 'evento:' + e.id, prev = JSON.parse(meta(k) || 'null'), u = (db.users || []).find(x => x.id === e.usuarioId);
+      try {
+        if (e.estado === 'anulado' || !u || !u.correo || u.activo === false) {
+          if (prev && prev.ev) { await graph('DELETE', `/users/${enc(prev.correo)}/events/${enc(prev.ev)}`).catch(x => { if (x.codigo !== 404) throw x; }); meta(k, JSON.stringify({ borrado: true })); r.eventos++; }
+          continue;
+        }
+        const firma = [u.correo, e.fecha, e.hora, e.duracion, e.asunto, e.lugar, e.nota].join('|');
+        if (prev && prev.firma === firma) continue;
+        const tz = ZONA_WIN[e.zona] || 'UTC', conHora = /^\d{2}:\d{2}$/.test(e.hora || '');
+        const ev = { subject: String(e.asunto || '').slice(0, 250), body: { contentType: 'Text', content: String(e.nota || '') + (e.enlace ? '\n\nPlataforma: ' + e.enlace : '') },
+          location: { displayName: String(e.lugar || '').slice(0, 250) }, isReminderOn: true, reminderMinutesBeforeStart: conHora ? 60 : 960,
+          isAllDay: !conHora, start: { dateTime: conHora ? `${e.fecha}T${e.hora}:00` : `${e.fecha}T00:00:00`, timeZone: tz },
+          end: { dateTime: conHora ? sumarMin(e.fecha, e.hora, +e.duracion || 60) : sumarMin(e.fecha, '00:00', 1440), timeZone: tz } };
+        let id;
+        if (prev && prev.ev && prev.correo === u.correo) { await graph('PATCH', `/users/${enc(u.correo)}/events/${enc(prev.ev)}`, ev); id = prev.ev; }
+        else {
+          if (prev && prev.ev) await graph('DELETE', `/users/${enc(prev.correo)}/events/${enc(prev.ev)}`).catch(() => {});   // cambió de persona
+          id = (await graph('POST', `/users/${enc(u.correo)}/events`, ev)).id;
+        }
+        meta(k, JSON.stringify({ ev: id, correo: u.correo, firma })); r.eventos++;
+      } catch (x) { r.errores.push(`${e.asunto}: ${x.message}`); }
+    }
+    if (r.errores.length) log('Agenda y avisos: ' + r.errores.join(' · '));
+    return r;
+  }
   const soloAdmin = s => { if (!['admin', 'jefatura'].includes(s.usuario.rol)) { const e = new Error('Solo administración o jefatura.'); e.codigo = 403; throw e; } };
   /* ---------- Rutas de la API ---------- */
   const correoDe = s => { if (!s.usuario.correo) { const e = new Error('Tu usuario no tiene correo registrado: agrégalo en "Mis datos" o pídelo a administración.'); e.codigo = 400; throw e; } return s.usuario.correo; };
@@ -182,9 +228,11 @@ module.exports = function crearM365({ CONFIG, log, usuarios, todos, meta, db: db
       return { id: (r && r.id) || d.id };
     },
     'DELETE evento': async (req, res, q, c, s) => { await graph('DELETE', `/users/${encodeURIComponent(correoDe(s))}/events/${encodeURIComponent(q.get('id'))}`); return { ok: true }; },
+    /** Pasa ya a Outlook y a Teams lo que pidió la plataforma (también corre solo cada 5 minutos) */
+    'POST sincronizar': async () => Object.assign({ ok: true }, await sincronizar()),
     'POST teams': async (req, res, q, cuerpo, s) => { soloAdmin(s); const d = JSON.parse(cuerpo || '{}'); return { ok: await teams(String(d.texto || '').slice(0, 4000), d.titulo) }; },
     'GET envios': (req, res, q, c, s) => soloAdmin(s) || ({ envios: dbFn().prepare('SELECT * FROM envios ORDER BY id DESC LIMIT 200').all() }),
     'POST probar': async (req, res, q, c, s) => { await enviarCorreo({ de: C.remitente || correoDe(s), para: correoDe(s), asunto: 'Prueba de la plataforma de cotizaciones', html: '<p>La conexión con Microsoft 365 funciona.</p>' }); return { ok: true }; },
   };
-  return { configurado, enviarCorreo, teams, programados, rutas, cargarMotor, datos, resumenDiario, reporteExcel };
+  return { configurado, enviarCorreo, teams, programados, sincronizar, rutas, cargarMotor, datos, resumenDiario, reporteExcel };
 };

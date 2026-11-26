@@ -53,7 +53,7 @@ const CONFIG = (() => {
   for (let i = 0; i < a.length; i++) {
     const m = /^--(\w+)$/.exec(a[i]); if (!m) continue;
     const k = m[1], v = a[i + 1] && !a[i + 1].startsWith('--') ? a[++i] : true;
-    c[k] = k === 'puerto' ? +v : v === 'true' ? true : v === 'false' ? false : v;
+    c[k] = k === 'puerto' ? +v : v === 'true' ? true : v === 'false' ? false : typeof v === 'string' && /^\{/.test(v) ? JSON.parse(v) : v;   // un objeto (p. ej. microsoft365) puede ir como JSON
   }
   return Object.assign({}, CONFIG_DEF, c);
 })();
@@ -484,6 +484,8 @@ const M365 = require('./m365.js')({ CONFIG, log, usuarios, todos, meta, db: () =
 Object.assign(RUTAS, M365.rutas);
 const htmlPlataforma = () => fs.readFileSync(ruta(CONFIG.html), 'utf8');
 setInterval(() => { M365.programados(htmlPlataforma).catch(e => log('Envíos programados: ' + e.message)); }, 5 * 60000).unref();
+// Eventos que la plataforma agenda a cada usuario (p. ej. atenciones de soporte) → su Outlook; avisos → canal de Teams
+setInterval(() => { M365.sincronizar().catch(e => log('Agenda y avisos: ' + e.message)); }, 5 * 60000).unref();
 
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');

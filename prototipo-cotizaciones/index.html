@@ -3837,6 +3837,8 @@ const AlmacenServidor = (() => {
     hojas: () => api('hojas'),
     // Microsoft 365 (Outlook y Teams) por el servidor
     m365: () => api('m365'),
+    /** Pide al servidor pasar ya a Outlook los eventos de db.eventosAgenda (además lo hace solo cada 5 minutos) */
+    sincronizarAgenda: () => api('sincronizar', { cuerpo: {} }),
     enviarCorreo: d => api('correo', { cuerpo: d }),
     agenda: (desde, hasta) => api('agenda?desde=' + encodeURIComponent(desde) + '&hasta=' + encodeURIComponent(hasta)),
     guardarEvento: d => api('evento', { cuerpo: d }),
@@ -8189,7 +8191,7 @@ const UI = (() => {
   }
   ACTIONS['nq-empezar-otra'] = async () => {
     if (!(await resguardarEnCurso())) return;
-    S.nueva = null; render(); scrollTo(0, 0);
+    S.nueva = null; render(); window.scrollTo(0, 0);
   };
   ACTIONS['nq-guardar-borrador'] = async () => {
     if (!enCurso()) return toast('Aún no hay nada que guardar: elige el cliente o agrega un ítem.');
@@ -8999,8 +9001,11 @@ const UI = (() => {
     let eventos = [], error = '';
     if (st.configurado) { try { eventos = (await AlmacenServidor.agenda(aUTC(dias[0], '00:00', z).toISOString(), aUTC(Util.addDays(dias[6], 1), '00:00', z).toISOString())).eventos; } catch (e) { error = e.message; } }
     // Lo de la plataforma: próximos contactos y fechas de OC de mis oportunidades en esta semana
-    const mias = S.db.opps.filter(o => (u.rol !== 'vendedor' || o.vendedorId === u.id) && Rules.esAbierta(o));
+    const mias = ['vendedor', 'jefatura'].includes(u.rol) ? S.db.opps.filter(o => (u.rol !== 'vendedor' || o.vendedorId === u.id) && Rules.esAbierta(o)) : [];
     const plat = []; mias.forEach(o => { if (dias.includes(o.proxContacto)) plat.push({ fecha: o.proxContacto, tipo: 'Próximo contacto', o }); if (dias.includes(o.fechaOC)) plat.push({ fecha: o.fechaOC, tipo: 'Fecha estimada de OC', o }); });
+    // Eventos que la plataforma le agenda a este usuario (db.eventosAgenda); con Microsoft 365 ya están en su Outlook
+    if (!st.configurado) (S.db.eventosAgenda || []).filter(e => e.usuarioId === u.id && e.estado !== 'anulado' && dias.includes(e.fecha))
+      .forEach(e => plat.push({ fecha: e.fecha, tipo: e.hora || 'Todo el día', html: `${e.enlace ? `<a href="${E(e.enlace)}">${E(e.asunto)}</a>` : `<strong>${E(e.asunto)}</strong>`}${e.lugar ? `<div class="small muted">${E(e.lugar)}</div>` : ''}` }));
     const porDia = d => eventos.map(e => Object.assign({}, e, { z: enZona(e.inicio, z), zf: enZona(e.fin, z) })).filter(e => e.z.fecha === d).sort((a, b) => a.z.hora.localeCompare(b.z.hora));
     view().innerHTML = `<div class="page-head"><div><h1>Mi agenda (Outlook)</h1><p class="muted">Semana del ${Util.fmtDate(dias[0])} al ${Util.fmtDate(dias[6])} · hora de ${E(Config.OFICINAS[u.oficina || 'PE'])}</p></div>
         <div class="btn-row" style="flex-wrap:wrap"><button class="btn" data-action="ag-sem" data-d="-7">‹ Semana anterior</button><button class="btn" data-action="ag-sem" data-d="0">Esta semana</button><button class="btn" data-action="ag-sem" data-d="7">Semana siguiente ›</button><button class="btn primary" data-action="ag-evento">${I('plus')} Nuevo evento</button></div></div>
@@ -9010,7 +9015,7 @@ const UI = (() => {
         return `<section class="card agenda-dia${d === hoy() ? ' hoy' : ''}"><div class="card-head"><h2>${E(cap(Util.dayName(d)))} ${Util.fmtDate(d).slice(0, 5)}</h2></div>
           ${ev.map(e => `<div class="ag-ev"><div class="ag-h">${e.todoElDia ? 'Todo el día' : e.z.hora + '–' + e.zf.hora}</div><div><strong>${E(e.asunto || '(sin asunto)')}</strong>${e.lugar ? `<div class="small muted">${E(e.lugar)}</div>` : ''}
             <div class="btn-row" style="margin-top:4px">${e.enlace ? `<a class="btn sm ghost" href="${E(e.enlace)}" target="_blank" rel="noopener">Abrir en Outlook</a>` : ''}<button class="btn sm ghost" data-action="ag-evento" data-id="${E(e.id)}" data-ini="${E(e.inicio)}" data-fin="${E(e.fin)}" data-as="${E(e.asunto || '')}" data-lu="${E(e.lugar || '')}">Editar</button><button class="btn sm ghost" data-action="ag-borrar" data-id="${E(e.id)}">Eliminar</button></div></div></div>`).join('')}
-          ${pl.map(x => `<div class="ag-ev plat"><div class="ag-h">${E(x.tipo)}</div><div><a href="#/op/${x.o.id}">${E(cli(x.o.clienteId).razonSocial)}</a><div class="small muted">${E(x.o.id)} · ${E(Rules.etapa(x.o.etapa).nombre)}</div>
+          ${pl.map(x => x.html ? `<div class="ag-ev plat"><div class="ag-h">${E(x.tipo)}</div><div>${x.html}</div></div>` : `<div class="ag-ev plat"><div class="ag-h">${E(x.tipo)}</div><div><a href="#/op/${x.o.id}">${E(cli(x.o.clienteId).razonSocial)}</a><div class="small muted">${E(x.o.id)} · ${E(Rules.etapa(x.o.etapa).nombre)}</div>
             <button class="btn sm ghost" data-action="ag-op" data-id="${x.o.id}" data-f="${x.fecha}" style="margin-top:4px;white-space:normal;max-width:100%;text-align:left">${I('cal')} Agendar en Outlook</button></div></div>`).join('')}
           ${ev.length || pl.length ? '' : '<p class="small muted" style="margin:0">Libre.</p>'}</section>`; }).join('')}</div>`;
   };
