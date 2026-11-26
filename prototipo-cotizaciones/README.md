@@ -138,6 +138,14 @@ Antes de descargar o enviar, el vendedor elige el formato en la ventana del PDF 
 
 La vista previa y el texto "Adjunto: …" de la ventana de envío cambian al elegir. La plataforma recuerda el último formato de cada usuario en ese navegador. El envío queda en el historial con su formato (`quote.envios[].formato` y la nota automática de la bitácora). El PDF que se guarda solo en la carpeta del vendedor al registrar la cotización sigue siendo el completo. Funciones: `FORMATOS_COT`, `anexosPrevistos({ …, formato })`, `hojasEnlace`, `pdfCotizacion({ …, formato })`.
 
+### Corrección: la plataforma no abría si la carpeta compartida no respondía (26/11/2026)
+
+Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la carpeta no respondía (OneDrive sin sesión o en pausa, con los archivos "a petición"; unidad de red sin VPN), la lectura quedaba esperando y la página quedaba en blanco. Ahora:
+- se ve "Cargando la plataforma…" desde el primer momento;
+- la reconexión automática tiene un plazo de 20 s: si vence, abre el ingreso con el motivo y qué revisar (OneDrive, VPN) y el botón "Conectar" para reintentar;
+- "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
+- si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
+
 ### Corrección: empezar otra cotización con una guardada abierta (25/11/2026)
 
 Al retomar una cotización de "Para continuar después" (o con una a medio hacer), "Nueva cotización" siempre volvía a esa y no había forma de empezar otra. Ahora, sobre el formulario aparece "Estás editando la cotización de … · **Empezar una nueva**": la que está abierta queda en "Para continuar después" (sin duplicarse) y se abre una en blanco (`nq-empezar-otra`).

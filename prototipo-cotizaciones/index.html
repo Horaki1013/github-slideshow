@@ -513,7 +513,7 @@ tr.quick-open>td{border-bottom:0}
 </header>
 <div class="shell">
   <nav class="sidenav" id="sidenav" aria-label="Navegación principal"></nav>
-  <main id="view" tabindex="-1"></main>
+  <main id="view" tabindex="-1"><p id="cargando" style="padding:40px 16px;text-align:center;color:#5b6776">Cargando la plataforma…</p></main>
 </div>
 <nav class="bottomnav" id="bottomnav" aria-label="Navegación"></nav>
 <div id="popover-root"></div>
@@ -3670,6 +3670,7 @@ const AlmacenCompartido = (() => {
       return p === 'granted';
     },
     usar(h) { dir = h; cacheLista = null; marca.datos = marca.lista = null; },
+    soltar() { dir = null; cacheLista = null; marca.datos = marca.lista = null; },
     async vacia() { return !(await archivo('datos.json')); },
     /** Lee todo (datos + lista de precios) */
     async leer() {
@@ -4249,6 +4250,7 @@ const Repo = (() => {
         if (window[k + '_GZ'] && !window[k]) { window[k] = JSON.parse(await Util.gunzipTexto(window[k + '_GZ'])); delete window[k + '_GZ']; }
       }
       if (AlmacenServidor.activo()) return iniciarServidor();
+      window.__pasoArranque = 'leyendo los datos guardados en este navegador';
       const seed = SEED();
       if (seed) {
         modo = 'piloto';
@@ -4263,8 +4265,23 @@ const Repo = (() => {
         if (!guardado) programarGuardado();
         // Carpeta compartida recordada y con permiso vigente: se conecta sola
         if (AlmacenCompartido.soportado()) {
-          try { const h = await AlmacenCompartido.recordada(); if (h && await AlmacenCompartido.permiso(h, false)) { const r = await this.revisarCarpeta(h); if (!r.vacia) await this.conectarCarpeta(h); } }
-          catch (e) { estado.error = 'Carpeta compartida: ' + e.message; }
+          window.__pasoArranque = 'conectando con la carpeta compartida';
+          // Con plazo: si la unidad de red no responde (VPN sin conectar, unidad desconectada), la plataforma abre igual y lo explica
+          let vencido = false, reloj = null;
+          const plazo = new Promise((_, rej) => { reloj = setTimeout(() => { vencido = true; rej(new Error('la carpeta compartida no respondió en 20 segundos')); }, 20000); });
+          try {
+            const conectar = (async () => {
+              const h = await AlmacenCompartido.recordada();
+              if (h && await AlmacenCompartido.permiso(h, false)) { const r = await this.revisarCarpeta(h); if (!r.vacia && !vencido) await this.conectarCarpeta(h); }
+            })();
+            conectar.catch(() => { /* si respondió tarde, el error ya se informó por el plazo */ });
+            await Promise.race([plazo, conectar]);
+            clearTimeout(reloj);
+          } catch (e) {
+            clearTimeout(reloj);
+            if (!estado.compartida) AlmacenCompartido.soltar();
+            estado.error = `No se pudo abrir la carpeta compartida: ${e.message}. Revisa que la carpeta esté disponible: si está en OneDrive, que OneDrive tenga la sesión iniciada y esté sincronizando (ícono de la nube junto al reloj); si es una unidad de red, que la VPN esté conectada. Luego pulsa "Conectar".`;
+          }
         }
         // El archivo trae una versión nueva de los datos iniciales: se avisa y no se pisa lo guardado sin confirmar
         estado.seedNuevo = guardado && !estado.compartida && db.seedId !== (seed.id || seed.generado) ? { generado: seed.generado } : null;
@@ -7356,7 +7373,7 @@ const UI = (() => {
       : `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos, guardados en la base de datos del servidor.</div></div>`;
     if (!AlmacenCompartido.soportado()) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Este navegador no puede usar la carpeta compartida.</strong> Abre el archivo en Microsoft Edge o Google Chrome para trabajar con los datos del equipo. Aquí los datos quedan solo en este navegador.</div></div>`;
     if (e.compartida) return `<div class="alert ok" style="margin-bottom:12px"><div class="small"><strong>✓ Carpeta compartida: ${E(e.carpeta)}</strong><br>Todo el equipo trabaja con los mismos datos.</div><button class="btn sm ghost" data-action="carpeta-elegir">Cambiar</button></div>`;
-    if (S.carpetaRecordada) return `<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Conecta la carpeta compartida «${E(S.carpetaRecordada.name)}»</strong> para ver los datos del equipo. El navegador te pedirá permiso.
+    if (S.carpetaRecordada) return `${e.error ? `<div class="alert bad" style="margin-bottom:8px" role="alert"><div class="small">${E(e.error)}</div></div>` : ''}<div class="alert warn" style="margin-bottom:12px"><div class="small"><strong>Conecta la carpeta compartida «${E(S.carpetaRecordada.name)}»</strong> para ver los datos del equipo. El navegador te pedirá permiso.
       <br><a href="#" data-action="carpeta-olvidar">No usar carpeta en esta PC</a></div><button class="btn sm primary" data-action="carpeta-conectar">Conectar</button></div>`;
     return `<div class="alert info" style="margin-bottom:12px"><div class="small"><strong>Carpeta compartida del equipo.</strong> Elige la carpeta de red acordada (por ejemplo Z:\Ventas\Piloto); todos deben elegir la misma. Sin carpeta, los datos quedan solo en este navegador.</div><button class="btn sm primary" data-action="carpeta-elegir">Elegir carpeta…</button></div>`;
   }
@@ -7391,7 +7408,11 @@ const UI = (() => {
   ACTIONS['carpeta-conectar'] = async () => {
     const h = S.carpetaRecordada; if (!h) return;
     try { if (!(await AlmacenCompartido.permiso(h, true))) { toast('Sin permiso para usar la carpeta.'); return; } } catch (e) { toast('No se pudo acceder a la carpeta: ' + e.message); return; }
-    await conectarCarpeta(h);
+    toast(`Conectando con la carpeta ${h.name}…`);
+    let reloj = null;
+    const lenta = new Promise(res => { reloj = setTimeout(() => res('lenta'), 30000); });
+    const r = await Promise.race([conectarCarpeta(h).then(() => 'ok'), lenta]); clearTimeout(reloj);
+    if (r === 'lenta') toast(`La carpeta ${h.name} no responde. Revisa que OneDrive tenga la sesión iniciada y esté sincronizando (o la VPN, si es una unidad de red) y vuelve a pulsar "Conectar".`, { ms: 12000 });
   };
   ACTIONS['carpeta-olvidar'] = async () => { await Repo.desconectarCarpeta(); S.carpetaRecordada = null; render(); };
   /* Logo de la empresa (solo en el piloto, viene en el archivo privado): reemplaza a la marca "tv" en el ingreso y en la barra superior */
@@ -10607,7 +10628,21 @@ const UI = (() => {
   return { boot, render, _state: S, _pdf: pdfCotizacion, _mostrarPDF: mostrarPDF };
 })();
 
-UI.boot();
+// Vigilante: si en 35 s la plataforma no terminó de abrir, se dice en qué paso quedó (en vez de una página en blanco)
+window.__pasoArranque = window.__pasoArranque || 'iniciando';
+setTimeout(() => {
+  const c = document.getElementById('cargando'); if (!c) return;   // ya se dibujó la plataforma
+  c.innerHTML = `<strong>La plataforma sigue cargando</strong> (paso: ${window.__pasoArranque}).<br>Si el archivo está en OneDrive, revisa que OneDrive tenga la sesión iniciada y esté sincronizando; si usas una unidad de red, que la VPN esté conectada.<br><button type="button" onclick="location.reload()" style="margin-top:10px;padding:8px 16px;font-size:15px">Reintentar</button>`;
+}, 35000);
+UI.boot().catch(e => {
+  // Nunca una página en blanco: se muestra el motivo y cómo seguir
+  console.error(e);
+  const v = document.getElementById('view'), msg = String((e && e.message) || e).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  if (v) v.innerHTML = `<div style="max-width:560px;margin:60px auto;padding:20px;border:1px solid #e5b4ab;border-radius:10px;background:#fff6f4;font-family:system-ui,sans-serif">
+    <h2 style="margin-top:0">La plataforma no pudo abrir</h2><p>Motivo: <strong>${msg}</strong></p>
+    <p>Si trabajas con la carpeta compartida, revisa que la unidad de red esté disponible (VPN conectada, unidad abierta en el Explorador) y vuelve a intentarlo. Si el problema sigue, envía una captura de esta pantalla.</p>
+    <button type="button" onclick="location.reload()" style="padding:8px 16px;font-size:15px">Reintentar</button></div>`;
+});
 </script>
 </body>
 </html>
