@@ -3229,13 +3229,14 @@ const Rules = (() => {
   }
   function puedeRol(user, accion, opp) {
     switch (accion) {
-      case 'ver_opp': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
+      // Todos los vendedores ven cualquier oportunidad y cualquier cuenta (solo lectura si no es suya: editar sigue siendo del dueño)
+      case 'ver_opp': return user.rol === 'jefatura' || user.rol === 'vendedor';
       case 'editar_opp': return user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id;
       case 'reasignar': return user.rol === 'jefatura';
       case 'crear_cotizacion': return user.rol === 'vendedor';
       case 'ver_todo': return user.rol === 'jefatura' || user.rol === 'finanzas';
       // Cuentas (opp = cliente en estos casos)
-      case 'ver_cuenta': return user.rol === 'jefatura' || (user.rol === 'vendedor' && !!opp && (opp.vendedorId === user.id || !!opp.prueba));
+      case 'ver_cuenta': return user.rol === 'jefatura' || user.rol === 'vendedor';
       // Documentos de una oportunidad: el AM dueño y las áreas que gestionan la post-venta
       case 'documentos_opp': return ['jefatura', 'finanzas', 'admin', 'logistica', 'gestion'].includes(user.rol) || (user.rol === 'vendedor' && !!opp && opp.vendedorId === user.id);
       case 'agregar_contacto': return user.rol !== 'logistica';   // la agenda es común: se agregan contactos a cualquier empresa
@@ -3816,6 +3817,12 @@ const AlmacenCompartido = (() => {
         if (cb && cb.token === token) return true;
       }
     },
+    /** Subcarpetas de la carpeta compartida (p. ej. integracion/salida/agenda/<correo>): se crean si no existen */
+    async subcarpeta(ruta, crear = true) { let d = dir; for (const r of ruta) { try { d = await d.getDirectoryHandle(r, { create: crear }); } catch (e) { if (!crear && e.name === 'NotFoundError') return null; throw e; } } return d; },
+    async escribirEn(ruta, nombre, contenido) { const d = await this.subcarpeta(ruta); const h = await d.getFileHandle(nombre, { create: true }); const w = await h.createWritable(); await w.write(contenido); await w.close(); },
+    /** Archivos de una subcarpeta (sin las subcarpetas): [{ nombre, archivo }] */
+    async listarEn(ruta) { const d = await this.subcarpeta(ruta, false); if (!d) return []; const out = []; for await (const [n, h] of d.entries()) if (h.kind === 'file') out.push({ nombre: n, archivo: await h.getFile() }); return out.sort((a, b) => a.nombre.localeCompare(b.nombre)); },
+    async borrarEn(ruta, nombre) { const d = await this.subcarpeta(ruta, false); if (d) await d.removeEntry(nombre).catch(() => {}); },
     /** Documentos en documentos/<oportunidad>/ dentro de la carpeta compartida */
     async guardarDoc(carpeta, nombre, blob) {
       const d = await (await dir.getDirectoryHandle('documentos', { create: true })).getDirectoryHandle(carpeta, { create: true });
@@ -3993,6 +4000,8 @@ const Repo = (() => {
       catalogoLog: d.catalogoLog || [], empresa: d.empresa, numeracion: d.numeracion, seq: d.seq, config: { postventaPorArea: true }, auditoria: [] };
   }
   const usuarioDe = id => db.users.find(u => u.id === id);
+  /** Los vendedores ven las oportunidades de todos, pero solo modifican las suyas (jefatura y las demás áreas, según su rol) */
+  const soloDueno = (o, usuarioId) => { const u = usuarioDe(usuarioId); if (u && u.rol === 'vendedor' && o && !o.prueba && o.vendedorId !== u.id) fail('Solo el vendedor de la oportunidad (o jefatura) la modifica.'); };
   const clienteDe = (db, id) => db.clients.find(x => x.id === id) || fail('Cuenta no encontrada.');
   const exigir = (usuarioId, accion, msg) => { if (!Rules.puede(usuarioDe(usuarioId), accion)) fail(msg || 'No tienes permiso para esta acción.'); };
   const claveTemporal = () => { const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; const r = new Uint32Array(10); (typeof crypto !== 'undefined' ? crypto : { getRandomValues: x => x.map(() => Math.random() * 1e9) }).getRandomValues(r); r.forEach(n => { s += a[n % a.length]; }); return s; };
@@ -4022,7 +4031,7 @@ const Repo = (() => {
   const medios = (canales, canal) => { const cs = [...new Set((Array.isArray(canales) && canales.length ? canales : [canal || 'WhatsApp']).map(x => String(x || '').trim()).filter(Boolean))]; if (!cs.length) fail('Elige al menos un medio de contacto.', { canal: 'Obligatorio' }); return cs; };
   /** Registra un contacto (seguimiento) en una oportunidad abierta: uno o varios medios, nota y próximo contacto */
   function contactoEn(oppId, { canal, canales, nota, proxContacto, usuarioId, resultado }) {
-    const o = opp(oppId);
+    const o = opp(oppId); soloDueno(o, usuarioId);
     if (!Rules.esAbierta(o)) fail('Solo se registran contactos en oportunidades abiertas.');
     if (!proxContacto) fail('Define el próximo contacto.', { proxContacto: 'Obligatorio' });
     if (proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.', { proxContacto: 'Fecha pasada' });
@@ -4999,7 +5008,7 @@ const Repo = (() => {
     },
     /** PATCH /oportunidades/:id/etapa */
     async cambiarEtapa(oppId, nueva, d, usuarioId) {
-      const o = opp(oppId);
+      const o = opp(oppId); soloDueno(o, usuarioId);
       const errs = Rules.validarCambioEtapa(o, nueva, d, hoy());
       if (Object.keys(errs).length) fail(Object.values(errs)[0], errs);
       const antes = Rules.etapa(o.etapa).nombre, eraGanada = o.etapa === 'ganada';
@@ -5049,7 +5058,7 @@ const Repo = (() => {
     },
     /** PATCH /oportunidades/:id */
     async actualizarOpp(oppId, patch, usuarioId) {
-      const o = opp(oppId);
+      const o = opp(oppId); soloDueno(o, usuarioId);
       if ('proxContacto' in patch) {
         if (Rules.esAbierta(o) && !patch.proxContacto) fail('Ninguna oportunidad abierta puede quedar sin próximo contacto.');
         if (patch.proxContacto && patch.proxContacto < hoy()) fail('El próximo contacto no puede estar en el pasado.');
@@ -5668,9 +5677,112 @@ const Repo = (() => {
       return { oppId: o.id, quoteId: q.id };
     },
   };
+  /* ---------- Integración con Microsoft 365 sin servidor: carpeta compartida + Power Automate ----------
+     La plataforma deja archivos JSON en integracion/salida/ (agenda/<correo>/, correo/<correo>/, teams/) y Power Automate los convierte en
+     eventos de Outlook (calendario de Teams), correos y mensajes o tarjetas de Teams. Los flujos dejan sus respuestas en integracion/entrada/
+     (evento creado o movido, correo enviado, respuestas de tarjetas, formularios) y la plataforma las aplica y las archiva en entrada/procesados/.
+     Todo pasa con el bloqueo de la carpeta, así que con varias PC abiertas no se duplica nada. Con el servidor no se usa (el servidor habla con Microsoft 365). */
+  const INT = { salida: ['integracion', 'salida'], entrada: ['integracion', 'entrada'], procesados: ['integracion', 'entrada', 'procesados'] };
+  const ZONA_WIN = { 'America/Lima': 'SA Pacific Standard Time', 'America/Santiago': 'Pacific SA Standard Time', 'America/Bogota': 'SA Pacific Standard Time', 'America/Guayaquil': 'SA Pacific Standard Time',
+    'America/Argentina/Buenos_Aires': 'Argentina Standard Time', 'America/La_Paz': 'SA Western Standard Time' };
+  const intActiva = () => !!(db && db.integracion && db.integracion.activa) && !!estado.compartida && !estado.servidor;
+  /** Manejadores de lo que llega de Power Automate: tipo → async (mensaje) => texto del resultado. Otros módulos agregan los suyos */
+  const manejadoresEntrada = {};
+  /** Avisos cuando alguien mueve en Outlook un evento que la plataforma agendó: fn(evento, { fecha, hora, duracion }, usuario) */
+  const alMoverEvento = [];
+  const sumarMinLocal = (fecha, hora, min) => { const d = new Date(`${fecha}T${hora || '00:00'}:00Z`); d.setUTCMinutes(d.getUTCMinutes() + min); return d.toISOString().slice(0, 19); };
+  /** Fecha y hora local (en la zona dada) de un instante ISO (con Z u offset) */
+  const localDe = (iso, zona) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: zona, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso)).map(x => [x.type, x.value]));
+    return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` }; };
+  const usuarioPorCorreo = c => { const t = String(c || '').trim().toLowerCase(); return t ? db.users.find(u => u.activo !== false && String(u.correo || '').trim().toLowerCase() === t) : null; };
+  const carpetaCorreo = c => String(c || '').trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '_');
+  const firmaEvento = (e, correo) => [correo, e.fecha, e.hora, e.duracion, e.asunto, e.lugar, e.nota, e.estado].join('|');
+  /** Lo que falta mandar a Power Automate (sin escribir nada): para no tomar el bloqueo si no hay nada */
+  function salidaPendiente() {
+    if (!intActiva()) return 0;
+    const ev = (db.eventosAgenda || []).filter(e => { const u = usuarioDe(e.usuarioId); if (!u || !u.correo) return false; const f = firmaEvento(e, u.correo);
+      return e.intFirma !== f && !(e.estado === 'anulado' && !e.intFirma) && !(e.intFirma && !e.outlookId); }).length;   // actualizar o eliminar espera el id de Outlook
+    const av = (db.avisosEquipo || []).filter(a => !a.intEnviado && Date.now() - Date.parse(a.en || 0) < 2 * 86400000).length;
+    return ev + av;
+  }
+  manejadoresEntrada['evento-creado'] = m => { const e = (db.eventosAgenda || []).find(x => x.id === m.id); if (!e) throw new Error('evento desconocido ' + m.id); e.outlookId = String(m.outlookId || ''); return 'evento enlazado'; };
+  manejadoresEntrada['evento-eliminado'] = m => { const e = (db.eventosAgenda || []).find(x => x.id === m.id); if (e) e.outlookId = ''; return 'evento eliminado en Outlook'; };
+  manejadoresEntrada['evento-movido'] = m => {
+    const e = (db.eventosAgenda || []).find(x => (m.outlookId && x.outlookId === m.outlookId) || (m.id && x.id === m.id)); if (!e) throw new Error('el evento no es de la plataforma');
+    const u = usuarioDe(e.usuarioId) || {}, zona = e.zona || (Config.OFICINA_DEF[u.oficina || 'PE'] || Config.OFICINA_DEF.PE).zona;
+    const ini = localDe(m.inicio, zona), fin = m.fin ? localDe(m.fin, zona) : null, todoElDia = !!m.todoElDia;
+    const duracion = !todoElDia && fin ? Math.max(15, Math.round((Date.parse(m.fin) - Date.parse(m.inicio)) / 60000)) : 0;
+    const nuevo = { fecha: ini.fecha, hora: todoElDia ? '' : ini.hora, duracion };
+    if (nuevo.fecha === e.fecha && nuevo.hora === (e.hora || '') && (!duracion || duracion === e.duracion)) return 'sin cambios';
+    Object.assign(e, nuevo);
+    alMoverEvento.forEach(f => f(e, nuevo, u));
+    e.intFirma = firmaEvento(e, u.correo);   // ya está así en Outlook: no se devuelve
+    return `movido a ${Util.fmtDate(nuevo.fecha)}${nuevo.hora ? ' ' + nuevo.hora : ''}`;
+  };
+  manejadoresEntrada['correo-enviado'] = m => { const c = (db.correosSalida || []).find(x => x.id === m.id); if (c) Object.assign(c, { estado: 'enviado', enviado: Util.ahora() }); return 'correo confirmado'; };
+  Object.assign(api, {
+    integracionActiva: () => intActiva(),
+    integracionEstado: () => ({ activa: !!(db.integracion && db.integracion.activa), disponible: !!estado.compartida && !estado.servidor, pendientes: salidaPendiente(), ultima: estado.intUltima || null, errores: estado.intErrores || [] }),
+    /** Activa o desactiva la integración (gerencia, jefatura o administración) */
+    async configurarIntegracion(usuarioId, { activa }) {
+      exigir(usuarioId, 'editar_empresa', 'Solo gerencia, jefatura o administración activan la integración con Microsoft 365.');
+      db.integracion = Object.assign({}, db.integracion, { activa: !!activa, por: usuarioId, en: Util.ahora() });
+      auditar(usuarioId, `Integración con Microsoft 365 (Power Automate) ${activa ? 'activada' : 'desactivada'}`); touch();
+      if (activa && estado.compartida) await AlmacenCompartido.escribirEn(['integracion'], 'LEEME.txt', 'Carpeta de intercambio con Power Automate. No borrar ni editar a mano.\nsalida/: lo que deja la plataforma (agenda, correo, teams).\nentrada/: lo que dejan los flujos (la plataforma lo procesa y lo mueve a entrada/procesados/).\n');
+      return db.integracion;
+    },
+    /** Hay algo que hacer: archivos nuevos en entrada/ o pendientes de salida (sin tomar el bloqueo) */
+    async integracionHayTrabajo() { if (!intActiva()) return false; if (salidaPendiente()) return true; try { return (await AlmacenCompartido.listarEn(INT.entrada)).some(f => /\.json$/i.test(f.nombre)); } catch (e) { return false; } },
+    /** Un ciclo: procesa lo que llegó de Power Automate y deja lo que hay que mandar. Devuelve { entrada, salida, errores } */
+    async sincronizarIntegracion() {
+      const r = { entrada: 0, salida: 0, errores: [] };
+      if (!intActiva()) return r;
+      // Entrada (primero: trae los id de Outlook que necesitan las actualizaciones)
+      for (const f of (await AlmacenCompartido.listarEn(INT.entrada)).filter(x => /\.json$/i.test(x.nombre))) {
+        let m = null, resultado;
+        try { m = JSON.parse(await f.archivo.text()); const h = manejadoresEntrada[m && m.tipo]; if (!h) throw new Error('tipo desconocido: ' + (m && m.tipo)); resultado = { ok: true, detalle: await h(m) }; r.entrada++; }
+        catch (e) { resultado = { ok: false, error: e.message }; r.errores.push(`${f.nombre}: ${e.message}`); }
+        await AlmacenCompartido.escribirEn(INT.procesados, f.nombre, JSON.stringify(Object.assign({ procesado: new Date().toISOString() }, resultado, { mensaje: m }), null, 1));
+        await AlmacenCompartido.borrarEn(INT.entrada, f.nombre);
+      }
+      // Salida: agenda de cada usuario
+      for (const e of db.eventosAgenda || []) {
+        const u = usuarioDe(e.usuarioId); if (!u || !u.correo) continue;
+        const firma = firmaEvento(e, u.correo); if (e.intFirma === firma) continue;
+        const accion = e.estado === 'anulado' ? (e.intFirma ? 'eliminar' : null) : e.intFirma ? 'actualizar' : 'crear';
+        if (!accion) { e.intFirma = firma; continue; }
+        if (accion !== 'crear' && !e.outlookId) continue;   // espera el id de Outlook del evento creado
+        const conHora = /^\d{2}:\d{2}$/.test(e.hora || ''), tz = ZONA_WIN[e.zona] || 'UTC', n = (e.intN || 0) + 1;
+        await AlmacenCompartido.escribirEn([...INT.salida, 'agenda', carpetaCorreo(u.correo)], `${e.id}-${String(n).padStart(3, '0')}.json`, JSON.stringify({
+          tipo: 'evento', accion, id: e.id, outlookId: e.outlookId || '', correo: u.correo, asunto: e.asunto, todoElDia: !conHora,
+          inicio: conHora ? `${e.fecha}T${e.hora}:00` : `${e.fecha}T00:00:00`, fin: conHora ? sumarMinLocal(e.fecha, e.hora, +e.duracion || 60) : sumarMinLocal(e.fecha, '00:00', 1440), zona: tz,
+          lugar: e.lugar || '', nota: e.nota || '', recordatorioMin: conHora ? 60 : 960 }, null, 1));
+        Object.assign(e, { intFirma: firma, intN: n }); r.salida++;
+      }
+      // Salida: avisos al canal de Teams (con tarjeta si piden respuesta)
+      for (const a of db.avisosEquipo || []) {
+        if (a.intEnviado || Date.now() - Date.parse(a.en || 0) > 2 * 86400000) continue;
+        await AlmacenCompartido.escribirEn([...INT.salida, 'teams'], `${a.id}.json`, JSON.stringify({ tipo: 'teams', id: a.id, titulo: a.titulo, texto: a.texto, esperaRespuesta: !!a.tarjeta, ref: a.ref || '', tarjeta: a.tarjeta || null }, null, 1));
+        a.intEnviado = true; r.salida++;
+      }
+      estado.intUltima = Util.ahora(); estado.intErrores = r.errores.slice(0, 20);
+      if (r.entrada || r.salida) touch();
+      return r;
+    },
+    /** Correo desde el Outlook del usuario, por Power Automate: adjuntos y JSON en integracion/salida/correo/<correo>/ */
+    async enviarCorreoIntegracion(usuarioId, { para, cc, asunto, html, adjuntos }) {
+      if (!intActiva()) fail('La integración con Microsoft 365 no está activa.');
+      const u = usuarioDe(usuarioId); if (!u || !u.correo) fail('Tu usuario no tiene correo registrado: agrégalo en "Mis datos".');
+      const id = 'CO-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ruta = [...INT.salida, 'correo', carpetaCorreo(u.correo)], arch = [];
+      for (const [k, a] of (adjuntos || []).entries()) { const nombre = `${id}__${k + 1}__${String(a.nombre || 'adjunto').replace(/[\\/:*?"<>|]+/g, '-')}`; await AlmacenCompartido.escribirEn(ruta, nombre, a.blob); arch.push({ nombre: a.nombre, archivo: nombre }); }
+      await AlmacenCompartido.escribirEn(ruta, `${id}.json`, JSON.stringify({ tipo: 'correo', id, de: u.correo, para: String(para || ''), cc: String(cc || ''), asunto: String(asunto || ''), html: String(html || ''), adjuntos: arch }, null, 1));
+      db.correosSalida = [{ id, de: u.correo, para: String(para || '').slice(0, 300), asunto: String(asunto || '').slice(0, 250), en: Util.ahora(), estado: 'en cola', usuarioId }].concat(db.correosSalida || []).slice(0, 300);
+      touch(); return { id };
+    },
+  });
   // Todo método que no sea de lectura pasa por escrituraCompartida cuando hay carpeta conectada
   const LECTURAS = new Set(['init', 'reset', 'modo', 'estadoGuardado', 'alCambiarEstado', 'snapshot', 'catalogo', 'exportarRespaldo', 'login', 'salir', 'servidor', 'sesion', 'leerDocumento',
-    'compartida', 'alCambioRemoto', 'revisarCarpeta', 'conectarCarpeta', 'desconectarCarpeta', 'refrescar', 'adoptarSeedNuevo']);
+    'compartida', 'alCambioRemoto', 'revisarCarpeta', 'conectarCarpeta', 'desconectarCarpeta', 'refrescar', 'adoptarSeedNuevo', 'integracionActiva', 'integracionEstado', 'integracionHayTrabajo']);
   Object.keys(api).forEach(k => {
     const f = api[k];
     if (typeof f !== 'function' || LECTURAS.has(k)) return;
@@ -7176,7 +7288,8 @@ const UI = (() => {
   }
   ACTIONS['pdf-enviar'] = async () => {
     const ctx = S.pdf; if (!ctx) return;
-    const u = S.user, sp = speechDe(u, ctx), k = (ctx.cliente.contactos || []).find(x => x.nombre === ctx.contacto) || {}, para = ctx.q.contactoCorreo || k.correo || '', st = await m365();
+    const u = S.user, sp = speechDe(u, ctx), k = (ctx.cliente.contactos || []).find(x => x.nombre === ctx.contacto) || {}, para = ctx.q.contactoCorreo || k.correo || '', st0 = await m365();
+    const porFlujo = !st0.configurado && Repo.integracionActiva() && !!u.correo, st = porFlujo ? Object.assign({}, st0, { configurado: true, flujo: true }) : st0;
     const nombrePdf = nombrePdfCot(ctx.q);
     const back = modal({ title: `Enviar cotización N° ${ctx.q.numero}`, wide: true, body: `${st.configurado ? `<div class="alert ok" style="margin-top:0"><div>Se envía desde <strong>tu Outlook</strong> (${E(u.correo || 'sin correo registrado')})${st.buzonComun ? ` con copia al buzón común <strong>${E(st.buzonComun)}</strong>` : ''}, con el PDF completo adjunto. Queda en tus enviados.</div></div>`
         : `<div class="alert info" style="margin-top:0"><div>${Repo.servidor() ? 'El servidor aún no está conectado a Microsoft 365.' : 'Sin el servidor de la empresa conectado a Microsoft 365.'} Se descargará un <strong>borrador de correo</strong> con el PDF adjunto: ábrelo y Outlook lo deja listo para enviar.</div></div>`}
@@ -7193,7 +7306,11 @@ const UI = (() => {
         toast(ctx.formato === 'solo' ? 'Armando el PDF…' : 'Armando el PDF con sus anexos…');
         const doc = await documentoListo(ctx);
         if (!doc) return;
-        if (st.configurado) {
+        if (st.flujo) {
+          await Repo.enviarCorreoIntegracion(u.id, { para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjuntos: [{ nombre: nombrePdf, blob: doc.blob }] });
+          if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook', formato: ctx.formato }, u.id).catch(() => {});
+          toast(`Cotización enviada a tu Outlook (Power Automate la envía a ${d.para} en unos segundos).`, { ms: 8000 });
+        } else if (st.configurado) {
           await AlmacenServidor.enviarCorreo({ para: d.para, cc: d.cc, asunto: d.asunto, html: aHtml(d.cuerpo), adjuntos: [{ nombre: nombrePdf, tipo: 'application/pdf', base64: await b64(doc.blob) }] });
           if (!S.pdfBorrador && ctx.q.id) await Repo.registrarEnvioCotizacion(ctx.q.id, { para: d.para, via: 'outlook', formato: ctx.formato }, u.id).catch(() => {});
           toast(`Cotización enviada a ${d.para}${st.buzonComun ? ' (copia al buzón común)' : ''}.`);
@@ -7804,6 +7921,7 @@ const UI = (() => {
     if (!Rules.puede(S.user, 'ver_opp', o)) { view().innerHTML = `<div class="alert bad"><div>No tienes acceso a esta oportunidad: pertenece a otro vendedor. <a href="#/oportunidades">Volver a tus oportunidades</a></div></div>`; return; }
     const ed = Rules.puede(S.user, 'editar_opp', o), abierta = Rules.esAbierta(o);
     const c = cli(o.clienteId), p = proj(o.proyectoId), v = usr(o.vendedorId), q = Rules.vigente(db, o);
+    const ajena = S.user.rol === 'vendedor' && o.vendedorId !== S.user.id;
     const alertas = Rules.alertasOpp(db, o, h);
     const monto = Rules.montoUSD(db, o), fecFac = Rules.fechaFactura(db, o);
     const ult = ultimoContacto(o);
@@ -7839,6 +7957,7 @@ const UI = (() => {
 
     view().innerHTML = `
       <a href="#/oportunidades" class="btn ghost sm" style="margin-bottom:8px">${I('back')} Oportunidades</a>
+      ${ajena ? `<div class="alert info" style="margin-bottom:10px"><div>Oportunidad de <strong>${E(v ? v.nombre : 'otro vendedor')}</strong>: la ves en <strong>solo lectura</strong>. Puedes agregar notas del cliente.</div></div>` : ''}
       <section class="card">
         <div class="op-header">
           <div>
@@ -9516,8 +9635,10 @@ const UI = (() => {
     const gest = Rules.puede(S.user, 'gestionar_cuenta', c), editK = Rules.puede(S.user, 'editar_contactos', c), jef = S.user.rol === 'jefatura';
     const opps = db.opps.filter(o => o.clienteId === id).sort((a, b) => a.fechaInicio < b.fechaInicio ? 1 : -1);
     const reg = usr(c.registradoPor);
+    const ajenaC = S.user.rol === 'vendedor' && c.vendedorId && c.vendedorId !== S.user.id && !c.prueba;
     view().innerHTML = `
       <a href="#/cuentas" class="btn ghost sm" style="margin-bottom:8px">${I('back')} Cuentas</a>
+      ${ajenaC ? `<div class="alert info" style="margin-bottom:10px"><div>Cuenta de la cartera de <strong>${E((usr(c.vendedorId) || {}).nombre || 'otro vendedor')}</strong>: la ves en <strong>solo lectura</strong>. Puedes agregar notas del cliente y contactos.</div></div>` : ''}
       <section class="card">
         <div class="op-header"><div>
           <h1>${E(c.razonSocial)} ${segChip(seg.seg, `Facturado 12 meses: ${money(seg.total)}`)} ${estadoChip(r.estado)}</h1>
@@ -9974,8 +10095,20 @@ const UI = (() => {
       ${st.configurado ? `<div class="alert ok"><div>Conectado. Las cotizaciones salen desde el Outlook de cada vendedor${st.buzonComun ? ` con copia a <strong>${E(st.buzonComun)}</strong>` : ''}; los resúmenes diarios y los reportes programados salen a las 8:00${st.remitente ? ` desde ${E(st.remitente)}` : ''}. Teams: ${st.teams ? 'avisos al canal configurado' : 'sin canal configurado'}.</div></div>
         <div class="btn-row"><button class="btn" data-action="m365-probar">Enviarme un correo de prueba</button></div>
         <div class="table-wrap" style="margin-top:10px"><table class="tbl"><thead><tr><th>Fecha</th><th>Para</th><th>Asunto</th><th>Estado</th></tr></thead><tbody>${env.slice(0, 30).map(x => `<tr><td class="small nowrap">${E(new Date(x.fecha).toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' }))}</td><td class="small">${E(x.para)}</td><td class="small">${E(x.asunto)}</td><td>${x.estado === 'enviado' ? '<span class="chip ok">Enviado</span>' : `<span class="chip bad" title="${E(x.error || '')}">Error</span>`}</td></tr>`).join('') || '<tr><td colspan="4" class="muted center">Aún no hay envíos.</td></tr>'}</tbody></table></div>`
-        : `<p class="small" style="margin:0">${Repo.servidor() ? 'El servidor está listo para conectarse a Microsoft 365' : 'Funciona con el servidor de la empresa'}: TI registra una aplicación en el Entra ID de la empresa (permisos Mail.Send y Calendars.ReadWrite) y completa <code>microsoft365</code> en <code>config.json</code> del servidor (ver LEEME-SERVIDOR). Mientras tanto, las cotizaciones se envían con un borrador de correo que se abre en Outlook y los eventos se agregan con un archivo de calendario.</p>`}`;
+        : `${integracionHTML()}<p class="small" style="margin:10px 0 0">${Repo.servidor() ? 'El servidor está listo para conectarse a Microsoft 365' : 'Con el servidor de la empresa (siguiente etapa)'}: TI registra una aplicación en el Entra ID de la empresa (permisos Mail.Send y Calendars.ReadWrite) y completa <code>microsoft365</code> en <code>config.json</code> del servidor (ver LEEME-SERVIDOR). Mientras tanto, las cotizaciones se envían con un borrador de correo que se abre en Outlook y los eventos se agregan con un archivo de calendario.</p>`}`;
   }
+  /** Integración sin servidor (carpeta compartida + Power Automate): estado y activación */
+  function integracionHTML() {
+    const ie = Repo.integracionEstado(), ed = Rules.puede(S.user, 'editar_empresa');
+    if (Repo.servidor()) return '';
+    return `<div class="card" style="margin-top:12px"><div class="card-head"><h2>Microsoft 365 sin servidor (Power Automate)</h2><span class="sub">Outlook y Teams a través de la carpeta compartida</span></div>
+      <p class="small" style="margin-top:0">La plataforma deja archivos en <strong>integracion/salida/</strong> de la carpeta compartida y los flujos de Power Automate los convierten en eventos de Outlook (calendario de Teams), correos desde el Outlook de cada usuario y mensajes o tarjetas en un canal de Teams. Las respuestas (eventos movidos en Outlook, respuestas en Teams, formularios) vuelven por <strong>integracion/entrada/</strong>. Los flujos se crean con la guía de integración.</p>
+      ${!ie.disponible ? '<div class="alert warn"><div>Requiere la carpeta compartida conectada.</div></div>' : `<div class="alert ${ie.activa ? 'ok' : 'info'}"><div>${ie.activa ? `<strong>Activa.</strong> Pendientes por enviar: ${ie.pendientes} · último ciclo: ${ie.ultima ? E(Util.fmtFechaHora(ie.ultima)) : 'aún no'}${ie.errores.length ? `<br><span class="small">Errores recientes: ${ie.errores.map(E).join(' · ')}</span>` : ''}` : 'Desactivada: activarla cuando los flujos de Power Automate estén creados.'}</div></div>
+        ${ed ? `<div class="btn-row"><button class="btn ${ie.activa ? '' : 'primary'}" data-action="int-activar" data-v="${ie.activa ? '0' : '1'}">${ie.activa ? 'Desactivar' : 'Activar la integración'}</button>${ie.activa ? '<button class="btn" data-action="int-sincronizar">Sincronizar ahora</button>' : ''}</div>` : ''}`}
+      ${(S.db.correosSalida || []).length ? `<details style="margin-top:10px"><summary class="small">Correos enviados por la integración (${S.db.correosSalida.length})</summary><div class="table-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>De</th><th>Para</th><th>Asunto</th><th>Estado</th></tr></thead><tbody>${S.db.correosSalida.slice(0, 30).map(c => `<tr><td class="small nowrap">${E(Util.fmtFechaHora(c.en))}</td><td class="small">${E(c.de)}</td><td class="small">${E(c.para)}</td><td class="small">${E(c.asunto)}</td><td><span class="chip ${c.estado === 'enviado' ? 'ok' : 'warn'}">${E(c.estado)}</span></td></tr>`).join('')}</tbody></table></div></details>` : ''}</div>`;
+  }
+  ACTIONS['int-activar'] = async el => { try { await Repo.configurarIntegracion(S.user.id, { activa: el.dataset.v === '1' }); S.db = await snap(); toast(el.dataset.v === '1' ? 'Integración activada: la plataforma revisa la carpeta cada 20 segundos.' : 'Integración desactivada.'); render(true); } catch (e) { toast(e.message); } };
+  ACTIONS['int-sincronizar'] = async () => { try { const r = await Repo.sincronizarIntegracion(); S.db = await snap(); toast(`Integración: ${r.salida} enviados a Power Automate, ${r.entrada} recibidos${r.errores.length ? ', ' + r.errores.length + ' con error' : ''}.`); render(true); } catch (e) { toast(e.message); } };
   ACTIONS['m365-probar'] = async () => { try { await AlmacenServidor.probarM365(); toast('Correo de prueba enviado a tu buzón.'); } catch (e) { toast(e.message); } };
   SUBMITS['plantilla'] = async form => {
     const v = n => (form.querySelector(`[name="${n}"]`) || {}), of = S.empF.of;
@@ -10851,6 +10984,12 @@ const UI = (() => {
         if (!ocupado && S.user) refresh();
       });
       setInterval(() => Repo.refrescar(), Repo.servidor() ? 4000 : 8000);
+      // Integración con Microsoft 365 por Power Automate (sin servidor): cada 20 s, solo si hay algo que hacer
+      setInterval(async () => {
+        if (!S.user || S.user.debeCambiar || !Repo.integracionActiva()) return;
+        try { if (!(await Repo.integracionHayTrabajo())) return; const r = await Repo.sincronizarIntegracion(); if (r.entrada || r.salida) { S.db = await snap(); const ocupado = document.querySelector('#modal-root .modal') || S.ruta === 'nueva' || (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)); if (!ocupado) refresh(); } }
+        catch (e) { /* se reintenta en el próximo ciclo */ }
+      }, 20000);
       window.addEventListener('focus', () => Repo.refrescar());
       try { const id = sessionStorage.getItem('tv-sesion'); if (id && !Repo.estadoGuardado().seedNuevo && !(S.carpetaRecordada && !Repo.compartida())) S.user = Repo.sesion(id); } catch (e) { /* sin sesión guardada */ }
     }

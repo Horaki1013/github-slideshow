@@ -146,6 +146,23 @@ Al abrir, el piloto se reconecta solo a la carpeta compartida recordada. Si la c
 - "Conectar" avisa mientras conecta y, si en 30 s no responde, explica qué revisar;
 - si el arranque falla por cualquier otro motivo, aparece una pantalla con el motivo y "Reintentar"; si se queda esperando más de 35 s, dice en qué paso quedó.
 
+### Vendedores: ven la ficha de cualquier cliente (27/11/2026)
+
+- Todos los vendedores abren la cuenta y las oportunidades de cualquier cliente, aunque sea de otra cartera (`ver_cuenta` y `ver_opp`). Ven los datos, contactos, notas, historial de contactos, cotizaciones y montos.
+- Lo que no es suyo se ve en **solo lectura**, con un aviso que dice de quién es. Modificar sigue siendo del vendedor dueño o de jefatura.
+- El repositorio también lo exige ahora: `actualizarOpp`, `cambiarEtapa` y el registro de contactos rechazan a un vendedor que no es el dueño. Antes solo lo impedía la pantalla.
+
+### Microsoft 365 sin servidor: Outlook y Teams por la carpeta compartida (27/11/2026)
+
+Etapa previa al servidor. La plataforma deja archivos JSON en `integracion/salida/` de la carpeta compartida, y Power Automate (conectores estándar de Microsoft 365) los convierte en eventos de Outlook (el calendario de Teams), correos y mensajes o tarjetas de Teams. Las respuestas vuelven por `integracion/entrada/` y quedan archivadas, con su resultado, en `entrada/procesados/`.
+- **Salida:**
+  - `agenda/<correo>/`: crear, actualizar o eliminar eventos de `db.eventosAgenda` (con su `outlookId`).
+  - `correo/<correo>/`: correos con adjuntos, desde el Outlook del usuario (`Repo.enviarCorreoIntegracion`, "Enviar por correo" de la cotización).
+  - `teams/`: los avisos de `db.avisosEquipo`, con una Adaptive Card cuando piden respuesta.
+- **Entrada (manejadores extensibles):** `evento-creado`, `evento-movido` (convierte la hora UTC a la zona de la oficina y avisa a los módulos con `alMoverEvento`), `evento-eliminado` y `correo-enviado`; los módulos agregan los suyos.
+- **Sin duplicados:** cada ciclo (`Repo.sincronizarIntegracion`) corre con el bloqueo de la carpeta. Las PC con la plataforma abierta lo lanzan cada 20 segundos, solo si hay algo que hacer. Lo que se recibe de Outlook no se devuelve, así que no hay bucles.
+- **Activación:** Empresa y plantilla → "Microsoft 365 sin servidor (Power Automate)" (gerencia, jefatura o administración). Muestra los pendientes, el último ciclo, los errores y los correos enviados. Con el servidor no se usa: el servidor se conecta directo a Microsoft 365.
+
 ### Preparada para otros países: identificador tributario, moneda e impuesto (27/11/2026)
 
 - **`Config.PAISES_DATOS`:** cada país tiene su identificador tributario del cliente y de la empresa, su moneda local, su impuesto, su zona horaria y su ciudad principal.
